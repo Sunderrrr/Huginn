@@ -1,0 +1,1 @@
+"""Huginn hub application package."""
