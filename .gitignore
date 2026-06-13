@@ -32,6 +32,10 @@ dashboard/dist/
 *.pem
 *.key
 *.crt
+.env.prod
+.env.*
+!.env.example
+!.env.prod.example
 !deploy/**/*.example
 worker-identity.json
 *.local

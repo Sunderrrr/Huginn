@@ -8,6 +8,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - Core iteration: hub (FastAPI + PostgreSQL), Go worker, MCP façade.
+- Two production deployment options you can choose between: **Docker Compose +
+  Caddy** (single host, automatic HTTPS) and **Kubernetes** manifests. Plus the
+  local dev compose.
 - React dashboard (Vite + TypeScript): local + OIDC login, fleet roster,
   per-node actions/updates/unrestricted shell, enrollment tokens, audit log with
   chain verification, and settings. Configurable CORS on the hub; OIDC can hand

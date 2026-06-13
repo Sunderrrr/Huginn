@@ -69,6 +69,10 @@ curl -sSL https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
 
 The VM appears as **PENDING**; approve it before it can receive any command.
 
+For production you can choose **Docker Compose + Caddy** (single host, automatic
+HTTPS) or **Kubernetes** — both are first-class; you don't need k8s. See
+[docs/deployment.md](docs/deployment.md).
+
 See [docs/](docs/) for [architecture](docs/architecture.md),
 [enrollment](docs/enrollment.md), [security](docs/security.md),
 [deployment](docs/deployment.md), and [MCP integration](docs/mcp.md).

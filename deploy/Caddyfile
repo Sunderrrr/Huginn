@@ -1,0 +1,28 @@
+# Huginn reverse proxy. Caddy obtains and renews TLS certificates automatically
+# for {$HUGINN_DOMAIN}. For local testing without a public domain, set
+# HUGINN_DOMAIN=localhost (Caddy serves HTTPS via its internal CA).
+#
+# For Let's Encrypt expiry notifications, add a global block with your email:
+#   { email you@example.com }
+
+{$HUGINN_DOMAIN} {
+	encode gzip
+
+	# Hub REST API + health.
+	handle /api/* {
+		reverse_proxy hub:8000
+	}
+	handle /healthz {
+		reverse_proxy hub:8000
+	}
+
+	# MCP server (streamable HTTP).
+	handle /mcp* {
+		reverse_proxy mcp:9000
+	}
+
+	# Everything else: the dashboard SPA.
+	handle {
+		reverse_proxy dashboard:80
+	}
+}

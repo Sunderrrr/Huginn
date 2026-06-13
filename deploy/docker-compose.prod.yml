@@ -1,0 +1,103 @@
+# ============================================================================
+# Huginn — production deployment on a single host with Docker Compose + Caddy.
+# An alternative to the Kubernetes manifests in deploy/k8s/.
+#
+#   cp .env.prod.example .env.prod   # then edit (real domain + secrets)
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# Caddy terminates TLS (automatic HTTPS via Let's Encrypt) and routes everything
+# under one domain, so the dashboard and API share an origin (no CORS needed):
+#   /            -> dashboard
+#   /api, /healthz -> hub
+#   /mcp         -> mcp
+# Only Caddy publishes ports (80/443); all other services stay on the internal
+# network.
+# ============================================================================
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env.prod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:-huginn}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  hub:
+    build:
+      context: ../hub
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HUGINN_ENV: prod
+      HUGINN_REQUIRE_TLS: "true"
+      HUGINN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-huginn}
+      HUGINN_JWT_SECRET: ${HUGINN_JWT_SECRET:?generate with openssl rand -hex 32}
+      HUGINN_SECRET_HASH_KEY: ${HUGINN_SECRET_HASH_KEY:?generate with openssl rand -hex 32}
+      HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?generate with openssl rand -hex 32}
+      HUGINN_BOOTSTRAP_ADMIN_USERNAME: ${HUGINN_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      HUGINN_BOOTSTRAP_ADMIN_PASSWORD: ${HUGINN_BOOTSTRAP_ADMIN_PASSWORD:?set in .env.prod}
+      HUGINN_TARGET_RELEASE_REPO: ${HUGINN_TARGET_RELEASE_REPO:-Internal-website/Huginn}
+      HUGINN_TARGET_WORKER_VERSION: ${HUGINN_TARGET_WORKER_VERSION:-v0.1.0}
+      # Same-origin via Caddy, but allow the public origin explicitly too.
+      HUGINN_CORS_ORIGINS: https://${HUGINN_DOMAIN:?set in .env.prod}
+      HUGINN_OIDC_POST_LOGIN_REDIRECT: https://${HUGINN_DOMAIN}/login
+    expose:
+      - "8000"
+
+  mcp:
+    build:
+      context: ../mcp
+    restart: unless-stopped
+    depends_on:
+      - hub
+    environment:
+      HUGINN_MCP_HUB_URL: http://hub:8000
+      HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN}
+      HUGINN_MCP_TRANSPORT: streamable-http
+      HUGINN_MCP_HOST: 0.0.0.0
+      HUGINN_MCP_PORT: "9000"
+    expose:
+      - "9000"
+
+  dashboard:
+    build:
+      context: ../dashboard
+      args:
+        # Same origin as the dashboard — the browser calls /api on this host.
+        VITE_HUB_URL: https://${HUGINN_DOMAIN}
+    restart: unless-stopped
+    depends_on:
+      - hub
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - hub
+      - dashboard
+      - mcp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      HUGINN_DOMAIN: ${HUGINN_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

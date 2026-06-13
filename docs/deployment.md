@@ -1,5 +1,16 @@
 # Deployment
 
+Pick the path that fits your scale:
+
+| Mode | Best for | What you get |
+|---|---|---|
+| **Local** (compose) | development | the full stack on `localhost`, ports exposed |
+| **Docker production** (compose + Caddy) | a single host | hardened stack behind Caddy with **automatic HTTPS** |
+| **Kubernetes** | clusters / HA | manifests for hub, MCP, dashboard, migration Job, ingress |
+
+The Docker and Kubernetes paths are first-class alternatives — you do **not** need
+Kubernetes to run Huginn in production.
+
 ## Local (docker-compose)
 
 ```bash
@@ -7,9 +18,33 @@ cp deploy/.env.example deploy/.env   # then edit secrets
 cd deploy && docker compose up --build
 ```
 
-Brings up PostgreSQL, the hub (`:8000`), and the MCP server (`:9000`). The hub
-applies Alembic migrations on startup and bootstraps the first admin from
-`HUGINN_BOOTSTRAP_ADMIN_*`.
+Brings up PostgreSQL, the hub (`:8000`), the dashboard (`:5173`), and the MCP
+server (`:9000`). The hub applies Alembic migrations on startup and bootstraps the
+first admin from `HUGINN_BOOTSTRAP_ADMIN_*`.
+
+## Docker production (single host, Caddy + automatic HTTPS)
+
+For a real deployment without Kubernetes. Caddy terminates TLS and routes
+everything under one domain, so the dashboard and API share an origin (no CORS
+fuss): `/` → dashboard, `/api` + `/healthz` → hub, `/mcp` → MCP. Only Caddy
+publishes ports (80/443).
+
+```bash
+cd deploy
+cp .env.prod.example .env.prod        # set HUGINN_DOMAIN + real secrets
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+- Point your domain's DNS at the host; Caddy obtains/renews Let's Encrypt certs
+  automatically. For a local trial set `HUGINN_DOMAIN=localhost` (Caddy uses its
+  internal CA).
+- `HUGINN_ENV=prod` is set, so the hub refuses to boot with placeholder/weak
+  secrets — generate them with `openssl rand -hex 32`.
+- The hub sees `X-Forwarded-Proto: https` from Caddy, satisfying `HUGINN_REQUIRE_TLS`.
+- Workers enroll against `https://<your-domain>`; the dashboard is at the same URL.
+
+Upgrades: `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
+(the hub re-applies migrations on start).
 
 ## Kubernetes
 
