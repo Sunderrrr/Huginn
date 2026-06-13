@@ -56,6 +56,22 @@ async def create_action_task(
         return existing
     # validate_action raises ActionError on unknown action / unsafe params.
     normalized = validate_action(action_name, params)
+    # "update_worker" is a named action but is fulfilled as an update task (with
+    # SSRF-validated release URLs) rather than a shell command on the worker.
+    if action_name == "update_worker":
+        from app.services import settings_service
+
+        row = await settings_service.get_settings_row(session)
+        if row is None:
+            raise TaskInputError("settings not initialized")
+        return await create_update_task(
+            session,
+            vm=vm,
+            target_version=row.target_worker_version,
+            repo=row.target_release_repo,
+            allowed_domains=list(row.allowed_release_domains),
+            created_by=created_by,
+        )
     settings = get_settings()
     task = Task(
         vm_id=vm.id,
