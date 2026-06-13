@@ -1,0 +1,33 @@
+name: ci-hub
+
+on:
+  push:
+    branches: [main]
+    paths: ["hub/**", "mcp/**", ".github/workflows/ci-hub.yml"]
+  pull_request:
+    paths: ["hub/**", "mcp/**", ".github/workflows/ci-hub.yml"]
+
+jobs:
+  hub:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [hub, mcp]
+    defaults:
+      run:
+        working-directory: ${{ matrix.component }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Type-check (mypy)
+        run: mypy app
+      - name: Test (pytest)
+        run: pytest -q

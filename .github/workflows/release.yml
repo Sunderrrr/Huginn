@@ -1,0 +1,36 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Cross-compile worker binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: make release VERSION="${VERSION}"
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum huginn-worker-* > checksums.txt
+          cat checksums.txt
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            worker/dist/huginn-worker-*
+            worker/dist/checksums.txt
+          generate_release_notes: true
