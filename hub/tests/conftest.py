@@ -69,6 +69,15 @@ async def client(engine, session_factory) -> AsyncIterator[AsyncClient]:
                 raise
 
     app.dependency_overrides[get_session] = _override_get_session
+
+    # ASGITransport doesn't run the lifespan, so seed the settings singleton here.
+    from app.config import get_settings
+    from app.services import settings_service
+
+    async with session_factory() as s:
+        await settings_service.ensure_settings(s, get_settings())
+        await s.commit()
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -93,6 +102,28 @@ async def readonly_headers(client, make_user) -> dict[str, str]:
         "/api/auth/login", json={"username": "viewer", "password": password}
     )
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+@pytest_asyncio.fixture
+async def enrolled_worker(client, admin_headers):
+    """Enroll and approve a worker; return its id, secret, and auth headers."""
+
+    async def _make(name: str = "vm", arch: str = "amd64") -> dict:
+        token_resp = await client.post("/api/enrollment-tokens", json={}, headers=admin_headers)
+        token = token_resp.json()["token"]
+        enroll = await client.post(
+            "/api/worker/enroll", json={"token": token, "name": name, "arch": arch}
+        )
+        body = enroll.json()
+        vm_id, secret = body["worker_id"], body["worker_secret"]
+        await client.post(f"/api/vms/{vm_id}/approve", headers=admin_headers)
+        return {
+            "vm_id": vm_id,
+            "secret": secret,
+            "headers": {"X-Worker-Id": vm_id, "X-Worker-Secret": secret},
+        }
+
+    return _make
 
 
 @pytest_asyncio.fixture

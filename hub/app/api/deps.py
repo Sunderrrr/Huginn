@@ -12,6 +12,7 @@ from app.config import Settings, get_settings
 from app.core import security
 from app.core.jwt import TokenError, decode_access_token
 from app.core.principal import Principal
+from app.core.ratelimit import RateLimiter
 from app.db import get_session
 from app.models.enums import UserRole, VMState
 from app.models.user import User
@@ -20,6 +21,9 @@ from app.services import users as users_service
 
 # auto_error=False so we can fall back to the MCP service-token scheme.
 _bearer = HTTPBearer(auto_error=False)
+
+# Shared limiter for execution endpoints (per-principal).
+_exec_limiter = RateLimiter(get_settings().rate_limit_exec_per_minute)
 
 
 def client_ip(request: Request) -> str | None:
@@ -62,6 +66,26 @@ async def require_admin(principal: Principal = Depends(get_principal)) -> Princi
     if principal.role is not UserRole.admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required")
     return principal
+
+
+async def rate_limit_exec(principal: Principal = Depends(get_principal)) -> Principal:
+    """Throttle execution endpoints per principal."""
+    if not _exec_limiter.allow(f"{principal.actor_type}:{principal.actor_id}"):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, "rate limit exceeded; slow down"
+        )
+    return principal
+
+
+async def enforce_body_size(
+    request: Request, settings: Settings = Depends(get_settings)
+) -> None:
+    """Reject oversized request bodies on execution endpoints early."""
+    content_length = request.headers.get("content-length")
+    if content_length is not None and int(content_length) > settings.max_body_bytes:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "request body too large"
+        )
 
 
 async def current_worker(

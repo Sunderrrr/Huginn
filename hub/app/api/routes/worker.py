@@ -4,16 +4,28 @@ all other worker endpoints (added later) use the per-worker secret.
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import client_ip
+from app.api.deps import client_ip, current_worker
 from app.config import Settings, get_settings
 from app.core import audit
 from app.db import get_session
-from app.models.enums import ActorType
+from app.models.enums import ActorType, VMState
+from app.models.mixins import utcnow
+from app.models.vm import VM
 from app.schemas.enrollment import WorkerEnrollRequest, WorkerEnrollResponse
+from app.schemas.task import (
+    HeartbeatRequest,
+    HeartbeatResponse,
+    TaskResultSubmit,
+    WorkerTask,
+)
 from app.services import enrollment as enrollment_service
+from app.services import settings_service
+from app.services import tasks as tasks_service
 
 router = APIRouter(prefix="/api/worker", tags=["worker"])
 
@@ -62,3 +74,64 @@ async def enroll(
         source_ip=client_ip(request),
     )
     return WorkerEnrollResponse(worker_id=vm.id, worker_secret=secret, state=vm.state.value)
+
+
+@router.post("/heartbeat", response_model=HeartbeatResponse)
+async def heartbeat(
+    body: HeartbeatRequest,
+    request: Request,
+    vm: VM = Depends(current_worker),
+    session: AsyncSession = Depends(get_session),
+) -> HeartbeatResponse:
+    """Worker liveness + version report; returns the desired target version."""
+    vm.last_heartbeat_at = utcnow()
+    if body.worker_version:
+        vm.worker_version = body.worker_version
+    if body.ip_address:
+        vm.ip_address = body.ip_address
+    # Recover from OFFLINE on a fresh heartbeat.
+    if vm.state is VMState.offline:
+        vm.state = VMState.active
+
+    row = await settings_service.get_settings_row(session)
+    target = row.target_worker_version if row else get_settings().target_worker_version
+    return HeartbeatResponse(target_worker_version=target, exec_mode=vm.exec_mode.value)
+
+
+@router.get("/tasks/next", response_model=WorkerTask | None)
+async def next_task(
+    vm: VM = Depends(current_worker),
+    session: AsyncSession = Depends(get_session),
+) -> WorkerTask | None:
+    """Hand the worker its next queued task (long-poll style; returns null if idle)."""
+    vm.last_heartbeat_at = utcnow()
+    task = await tasks_service.claim_next_task(session, vm)
+    if task is None:
+        return None
+    return WorkerTask(
+        id=task.id,
+        type=task.type,
+        action_name=task.action_name,
+        payload=task.payload,
+    )
+
+
+@router.post("/tasks/{task_id}/result", status_code=status.HTTP_204_NO_CONTENT)
+async def submit_result(
+    task_id: uuid.UUID,
+    body: TaskResultSubmit,
+    vm: VM = Depends(current_worker),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    task = await tasks_service.submit_result(
+        session,
+        vm=vm,
+        task_id=task_id,
+        status=body.status,
+        exit_code=body.exit_code,
+        stdout=body.stdout,
+        stderr=body.stderr,
+        error=body.error,
+    )
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found for this worker")

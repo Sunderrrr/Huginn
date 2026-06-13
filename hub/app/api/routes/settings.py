@@ -1,0 +1,52 @@
+"""Fleet settings: the hub is the source of truth for the target worker version."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import client_ip, get_principal, require_admin
+from app.core import audit
+from app.core.principal import Principal
+from app.db import get_session
+from app.schemas.setting import SettingsOut, SettingsUpdate
+from app.services import settings_service
+
+router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+@router.get("", response_model=SettingsOut)
+async def get_settings_endpoint(
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> SettingsOut:
+    row = await settings_service.get_settings_row(session)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "settings not initialized")
+    return SettingsOut.model_validate(row)
+
+
+@router.put("", response_model=SettingsOut)
+async def update_settings_endpoint(
+    body: SettingsUpdate,
+    request: Request,
+    principal: Principal = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> SettingsOut:
+    row = await settings_service.get_settings_row(session)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "settings not initialized")
+    changed = body.model_dump(exclude_none=True)
+    for key, value in changed.items():
+        setattr(row, key, value)
+    if principal.user is not None:
+        row.updated_by = principal.user.id
+    await audit.record(
+        session,
+        actor_type=principal.actor_type,
+        actor_id=principal.actor_id,
+        event_type="settings_update",
+        detail=changed,
+        source_ip=client_ip(request),
+    )
+    return SettingsOut.model_validate(row)

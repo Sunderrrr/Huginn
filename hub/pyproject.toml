@@ -42,8 +42,9 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S", "ASYNC"]
 ignore = [
-    "S101",  # asserts are fine in tests
-    "B008",  # FastAPI Depends() in argument defaults is the idiomatic pattern
+    "S101",      # asserts are fine in tests
+    "B008",      # FastAPI Depends() in argument defaults is the idiomatic pattern
+    "ASYNC109",  # `timeout` here is a task-data field, not an asyncio timeout
 ]
 
 [tool.ruff.lint.per-file-ignores]
