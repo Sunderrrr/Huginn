@@ -23,10 +23,9 @@ spec:
         - name: hub
           image: ghcr.io/example-website/huginn-hub:latest
           imagePullPolicy: IfNotPresent
-          # With >1 replica, run migrations as a separate Job and override the
-          # entrypoint here to skip per-pod migration. The default command runs
-          # `alembic upgrade head` then uvicorn (safe for a single replica).
-          args: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          # `command` overrides the image entrypoint (which would otherwise run
+          # migrations per-pod) — migrations are handled by huginn-migrate Job.
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
           ports:
             - containerPort: 8000
           envFrom:
