@@ -34,6 +34,7 @@ async def _bootstrap(settings: Settings) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     logging.basicConfig(level=settings.log_level)
+    settings.validate_for_prod()
     await _bootstrap(settings)
 
     stop = asyncio.Event()

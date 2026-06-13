@@ -17,7 +17,7 @@ from app.api.deps import (
     client_ip,
     enforce_body_size,
     rate_limit_exec,
-    require_admin,
+    require_operator,
 )
 from app.core import audit
 from app.core.actions import ActionError
@@ -47,14 +47,22 @@ async def _load_active_vm(session: AsyncSession, vm_id: uuid.UUID):  # type: ign
 async def _maybe_wait(session: AsyncSession, task: Task, wait: bool) -> Task:
     if not wait:
         return task
+    # Commit the task creation + audit first: this ends the request's transaction
+    # snapshot so subsequent reads can observe the worker's independently-committed
+    # result, and it avoids holding a transaction open across the poll loop.
+    await session.commit()
     waited = 0.0
-    while waited < _WAIT_MAX_SECONDS:
+    while True:
         await session.refresh(task)
         if TaskStatus(task.status).is_terminal:
             return task
+        if waited >= _WAIT_MAX_SECONDS:
+            return task
+        # Commit to release the snapshot opened by refresh, so the next read is
+        # fresh regardless of isolation level.
+        await session.commit()
         await asyncio.sleep(_WAIT_POLL_SECONDS)
         waited += _WAIT_POLL_SECONDS
-    return task
 
 
 @router.post("/{vm_id}/actions", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
@@ -138,7 +146,7 @@ async def run_command(
 async def trigger_update(
     vm_id: uuid.UUID,
     request: Request,
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(require_operator),
     session: AsyncSession = Depends(get_session),
 ) -> TaskOut:
     vm = await _load_active_vm(session, vm_id)

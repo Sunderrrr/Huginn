@@ -14,7 +14,7 @@ from app.core.jwt import TokenError, decode_access_token
 from app.core.principal import Principal
 from app.core.ratelimit import RateLimiter
 from app.db import get_session
-from app.models.enums import UserRole, VMState
+from app.models.enums import VMState
 from app.models.user import User
 from app.models.vm import VM
 from app.services import users as users_service
@@ -63,13 +63,21 @@ async def get_principal(
 
 
 async def require_admin(principal: Principal = Depends(get_principal)) -> Principal:
-    if principal.role is not UserRole.admin:
+    """Human admin only (excludes the automation agent)."""
+    if not principal.is_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required")
     return principal
 
 
-async def rate_limit_exec(principal: Principal = Depends(get_principal)) -> Principal:
-    """Throttle execution endpoints per principal."""
+async def require_operator(principal: Principal = Depends(get_principal)) -> Principal:
+    """Admin user or the trusted agent; read-only users are rejected."""
+    if not principal.can_execute:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "operator privileges required")
+    return principal
+
+
+async def rate_limit_exec(principal: Principal = Depends(require_operator)) -> Principal:
+    """Authorize as operator, then throttle execution endpoints per principal."""
     if not _exec_limiter.allow(f"{principal.actor_type}:{principal.actor_id}"):
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, "rate limit exceeded; slow down"

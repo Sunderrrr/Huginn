@@ -17,9 +17,22 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 - **Every** endpoint requires authentication. There is no unauthenticated
   execution path. (`hub/app/api/deps.py`)
 - Users authenticate via local Argon2id login or OIDC; JWTs carry the role.
-- RBAC: `admin` vs `readonly`. Sensitive mutations require admin.
-- Workers authenticate with their VM id + a per-worker secret on every request.
-- The MCP façade authenticates with a service token and acts as an admin agent.
+- RBAC has three capability tiers:
+  - **read-only user** — list/inspect only; cannot execute.
+  - **operator** (admin user *or* the automation agent) — run actions/commands,
+    trigger updates, read the audit log.
+  - **admin** (human admin user only) — control-plane operations: approve/revoke
+    VMs, toggle unrestricted mode, manage enrollment tokens, change settings.
+- The MCP façade authenticates with a service token and acts as an **operator,
+  not an admin**: a leaked service token cannot approve VMs, enable unrestricted
+  mode, or change the release allowlist.
+- Workers authenticate with their VM id + a per-worker secret on every request;
+  PENDING/REVOKED workers are rejected.
+
+### Fail-closed configuration
+- In production (`HUGINN_ENV=prod`) the hub **refuses to start** if any of
+  `HUGINN_JWT_SECRET`, `HUGINN_SECRET_HASH_KEY`, or `HUGINN_MCP_SERVICE_TOKEN` is
+  still a placeholder or shorter than 32 bytes. (`config.validate_for_prod`)
 
 ### Secrets
 - Passwords are hashed with **Argon2id**. High-entropy secrets (enrollment
@@ -36,7 +49,10 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 - Action parameters are validated against a conservative pattern on **both** the
   hub and the worker before they are placed into a separate argv slot.
 - Free-form commands use a shell **by design**, but only in the explicit,
-  admin-enabled, audited **unrestricted** mode — off by default, per VM.
+  admin-enabled, audited **unrestricted** mode — off by default, per VM. The
+  worker independently enforces this too: it refuses to run a shell command
+  unless it has itself observed unrestricted mode via heartbeat (defense in
+  depth, so the hub alone cannot enable shell).
 
 ### Transport
 - TLS is enforced for hub↔worker traffic in production (`HUGINN_REQUIRE_TLS`);
@@ -45,7 +61,9 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 ### Updates / SSRF
 - Update downloads are restricted to an **allowlist of release hosts**
   (`github.com`, `objects.githubusercontent.com` by default). The host is checked
-  on the hub, on the worker, and on **every redirect hop**.
+  on the hub, on the worker, and on **every redirect hop**. Allowlist entries are
+  validated (no IP literals, no `localhost`/`.local`/`.internal`), and the
+  `repo`/`version` used to build release URLs are pattern-checked.
 - Binaries are verified by **SHA-256** against the published checksums before an
   **atomic, rollback-safe** swap.
 

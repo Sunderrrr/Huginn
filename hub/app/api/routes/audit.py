@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_admin
+from app.api.deps import require_admin, require_operator
 from app.core import audit as audit_core
 from app.core.principal import Principal
 from app.db import get_session
@@ -23,7 +23,7 @@ async def list_audit(
     vm_id: uuid.UUID | None = None,
     event_type: str | None = None,
     limit: int = Query(default=100, ge=1, le=1000),
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(require_operator),
     session: AsyncSession = Depends(get_session),
 ) -> list[AuditEntryOut]:
     stmt = select(AuditLog).order_by(AuditLog.id.desc()).limit(limit)

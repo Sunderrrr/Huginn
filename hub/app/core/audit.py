@@ -13,13 +13,30 @@ import json
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuditLog
 from app.models.enums import ActorType
 
 GENESIS_HASH = "0" * 64
+
+# Arbitrary constant key for the PostgreSQL transaction-level advisory lock that
+# serializes audit appends (so concurrent writers can't fork the hash chain).
+_AUDIT_LOCK_KEY = 0x4855_4749_4E41  # "HUGINA"
+
+
+async def _serialize_appends(session: AsyncSession) -> None:
+    """Take a per-transaction advisory lock so chain appends are serialized.
+
+    On PostgreSQL this blocks concurrent ``record()`` calls until the holder's
+    transaction commits, guaranteeing each row commits to the true chain head.
+    SQLite (tests) serializes writers anyway, so this is a no-op there.
+    """
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_LOCK_KEY}
+        )
 
 
 def _canonical(fields: dict[str, Any]) -> str:
@@ -53,6 +70,7 @@ async def record(
 ) -> AuditLog:
     """Append one immutable audit entry, extending the hash chain."""
     detail = detail or {}
+    await _serialize_appends(session)
     prev_hash = await _chain_head(session)
     fields = {
         "actor_type": actor_type.value,

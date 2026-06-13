@@ -67,10 +67,11 @@ func TestDispatchUnknownActionFails(t *testing.T) {
 	}
 }
 
-func TestDispatchCommandUsesShell(t *testing.T) {
+func TestDispatchCommandUsesShellWhenUnrestricted(t *testing.T) {
 	// Free-command mode (hub-gated unrestricted) intentionally goes through a shell.
 	runner := &fakeRunner{result: wexec.Result{ExitCode: 0}}
 	a := newTestAgent(runner)
+	a.execMode = "unrestricted"
 	task := &hubclient.Task{
 		ID: "t1", Type: "command",
 		Payload: map[string]any{"command": "echo hi"},
@@ -79,6 +80,24 @@ func TestDispatchCommandUsesShell(t *testing.T) {
 	want := []string{"sh", "-c", "echo hi"}
 	if strings.Join(runner.gotArgv, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("argv = %v, want %v", runner.gotArgv, want)
+	}
+}
+
+func TestDispatchCommandRefusedWhenNotUnrestricted(t *testing.T) {
+	// Defense in depth: the worker refuses shell commands unless it has itself
+	// observed unrestricted mode, even if a command task arrives.
+	runner := &fakeRunner{}
+	a := newTestAgent(runner) // execMode defaults to "" (whitelist)
+	task := &hubclient.Task{
+		ID: "t1", Type: "command",
+		Payload: map[string]any{"command": "echo hi"},
+	}
+	res, _ := a.dispatch(context.Background(), task)
+	if res.Status != "failed" {
+		t.Fatalf("status = %q, want failed", res.Status)
+	}
+	if runner.gotArgv != nil {
+		t.Fatalf("runner must not be invoked when unrestricted mode is off")
 	}
 }
 
@@ -111,8 +130,12 @@ func TestPollOnceRunsAndSubmitsResult(t *testing.T) {
 	a := newTestAgent(&fakeRunner{result: wexec.Result{ExitCode: 0, Stdout: "linux box"}})
 	a.Client = client
 
-	if restart := a.pollOnce(context.Background()); restart {
+	didWork, restart := a.pollOnce(context.Background())
+	if restart {
 		t.Fatalf("did not expect restart")
+	}
+	if !didWork {
+		t.Fatalf("expected pollOnce to report work done")
 	}
 	if submitted.Status != "succeeded" || submitted.Stdout != "linux box" {
 		t.Fatalf("unexpected submitted result: %+v", submitted)
@@ -129,7 +152,8 @@ func TestPollOnceNoTaskIsNoop(t *testing.T) {
 	})
 	a := newTestAgent(&fakeRunner{})
 	a.Client = client
-	if restart := a.pollOnce(context.Background()); restart {
-		t.Fatalf("idle poll should not request restart")
+	didWork, restart := a.pollOnce(context.Background())
+	if restart || didWork {
+		t.Fatalf("idle poll should not report work or restart")
 	}
 }

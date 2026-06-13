@@ -11,6 +11,7 @@ from app.core.principal import Principal
 from app.db import get_session
 from app.schemas.setting import SettingsOut, SettingsUpdate
 from app.services import settings_service
+from app.services.versioning import SSRFError, validate_release_domain
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -37,6 +38,12 @@ async def update_settings_endpoint(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "settings not initialized")
     changed = body.model_dump(exclude_none=True)
+    # Guard the SSRF allowlist: no IP literals / internal hostnames.
+    for domain in changed.get("allowed_release_domains", []):
+        try:
+            validate_release_domain(domain)
+        except SSRFError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     for key, value in changed.items():
         setattr(row, key, value)
     if principal.user is not None:

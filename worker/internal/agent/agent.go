@@ -30,6 +30,11 @@ type Agent struct {
 	// HealthCommand validates a freshly swapped binary (defaults to running
 	// "<binary> healthcheck"). Injectable for tests.
 	HealthCommand func(ctx context.Context, binaryPath string) error
+
+	// execMode is the VM's exec mode as last reported by the hub heartbeat. The
+	// worker refuses free-command tasks unless this is "unrestricted" — a local
+	// defense-in-depth gate so the hub alone cannot enable arbitrary shell.
+	execMode string
 }
 
 // New builds an Agent with sensible defaults.
@@ -45,13 +50,19 @@ func New(client *hubclient.Client, state *config.State, logger *slog.Logger) *Ag
 	}
 }
 
+// maxIdlePollInterval caps the backoff applied when the queue is empty, so an
+// idle worker does not hammer the hub.
+const maxIdlePollInterval = 30 * time.Second
+
 // Run loops until ctx is cancelled or an update requires a restart (in which case
-// it returns nil so the supervisor can relaunch the new binary).
+// it returns nil so the supervisor can relaunch the new binary). Polling backs off
+// when idle and snaps back to the base interval as soon as there is work.
 func (a *Agent) Run(ctx context.Context) error {
 	hbTicker := time.NewTicker(a.HeartbeatInterval)
 	defer hbTicker.Stop()
 	a.heartbeat(ctx)
 
+	interval := a.PollInterval
 	for {
 		select {
 		case <-ctx.Done():
@@ -59,40 +70,51 @@ func (a *Agent) Run(ctx context.Context) error {
 		case <-hbTicker.C:
 			a.heartbeat(ctx)
 		default:
-			restart := a.pollOnce(ctx)
+			didWork, restart := a.pollOnce(ctx)
 			if restart {
 				a.Logger.Info("update applied; exiting for supervised restart")
 				return nil
 			}
-			a.sleep(ctx, a.PollInterval)
+			if didWork {
+				interval = a.PollInterval
+			} else if interval < maxIdlePollInterval {
+				interval *= 2
+				if interval > maxIdlePollInterval {
+					interval = maxIdlePollInterval
+				}
+			}
+			a.sleep(ctx, interval)
 		}
 	}
 }
 
 func (a *Agent) heartbeat(ctx context.Context) {
-	_, err := a.Client.Heartbeat(ctx, hubclient.HeartbeatRequest{WorkerVersion: config.Version})
+	resp, err := a.Client.Heartbeat(ctx, hubclient.HeartbeatRequest{WorkerVersion: config.Version})
 	if err != nil {
 		a.Logger.Warn("heartbeat failed", "err", err)
+		return
 	}
+	a.execMode = resp.ExecMode
 }
 
-// pollOnce fetches and runs at most one task. Returns true if a restart is needed.
-func (a *Agent) pollOnce(ctx context.Context) bool {
+// pollOnce fetches and runs at most one task. It returns whether it handled a
+// task (for poll backoff) and whether a restart is needed (after an update).
+func (a *Agent) pollOnce(ctx context.Context) (didWork bool, restart bool) {
 	task, err := a.Client.PollNextTask(ctx)
 	if err != nil {
 		a.Logger.Warn("poll failed", "err", err)
-		return false
+		return false, false
 	}
 	if task == nil {
-		return false
+		return false, false
 	}
 	a.Logger.Info("running task", "id", task.ID, "type", task.Type)
 	result, restart := a.dispatch(ctx, task)
 	if err := a.Client.SubmitResult(ctx, task.ID, result); err != nil {
 		a.Logger.Warn("submit result failed", "id", task.ID, "err", err)
-		return false
+		return true, false
 	}
-	return restart
+	return true, restart
 }
 
 func (a *Agent) dispatch(ctx context.Context, task *hubclient.Task) (hubclient.TaskResult, bool) {
@@ -121,6 +143,12 @@ func (a *Agent) runAction(ctx context.Context, task *hubclient.Task) hubclient.T
 }
 
 func (a *Agent) runCommand(ctx context.Context, task *hubclient.Task) hubclient.TaskResult {
+	// Local defense in depth: even though the hub gates command tasks on the VM's
+	// unrestricted mode, the worker independently refuses to run a shell unless it
+	// has itself observed unrestricted mode via heartbeat.
+	if a.execMode != "unrestricted" {
+		return failure("worker refused free command: unrestricted mode not enabled")
+	}
 	command, _ := task.Payload["command"].(string)
 	if command == "" {
 		return failure("empty command")

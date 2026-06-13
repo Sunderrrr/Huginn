@@ -39,3 +39,30 @@ def test_validate_url_host_rejects_http() -> None:
 def test_validate_url_host_rejects_evil_host() -> None:
     with pytest.raises(versioning.SSRFError):
         versioning.validate_url_host("https://evil.example.com/x", ["github.com"])
+
+
+def test_rejects_repo_with_metacharacters() -> None:
+    with pytest.raises(versioning.SSRFError):
+        versioning.build_release_urls(
+            repo="owner/repo@evil.com", version="v1", arch=WorkerArch.amd64,
+            allowed_domains=["github.com"],
+        )
+
+
+def test_rejects_version_path_traversal() -> None:
+    with pytest.raises(versioning.SSRFError):
+        versioning.build_release_urls(
+            repo="owner/repo", version="../../etc/passwd", arch=WorkerArch.amd64,
+            allowed_domains=["github.com"],
+        )
+
+
+def test_validate_release_domain_rejects_ip_and_internal() -> None:
+    for bad in ["169.254.169.254", "127.0.0.1", "localhost", "db.internal", "x.local", "10.0.0.5"]:
+        with pytest.raises(versioning.SSRFError):
+            versioning.validate_release_domain(bad)
+
+
+def test_validate_release_domain_accepts_public_hostname() -> None:
+    versioning.validate_release_domain("github.com")
+    versioning.validate_release_domain("objects.githubusercontent.com")

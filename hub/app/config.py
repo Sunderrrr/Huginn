@@ -72,6 +72,31 @@ class Settings(BaseSettings):
     def is_prod(self) -> bool:
         return self.env == "prod"
 
+    def validate_for_prod(self) -> None:
+        """Fail closed if deployed to prod with placeholder/weak secrets.
+
+        Prevents the catastrophic-but-silent case where an operator ships with the
+        default HS256 JWT key / HMAC key / MCP token, which would let anyone forge
+        admin tokens, worker secrets, or the agent identity.
+        """
+        if not self.is_prod:
+            return
+        weak: list[str] = []
+        checks = {
+            "HUGINN_JWT_SECRET": self.jwt_secret,
+            "HUGINN_SECRET_HASH_KEY": self.secret_hash_key,
+            "HUGINN_MCP_SERVICE_TOKEN": self.mcp_service_token,
+        }
+        for name, value in checks.items():
+            if value.startswith("change-me") or len(value) < 32:
+                weak.append(name)
+        if weak:
+            raise RuntimeError(
+                "refusing to start in prod with placeholder/weak secrets: "
+                + ", ".join(sorted(weak))
+                + " (generate with: openssl rand -hex 32)"
+            )
+
 
 @lru_cache
 def get_settings() -> Settings:
