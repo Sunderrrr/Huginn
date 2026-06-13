@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - Core iteration: hub (FastAPI + PostgreSQL), Go worker, MCP façade.
+- React dashboard (Vite + TypeScript): local + OIDC login, fleet roster,
+  per-node actions/updates/unrestricted shell, enrollment tokens, audit log with
+  chain verification, and settings. Configurable CORS on the hub; OIDC can hand
+  the token back to the SPA via fragment redirect.
 - Worker enrollment with one-line installer, manual approval, and per-worker
   secrets.
 - Whitelisted action execution and opt-in, audited unrestricted command mode.

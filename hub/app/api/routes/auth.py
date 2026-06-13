@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import client_ip, get_principal
@@ -87,7 +88,7 @@ async def oidc_callback(
     response: Response,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
-) -> TokenResponse:
+) -> Response | TokenResponse:
     cookie_state = request.cookies.get(_OIDC_STATE_COOKIE)
     if not cookie_state or not security.constant_time_equals(cookie_state, state):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid OIDC state")
@@ -111,4 +112,13 @@ async def oidc_callback(
     )
     response.delete_cookie(_OIDC_STATE_COOKIE)
     token = users_service.issue_token(user)
+    # If a SPA dashboard URL is configured, hand the token back via the URL
+    # fragment (never logged by servers/proxies) and redirect the browser there.
+    if settings.oidc_post_login_redirect:
+        redirect = RedirectResponse(
+            url=f"{settings.oidc_post_login_redirect}#access_token={token}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        redirect.delete_cookie(_OIDC_STATE_COOKIE)
+        return redirect
     return TokenResponse(access_token=token, expires_in=settings.access_token_ttl_minutes * 60)

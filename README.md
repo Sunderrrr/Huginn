@@ -9,10 +9,9 @@ opt-in unrestricted commands), keep workers up to date, and audit everything. An
 [MCP](https://modelcontextprotocol.io) server exposes the same capabilities to an
 external AI agent (e.g. "Hermes") without duplicating any business logic.
 
-> **Status:** core iteration (hub + Go worker + MCP). The React dashboard and
-> Kubernetes manifests land in a follow-up iteration. This is a remote
-> command-execution system — read [docs/security.md](docs/security.md) before
-> exposing it.
+> **Status:** hub + Go worker + MCP + React dashboard, with docker-compose and
+> Kubernetes manifests for the hub. This is a remote command-execution system —
+> read [docs/security.md](docs/security.md) before exposing it.
 
 ## Architecture
 
@@ -40,7 +39,10 @@ external AI agent (e.g. "Hermes") without duplicating any business logic.
   and reports results. No runtime dependencies.
 - **MCP server** (`/mcp`) — a thin façade over the hub's REST API exposing tools
   for an external agent. No direct worker access, no duplicated logic.
-- **Dashboard** (`/dashboard`) — React SPA *(iteration 2)*.
+- **Dashboard** (`/dashboard`) — a React SPA (Vite + TypeScript) with a
+  distinctive "raven control-console" UI: local + OIDC login, fleet roster,
+  per-node actions/updates/unrestricted shell, enrollment tokens, and the audit
+  log with hash-chain verification.
 
 By default the worker **pulls** work from the hub over a single outbound HTTPS
 connection, so it works behind NAT. A push listener can be enabled per-VM when the
@@ -55,8 +57,9 @@ cp .env.example .env          # then edit secrets
 cd deploy && docker compose up --build
 ```
 
-This starts PostgreSQL, the hub (`:8000`) and the MCP server (`:9000`). A first
-admin user is bootstrapped from `HUGINN_BOOTSTRAP_ADMIN_*`.
+This starts PostgreSQL, the hub (`:8000`), the dashboard (`:5173`), and the MCP
+server (`:9000`). A first admin user is bootstrapped from
+`HUGINN_BOOTSTRAP_ADMIN_*`; log in to the dashboard with those credentials.
 
 Enroll a VM (after generating an enrollment token via the API/dashboard):
 
@@ -77,7 +80,7 @@ See [docs/](docs/) for [architecture](docs/architecture.md),
 | `hub/` | FastAPI hub (Python 3.12+, SQLAlchemy 2 async, Alembic) |
 | `worker/` | Go worker daemon (static binary, systemd) |
 | `mcp/` | MCP server (Python, FastMCP) — façade over the hub |
-| `dashboard/` | React SPA *(iteration 2)* |
+| `dashboard/` | React SPA (Vite + TypeScript) |
 | `deploy/` | docker-compose + Kubernetes manifests |
 | `scripts/` | `install.sh` one-liner installer |
 | `docs/` | documentation |

@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # TLS policy for hub<->worker
     require_tls: bool = True
 
+    # CORS: allowed dashboard origins (comma-separated). Empty disables CORS.
+    # Stored as a raw string: pydantic-settings JSON-decodes list-typed env vars
+    # before validators run, which would reject a plain CSV value.
+    cors_origins_csv: str = Field(default="", validation_alias="HUGINN_CORS_ORIGINS")
+
     # Bootstrap admin
     bootstrap_admin_username: str = "admin"
     bootstrap_admin_password: str | None = None
@@ -44,6 +49,10 @@ class Settings(BaseSettings):
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
     oidc_redirect_url: str = "http://localhost:8000/api/auth/oidc/callback"
+    # If set, the OIDC callback redirects the browser here with the access token
+    # in the URL fragment (so a SPA dashboard can complete login). If empty, the
+    # callback returns the token as JSON.
+    oidc_post_login_redirect: str = ""
 
     # Execution limits
     max_body_bytes: int = 65_536
@@ -53,20 +62,25 @@ class Settings(BaseSettings):
     rate_limit_exec_per_minute: int = 30
     heartbeat_offline_seconds: int = 120
 
-    # Worker update / release source
+    # Worker update / release source. CSV string for the same reason as CORS.
     target_worker_version: str = "v0.1.0"
     target_release_repo: str = "Internal-website/Huginn"
-    allowed_release_domains: list[str] = Field(
-        default_factory=lambda: ["github.com", "objects.githubusercontent.com"]
+    allowed_release_domains_csv: str = Field(
+        default="github.com,objects.githubusercontent.com",
+        validation_alias="HUGINN_ALLOWED_RELEASE_DOMAINS",
     )
 
-    @field_validator("allowed_release_domains", mode="before")
-    @classmethod
-    def _split_domains(cls, v: object) -> object:
-        """Allow a comma-separated string in the env var."""
-        if isinstance(v, str):
-            return [d.strip() for d in v.split(",") if d.strip()]
-        return v
+    @staticmethod
+    def _csv(value: str) -> list[str]:
+        return [item.strip() for item in value.split(",") if item.strip()]
+
+    @property
+    def allowed_release_domains(self) -> list[str]:
+        return self._csv(self.allowed_release_domains_csv)
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return self._csv(self.cors_origins_csv)
 
     @property
     def is_prod(self) -> bool:

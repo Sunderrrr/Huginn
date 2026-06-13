@@ -28,11 +28,22 @@ services:
       HUGINN_SECRET_HASH_KEY: ${HUGINN_SECRET_HASH_KEY:?set in .env}
       HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?set in .env}
       HUGINN_REQUIRE_TLS: ${HUGINN_REQUIRE_TLS:-false}
+      HUGINN_CORS_ORIGINS: ${HUGINN_CORS_ORIGINS:-}
       HUGINN_BOOTSTRAP_ADMIN_USERNAME: ${HUGINN_BOOTSTRAP_ADMIN_USERNAME:-admin}
       HUGINN_BOOTSTRAP_ADMIN_PASSWORD: ${HUGINN_BOOTSTRAP_ADMIN_PASSWORD:?set in .env}
       HUGINN_TARGET_RELEASE_REPO: ${HUGINN_TARGET_RELEASE_REPO:-Internal-website/Huginn}
     ports:
       - "8000:8000"
+
+  dashboard:
+    build:
+      context: ../dashboard
+      args:
+        VITE_HUB_URL: ${HUGINN_PUBLIC_HUB_URL:-http://localhost:8000}
+    depends_on:
+      - hub
+    ports:
+      - "5173:80"
 
   mcp:
     build:
