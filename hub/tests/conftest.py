@@ -19,10 +19,14 @@ os.environ.setdefault("HUGINN_REQUIRE_TLS", "false")
 os.environ.setdefault("HUGINN_ENV", "dev")
 
 import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.db import Base
+from app.core import security
+from app.db import Base, get_session
+from app.models.enums import UserRole
+from app.models.user import User
 
 
 @pytest_asyncio.fixture
@@ -39,7 +43,57 @@ async def engine() -> AsyncIterator:
 
 
 @pytest_asyncio.fixture
-async def session(engine) -> AsyncIterator[AsyncSession]:
-    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    async with factory() as s:
+async def session_factory(engine):
+    return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+
+@pytest_asyncio.fixture
+async def session(session_factory) -> AsyncIterator[AsyncSession]:
+    async with session_factory() as s:
         yield s
+
+
+@pytest_asyncio.fixture
+async def client(engine, session_factory) -> AsyncIterator[AsyncClient]:
+    from app.main import create_app
+
+    app = create_app()
+
+    async def _override_get_session() -> AsyncIterator[AsyncSession]:
+        async with session_factory() as s:
+            try:
+                yield s
+                await s.commit()
+            except Exception:
+                await s.rollback()
+                raise
+
+    app.dependency_overrides[get_session] = _override_get_session
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def make_user(session_factory):
+    """Factory fixture: create a user and return (user, plaintext_password)."""
+
+    async def _make(
+        username: str = "alice",
+        password: str = "s3cret-passw0rd",
+        role: UserRole = UserRole.admin,
+        active: bool = True,
+    ) -> tuple[User, str]:
+        async with session_factory() as s:
+            user = User(
+                username=username,
+                password_hash=security.hash_password(password),
+                role=role,
+                is_active=active,
+            )
+            s.add(user)
+            await s.commit()
+            await s.refresh(user)
+            return user, password
+
+    return _make

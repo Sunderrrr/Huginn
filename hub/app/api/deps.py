@@ -1,0 +1,89 @@
+"""FastAPI dependencies: DB session, principal/RBAC, and worker authentication."""
+
+from __future__ import annotations
+
+import uuid
+
+from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import Settings, get_settings
+from app.core import security
+from app.core.jwt import TokenError, decode_access_token
+from app.core.principal import Principal
+from app.db import get_session
+from app.models.enums import UserRole, VMState
+from app.models.user import User
+from app.models.vm import VM
+from app.services import users as users_service
+
+# auto_error=False so we can fall back to the MCP service-token scheme.
+_bearer = HTTPBearer(auto_error=False)
+
+
+def client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+async def get_principal(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    mcp_service_token: str | None = Header(default=None, alias="X-MCP-Service-Token"),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Principal:
+    """Authenticate the caller as a user (JWT) or the MCP agent (service token)."""
+    # MCP façade: timing-safe service-token check.
+    if mcp_service_token is not None:
+        if security.constant_time_equals(mcp_service_token, settings.mcp_service_token):
+            return Principal.agent()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid service token")
+
+    if credentials is None:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        payload = decode_access_token(credentials.credentials)
+        user_id = uuid.UUID(payload["sub"])
+    except (TokenError, KeyError, ValueError) as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token") from exc
+
+    user: User | None = await users_service.get_by_id(session, user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not found or inactive")
+    return Principal.from_user(user)
+
+
+async def require_admin(principal: Principal = Depends(get_principal)) -> Principal:
+    if principal.role is not UserRole.admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required")
+    return principal
+
+
+async def current_worker(
+    worker_id: str | None = Header(default=None, alias="X-Worker-Id"),
+    worker_secret: str | None = Header(default=None, alias="X-Worker-Secret"),
+    session: AsyncSession = Depends(get_session),
+) -> VM:
+    """Authenticate a worker by its VM id + per-worker secret (timing-safe)."""
+    if not worker_id or not worker_secret:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "worker credentials required")
+    try:
+        vm_id = uuid.UUID(worker_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid worker id") from exc
+
+    vm: VM | None = await session.get(VM, vm_id)
+    # Verify the secret even when the VM is missing to avoid leaking existence via
+    # timing; verify_secret on a None hash is constant-ish and returns False.
+    secret_ok = security.verify_secret(worker_secret, vm.worker_secret_hash if vm else None)
+    if vm is None or not secret_ok:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "worker authentication failed")
+    if vm.state not in (VMState.active, VMState.offline):
+        # PENDING/REVOKED workers may not interact beyond enrollment.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "worker not approved")
+    return vm
