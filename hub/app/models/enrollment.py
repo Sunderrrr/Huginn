@@ -9,7 +9,7 @@ from sqlalchemy import DateTime, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
-from app.models.mixins import TimestampMixin, utcnow
+from app.models.mixins import TimestampMixin, as_aware_utc, utcnow
 
 
 class EnrollmentToken(Base, TimestampMixin):
@@ -30,5 +30,5 @@ class EnrollmentToken(Base, TimestampMixin):
         return (
             self.revoked_at is None
             and self.uses_count < self.max_uses
-            and self.expires_at > now
+            and as_aware_utc(self.expires_at) > now
         )

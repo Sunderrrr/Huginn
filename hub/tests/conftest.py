@@ -75,6 +75,27 @@ async def client(engine, session_factory) -> AsyncIterator[AsyncClient]:
 
 
 @pytest_asyncio.fixture
+async def admin_headers(client, make_user) -> dict[str, str]:
+    """Create an admin and return Authorization headers for it."""
+    _, password = await make_user(username="admin", password="admin-password-1234")
+    resp = await client.post(
+        "/api/auth/login", json={"username": "admin", "password": password}
+    )
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+@pytest_asyncio.fixture
+async def readonly_headers(client, make_user) -> dict[str, str]:
+    _, password = await make_user(
+        username="viewer", password="viewer-password-1234", role=UserRole.readonly
+    )
+    resp = await client.post(
+        "/api/auth/login", json={"username": "viewer", "password": password}
+    )
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+@pytest_asyncio.fixture
 async def make_user(session_factory):
     """Factory fixture: create a user and return (user, plaintext_password)."""
 

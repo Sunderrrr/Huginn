@@ -45,9 +45,12 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    from app.api.routes import auth
+    from app.api.routes import auth, enrollment, vms, worker
 
     app.include_router(auth.router)
+    app.include_router(enrollment.router)
+    app.include_router(vms.router)
+    app.include_router(worker.router)
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:
