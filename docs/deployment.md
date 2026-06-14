@@ -46,6 +46,32 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 Upgrades: `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
 (the hub re-applies migrations on start).
 
+### Verify the deployment
+
+After `up -d`, confirm the stack end-to-end (use `-k` only for the `localhost`
+internal CA; drop it with a real domain):
+
+```bash
+# All five services up (postgres healthy; hub/mcp/dashboard/caddy running)
+docker compose -f docker-compose.prod.yml --env-file .env.prod ps
+
+curl -sk https://$HUGINN_DOMAIN/healthz                 # {"status":"ok","env":"prod"}
+curl -sk -o /dev/null -w "%{http_code}\n" https://$HUGINN_DOMAIN/         # 200 (dashboard)
+curl -sk -o /dev/null -w "%{http_code}\n" https://$HUGINN_DOMAIN/fleet    # 200 (SPA fallback)
+curl -sk -o /dev/null -w "%{http_code}\n" https://$HUGINN_DOMAIN/api/vms  # 401 (auth required)
+curl -s  -o /dev/null -w "%{http_code}\n" http://$HUGINN_DOMAIN/          # 308 (-> https)
+
+# Log in and confirm the audit chain is intact
+TOKEN=$(curl -sk -X POST https://$HUGINN_DOMAIN/api/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"<your-admin-password>"}' | jq -r .access_token)
+curl -sk https://$HUGINN_DOMAIN/api/audit/verify -H "authorization: Bearer $TOKEN"
+# {"intact": true}
+```
+
+Then open `https://<your-domain>/` and sign in with the bootstrap admin
+credentials.
+
 ## Kubernetes
 
 Manifests live in `deploy/k8s/` (hub, MCP, dashboard, a migration Job, and an
