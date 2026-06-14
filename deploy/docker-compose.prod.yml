@@ -92,6 +92,8 @@ services:
       - "443:443"
     environment:
       HUGINN_DOMAIN: ${HUGINN_DOMAIN}
+      # "internal" (self-signed, for IP/LAN) or your email (Let's Encrypt, domain).
+      HUGINN_TLS_INTERNAL: ${HUGINN_TLS_INTERNAL:-internal}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

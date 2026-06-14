@@ -1,11 +1,19 @@
-# Huginn reverse proxy. Caddy obtains and renews TLS certificates automatically
-# for {$HUGINN_DOMAIN}. For local testing without a public domain, set
-# HUGINN_DOMAIN=localhost (Caddy serves HTTPS via its internal CA).
+# Huginn reverse proxy.
 #
-# For Let's Encrypt expiry notifications, add a global block with your email:
-#   { email you@example.com }
+# HUGINN_TLS_INTERNAL controls certificates (defaults to "internal"):
+#   - "internal"  -> Caddy's self-signed internal CA. Use for an IP, localhost,
+#                    or any LAN hostname (browsers warn once; accept the cert).
+#   - <your email> -> automatic, trusted Let's Encrypt certs. Use ONLY with a
+#                    real public domain in HUGINN_DOMAIN that resolves here.
+
+# Clients connecting by IP literal send no SNI; treat such connections as the
+# configured host so the right certificate is served.
+{
+	default_sni {$HUGINN_DOMAIN}
+}
 
 {$HUGINN_DOMAIN} {
+	tls {$HUGINN_TLS_INTERNAL:internal}
 	encode gzip
 
 	# Hub REST API + health.

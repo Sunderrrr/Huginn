@@ -35,13 +35,26 @@ cp .env.prod.example .env.prod        # set HUGINN_DOMAIN + real secrets
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-- Point your domain's DNS at the host; Caddy obtains/renews Let's Encrypt certs
-  automatically. For a local trial set `HUGINN_DOMAIN=localhost` (Caddy uses its
-  internal CA).
+Certificates are controlled by `HUGINN_TLS_INTERNAL`:
+
+- **Public domain** — set `HUGINN_DOMAIN` to a domain that resolves to the host and
+  `HUGINN_TLS_INTERNAL=you@example.com`. Caddy gets trusted Let's Encrypt certs
+  automatically.
+- **IP / LAN / localhost** — set `HUGINN_DOMAIN` to the IP (e.g. `192.0.2.13`) or
+  `localhost` and keep `HUGINN_TLS_INTERNAL=internal`. Caddy serves a self-signed
+  cert from its internal CA; the connection is encrypted, but **browsers show a
+  one-time "not trusted" warning** — accept it (Advanced → Proceed) or import
+  Caddy's root CA. The Caddyfile sets `default_sni` so access by bare IP (which
+  sends no SNI) still presents the right cert.
+
+Other notes:
+
 - `HUGINN_ENV=prod` is set, so the hub refuses to boot with placeholder/weak
   secrets — generate them with `openssl rand -hex 32`.
 - The hub sees `X-Forwarded-Proto: https` from Caddy, satisfying `HUGINN_REQUIRE_TLS`.
-- Workers enroll against `https://<your-domain>`; the dashboard is at the same URL.
+- Workers enroll against `https://<HUGINN_DOMAIN>`; the dashboard is at the same URL.
+- The dashboard's hub URL is baked at build time from `HUGINN_DOMAIN`, so re-run
+  with `--build` after changing the host.
 
 Upgrades: `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
 (the hub re-applies migrations on start).
