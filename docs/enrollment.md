@@ -21,11 +21,16 @@ The plaintext token is shown **once**; only its HMAC is stored.
 ## 2. Install on the VM
 
 ```bash
-curl -sSL https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
+# trusted (public domain) cert:
+curl -fsSL  https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
+# self-signed / internal CA — add -k to fetch the script (it then installs the
+# hub's CA so everything afterwards is verified):
+curl -fsSLk https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
 ```
 
 The installer detects the architecture, downloads and checksum-verifies the
-release binary, enrolls with the hub, and installs the systemd service.
+worker binary **from the hub** (`/dist`), bootstraps trust for a self-signed hub
+CA if needed, enrolls, and installs the systemd service.
 
 ### What enrollment does
 - The worker calls `POST /api/worker/enroll` with the token and host metadata.

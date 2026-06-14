@@ -39,3 +39,6 @@ dashboard/dist/
 !deploy/**/*.example
 worker-identity.json
 *.local
+
+# Built worker artifacts served by prod Caddy
+deploy/artifacts/

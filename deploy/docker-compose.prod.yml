@@ -96,6 +96,9 @@ services:
       HUGINN_TLS_INTERNAL: ${HUGINN_TLS_INTERNAL:-internal}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Self-hosted worker artifacts served at /install.sh and /dist/*.
+      - ../scripts/install.sh:/srv/install.sh:ro
+      - ./artifacts:/srv/dist:ro
       - caddy_data:/data
       - caddy_config:/config
 

@@ -64,10 +64,13 @@ server (`:9000`). A first admin user is bootstrapped from
 Enroll a VM (after generating an enrollment token via the API/dashboard):
 
 ```bash
-curl -sSL https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
+curl -fsSL https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
+# add -k if the hub uses a self-signed/internal cert (see docs/enrollment.md)
 ```
 
-The VM appears as **PENDING**; approve it before it can receive any command.
+The hub serves `install.sh` and the worker binaries itself, so this works without
+a GitHub release. The VM appears as **PENDING**; approve it before it can receive
+any command.
 
 For production you can choose **Docker Compose + Caddy** (single host, automatic
 HTTPS) or **Kubernetes** — both are first-class; you don't need k8s. See

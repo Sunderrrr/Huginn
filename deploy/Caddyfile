@@ -29,6 +29,23 @@
 		reverse_proxy mcp:9000
 	}
 
+	# Self-hosted worker artifacts (served from mounted files), so the install
+	# one-liner works without depending on GitHub releases.
+	handle /install.sh {
+		root * /srv
+		file_server
+	}
+	handle /dist/* {
+		root * /srv
+		file_server
+	}
+	# Hub CA root (the public certificate, not the key) for trust bootstrap.
+	handle /caddy-root.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		file_server
+	}
+
 	# Everything else: the dashboard SPA.
 	handle {
 		reverse_proxy dashboard:80

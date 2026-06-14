@@ -32,8 +32,14 @@ publishes ports (80/443).
 ```bash
 cd deploy
 cp .env.prod.example .env.prod        # set HUGINN_DOMAIN + real secrets
+./build-artifacts.sh v0.1.0           # build worker binaries the hub will serve
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
+
+`build-artifacts.sh` cross-compiles the worker into `deploy/artifacts/`, which
+Caddy serves at `https://<host>/dist/`. This makes the install one-liner
+**self-contained** — workers download the binary (and the hub's CA root) from the
+hub itself, with no GitHub release required. Re-run it whenever the worker changes.
 
 Certificates are controlled by `HUGINN_TLS_INTERNAL`:
 
