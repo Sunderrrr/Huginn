@@ -96,6 +96,10 @@ func (a *Agent) heartbeat(ctx context.Context) {
 		return
 	}
 	a.execMode = resp.ExecMode
+	// Update allowed release domains from hub if provided
+	if len(resp.AllowedReleaseDomains) > 0 {
+		a.State.AllowedReleaseDomains = resp.AllowedReleaseDomains
+	}
 }
 
 // pollOnce fetches and runs at most one task. It returns whether it handled a

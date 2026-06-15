@@ -51,6 +51,7 @@ class HeartbeatRequest(BaseModel):
 class HeartbeatResponse(BaseModel):
     target_worker_version: str
     exec_mode: str
+    allowed_release_domains: list[str] = []
 
 
 class WorkerTask(BaseModel):

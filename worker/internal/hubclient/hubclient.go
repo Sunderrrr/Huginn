@@ -75,8 +75,9 @@ type HeartbeatRequest struct {
 }
 
 type HeartbeatResponse struct {
-	TargetWorkerVersion string `json:"target_worker_version"`
-	ExecMode            string `json:"exec_mode"`
+	TargetWorkerVersion    string   `json:"target_worker_version"`
+	ExecMode               string   `json:"exec_mode"`
+	AllowedReleaseDomains  []string `json:"allowed_release_domains"`
 }
 
 // Task is a unit of work handed to the worker.

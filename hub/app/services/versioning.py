@@ -29,28 +29,21 @@ def _asset_name(arch: WorkerArch) -> str:
 
 
 def validate_release_domain(domain: str) -> None:
-    """Reject allowlist entries that are IP literals or otherwise unsafe.
+    """Reject allowlist entries that are unsafe (localhost, .local, .internal).
 
-    Keeps an admin (or a leaked agent token) from pointing the update channel at
-    internal infrastructure (e.g. 169.254.169.254, localhost, private ranges).
+    IP literals are allowed for self-hosted deployments (e.g. LAN hub at 172.16.x.x).
     """
     host = domain.strip().lower()
     if not host or "/" in host or ":" in host:
         raise SSRFError(f"invalid release domain: {domain!r}")
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        ip = None
-    if ip is not None:
-        raise SSRFError(f"release domain must be a hostname, not an IP: {domain!r}")
     if host in {"localhost"} or host.endswith(".local") or host.endswith(".internal"):
         raise SSRFError(f"release domain not allowed: {domain!r}")
 
 
 def validate_url_host(url: str, allowed_domains: list[str]) -> None:
     parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise SSRFError(f"release URL must be https: {url!r}")
+    if parsed.scheme not in ("https", "http"):
+        raise SSRFError(f"release URL must be http or https: {url!r}")
     host = (parsed.hostname or "").lower()
     if host not in {d.lower() for d in allowed_domains}:
         raise SSRFError(f"release host {host!r} not in allowlist")
@@ -59,11 +52,31 @@ def validate_url_host(url: str, allowed_domains: list[str]) -> None:
 def build_release_urls(
     *, repo: str, version: str, arch: WorkerArch, allowed_domains: list[str]
 ) -> dict[str, str]:
-    """Construct and validate the binary + checksums URLs for a GitHub release."""
-    if not _REPO_RE.match(repo):
-        raise SSRFError(f"invalid repo: {repo!r}")
+    """Construct and validate the binary + checksums URLs for a release.
+
+    Supports two modes:
+    - GitHub releases: ``repo`` is ``owner/repo`` (e.g. ``Internal-website/Huginn``)
+    - Self-hosted: ``repo`` is a base URL (e.g. ``https://hub.example.com/dist``)
+    """
     if not _VERSION_RE.match(version):
         raise SSRFError(f"invalid version: {version!r}")
+
+    # Self-hosted mode: repo starts with http:// or https://
+    if repo.startswith("http://") or repo.startswith("https://"):
+        base = repo.rstrip("/")
+        urls = {
+            "binary_url": f"{base}/{_asset_name(arch)}",
+            "checksums_url": f"{base}/checksums.txt",
+            "asset_name": _asset_name(arch),
+            "version": version,
+        }
+        validate_url_host(urls["binary_url"], allowed_domains)
+        validate_url_host(urls["checksums_url"], allowed_domains)
+        return urls
+
+    # GitHub releases mode: repo is owner/repo
+    if not _REPO_RE.match(repo):
+        raise SSRFError(f"invalid repo: {repo!r}")
     base = f"https://github.com/{repo}/releases/download/{version}"
     urls = {
         "binary_url": f"{base}/{_asset_name(arch)}",

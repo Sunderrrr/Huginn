@@ -95,7 +95,12 @@ async def heartbeat(
 
     row = await settings_service.get_settings_row(session)
     target = row.target_worker_version if row else get_settings().target_worker_version
-    return HeartbeatResponse(target_worker_version=target, exec_mode=vm.exec_mode.value)
+    allowed_domains = list(row.allowed_release_domains) if row else []
+    return HeartbeatResponse(
+        target_worker_version=target,
+        exec_mode=vm.exec_mode.value,
+        allowed_release_domains=allowed_domains,
+    )
 
 
 @router.get("/tasks/next", response_model=WorkerTask | None)
