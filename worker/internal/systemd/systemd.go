@@ -22,7 +22,6 @@ Restart=always
 RestartSec=5
 # Hardening
 NoNewPrivileges=true
-ProtectSystem=full
 ProtectHome=true
 
 [Install]
