@@ -17,6 +17,7 @@ HTTP endpoint is open to anyone who can reach it.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -33,28 +34,43 @@ hub = HubClient(settings)
 
 
 # ---------------------------------------------------------------------------
-# HTTP bearer-token wrapper (streamable-http only)
+# HTTP bearer-token ASGI middleware (streamable-http only)
 # ---------------------------------------------------------------------------
 
-def _make_auth_wrapper(inner_app: Any, token: str) -> Any:  # noqa: ANN401
-    """Wrap a Starlette/ASGI app with bearer-token validation.
+class BearerAuthASGI:
+    """Pure ASGI middleware: reject requests without a valid Bearer token.
 
-    Every request must carry ``Authorization: Bearer <token>``. Requests without
-    a valid token receive ``401 Unauthorized`` before reaching the MCP layer.
+    Checks every HTTP request for ``Authorization: Bearer <token>`` before
+    passing it to the inner app. Returns 401 for missing or wrong tokens.
+    WebSocket connections are rejected unconditionally.
     """
-    from starlette.applications import Starlette
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse
 
-    class _BearerAuthMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next: Any) -> Any:  # noqa: ANN401
-            auth = request.headers.get("authorization", "")
-            if not auth.startswith("Bearer ") or auth[7:] != token:
-                return JSONResponse({"error": "unauthorized"}, status_code=401)
-            return await call_next(request)
+    def __init__(self, app: Any, token: str) -> None:  # noqa: ANN401
+        self._app = app
+        self._token = token
 
-    return _BearerAuthMiddleware(inner_app)
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:  # noqa: ANN401
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers", []))
+            auth = headers.get(b"authorization", b"").decode()
+            if auth.startswith("Bearer ") and auth[7:] == self._token:
+                await self._app(scope, receive, send)
+                return
+            # Reject with 401
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [[b"content-type", b"application/json"]],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": json.dumps({"error": "unauthorized"}).encode(),
+            })
+        elif scope["type"] == "websocket":
+            # Reject WebSocket connections (MCP uses HTTP POST, not WS)
+            await send({"type": "websocket.close", "code": 4001})
+        else:
+            await self._app(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +143,10 @@ async def get_audit_log(
 
 def main() -> None:
     if settings.transport == "streamable-http" and settings.mcp_client_token:
-        # Wrap the FastMCP ASGI app with bearer-token validation.
         import uvicorn
 
         raw_app = mcp.streamable_http_app()
-        app = _make_auth_wrapper(raw_app, settings.mcp_client_token)
+        app = BearerAuthASGI(raw_app, settings.mcp_client_token)
         logger.info("HTTP bearer-token auth enabled")
 
         uvicorn.run(
