@@ -45,6 +45,7 @@ services:
       HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?generate with openssl rand -hex 32}
       HUGINN_BOOTSTRAP_ADMIN_USERNAME: ${HUGINN_BOOTSTRAP_ADMIN_USERNAME:-admin}
       HUGINN_BOOTSTRAP_ADMIN_PASSWORD: ${HUGINN_BOOTSTRAP_ADMIN_PASSWORD:?set in .env.prod}
+      HUGINN_MCP_CLIENT_TOKEN: ${HUGINN_MCP_CLIENT_TOKEN:-}
       HUGINN_TARGET_RELEASE_REPO: ${HUGINN_TARGET_RELEASE_REPO:-Cronos-website/Huginn}
       HUGINN_TARGET_WORKER_VERSION: ${HUGINN_TARGET_WORKER_VERSION:-v0.1.0}
       # Same-origin via Caddy, but allow the public origin explicitly too.
@@ -65,6 +66,7 @@ services:
       HUGINN_MCP_TRANSPORT: streamable-http
       HUGINN_MCP_HOST: 0.0.0.0
       HUGINN_MCP_PORT: "9000"
+      HUGINN_MCP_MCP_CLIENT_TOKEN: ${HUGINN_MCP_CLIENT_TOKEN:-}
     expose:
       - "9000"
 
