@@ -51,14 +51,14 @@ function Telemetry() {
 
 const NAV = [
   { to: "/fleet", label: "Fleet" },
-  { to: "/tokens", label: "Tokens" },
-  { to: "/audit", label: "Audit" },
+  { to: "/tokens", label: "VM Tokens" },
+  { to: "/access-tokens", label: "MCP Token" },
+  { to: "/audit", label: "Logs" },
   { to: "/settings", label: "Settings" },
 ];
 
 const ADMIN_NAV = [
   { to: "/users", label: "Users" },
-  { to: "/access-tokens", label: "Access Tokens" },
 ];
 
 function roleColor(role: string | undefined): string {

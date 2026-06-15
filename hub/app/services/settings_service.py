@@ -22,6 +22,13 @@ async def ensure_settings(session: AsyncSession, app_settings: AppSettings) -> S
             target_release_repo=app_settings.target_release_repo,
             allowed_release_domains=list(app_settings.allowed_release_domains),
             mcp_client_token=app_settings.mcp_client_token or None,
+            # SSO / OIDC
+            oidc_enabled=app_settings.oidc_enabled,
+            oidc_issuer=app_settings.oidc_issuer,
+            oidc_client_id=app_settings.oidc_client_id,
+            oidc_client_secret=app_settings.oidc_client_secret or None,
+            oidc_redirect_url=app_settings.oidc_redirect_url,
+            oidc_post_login_redirect=app_settings.oidc_post_login_redirect,
         )
         session.add(row)
         await session.flush()
