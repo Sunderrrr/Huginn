@@ -7,12 +7,16 @@ your fleet — Hermes, Claude, Cursor, Continue, and more.
 ## Prerequisites
 
 1. A running Huginn stack (hub + MCP server).
-2. A **service token** — set `HUGINN_MCP_SERVICE_TOKEN` in your `.env` and
-   restart the hub. This token grants admin-equivalent access to the agent.
+2. Two tokens (generate with `openssl rand -hex 32`):
+   - **Service token** (`HUGINN_MCP_SERVICE_TOKEN`) — used by the MCP server to
+     call the hub API. Set in `.env`, must match the hub's value.
+   - **Client token** (`HUGINN_MCP_MCP_CLIENT_TOKEN`) — agents must send this as
+     `Authorization: Bearer <token>` to reach the HTTP endpoint. Set in `.env`.
 3. Choose a transport:
    - **stdio** — agent and MCP server run on the same machine (agent spawns the
-     process).
-   - **streamable-http** — MCP server runs remotely (recommended for most setups).
+     process). No client token needed (process-level isolation).
+   - **streamable-http** — MCP server runs remotely (recommended). Requires the
+     client token on every request.
 
 ## Transport setup
 
@@ -29,7 +33,8 @@ Start the MCP server with HTTP transport:
 ```bash
 HUGINN_MCP_TRANSPORT=streamable-http \
 HUGINN_MCP_HUB_URL=https://hub.example.com \
-HUGINN_MCP_SERVICE_TOKEN=<token> \
+HUGINN_MCP_SERVICE_TOKEN=<service-token> \
+HUGINN_MCP_MCP_CLIENT_TOKEN=<client-token> \
 HUGINN_MCP_HOST=0.0.0.0 \
 HUGINN_MCP_PORT=9000 \
 python -m app.server
@@ -38,14 +43,14 @@ python -m app.server
 Or use the `mcp` service from `docker-compose.yml` (already configured for
 streamable-http on port 9000).
 
+> **Without `HUGINN_MCP_MCP_CLIENT_TOKEN`**, the HTTP endpoint is open to anyone
+> who can reach it. Always set this token in production.
+
 ---
 
 ## Agent configurations
 
 ### Hermes (custom agent)
-
-Hermes connects via the MCP server config in its settings. Use stdio for local
-or HTTP for remote:
 
 **stdio:**
 ```json
@@ -69,7 +74,10 @@ or HTTP for remote:
 {
   "mcpServers": {
     "huginn": {
-      "url": "https://mcp.example.com/mcp"
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <client-token>"
+      }
     }
   }
 }
@@ -102,7 +110,10 @@ or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 {
   "mcpServers": {
     "huginn": {
-      "url": "https://mcp.example.com/mcp"
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <client-token>"
+      }
     }
   }
 }
@@ -113,21 +124,23 @@ list.
 
 ### Claude Code (CLI)
 
-```bash
-claude mcp add huginn \
-  --transport http \
-  --url https://mcp.example.com/mcp
-```
-
-Or for stdio:
-
+stdio:
 ```bash
 claude mcp add huginn \
   -- python -m app.server
 ```
 
+HTTP:
+```bash
+claude mcp add huginn \
+  --transport http \
+  --url https://mcp.example.com/mcp \
+  --header "Authorization: Bearer <client-token>"
+```
+
 With env vars, create a `.mcp.json` in your project root:
 
+**stdio:**
 ```json
 {
   "mcpServers": {
@@ -138,6 +151,20 @@ With env vars, create a `.mcp.json` in your project root:
       "env": {
         "HUGINN_MCP_HUB_URL": "https://hub.example.com",
         "HUGINN_MCP_SERVICE_TOKEN": "<service-token>"
+      }
+    }
+  }
+}
+```
+
+**HTTP:**
+```json
+{
+  "mcpServers": {
+    "huginn": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <client-token>"
       }
     }
   }
@@ -170,7 +197,10 @@ Add to `.cursor/mcp.json` in your project root (or global settings):
 {
   "mcpServers": {
     "huginn": {
-      "url": "https://mcp.example.com/mcp"
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <client-token>"
+      }
     }
   }
 }
@@ -180,6 +210,7 @@ Add to `.cursor/mcp.json` in your project root (or global settings):
 
 Add to `~/.continue/config.json`:
 
+**HTTP:**
 ```json
 {
   "mcpServers": [
@@ -187,14 +218,17 @@ Add to `~/.continue/config.json`:
       "name": "huginn",
       "transport": {
         "type": "streamable-http",
-        "url": "https://mcp.example.com/mcp"
+        "url": "https://mcp.example.com/mcp",
+        "headers": {
+          "Authorization": "Bearer <client-token>"
+        }
       }
     }
   ]
 }
 ```
 
-For stdio:
+**stdio:**
 ```json
 {
   "mcpServers": [
@@ -223,7 +257,9 @@ like [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) or
 
 ```bash
 # Start the proxy (converts MCP tools to OpenAI function definitions)
-mcp-proxy --mcp-url https://mcp.example.com/mcp --openai-port 8080
+mcp-proxy --mcp-url https://mcp.example.com/mcp \
+  --header "Authorization: Bearer <client-token>" \
+  --openai-port 8080
 ```
 
 Then point your OpenAI client at `http://localhost:8080`.
@@ -238,10 +274,14 @@ For quick testing or scripting, use the
 npm install -g mcp-cli
 
 # List available tools
-mcp-cli --url https://mcp.example.com/mcp list-tools
+mcp-cli --url https://mcp.example.com/mcp \
+  --header "Authorization: Bearer <client-token>" \
+  list-tools
 
 # Call a tool
-mcp-cli --url https://mcp.example.com/mcp call list_vms '{"state": "active"}'
+mcp-cli --url https://mcp.example.com/mcp \
+  --header "Authorization: Bearer <client-token>" \
+  call list_vms '{"state": "active"}'
 ```
 
 ---
@@ -250,15 +290,15 @@ mcp-cli --url https://mcp.example.com/mcp call list_vms '{"state": "active"}'
 
 Once connected, the agent has access to these tools:
 
-| Tool | Description | Auth |
-|---|---|---|
-| `list_vms(state?)` | List fleet VMs, optionally by state | service token |
-| `get_vm_status(vm_id)` | Full VM status (state, mode, version, heartbeat) | service token |
-| `execute_action(vm_id, action, params?, wait?)` | Run a whitelisted action | service token |
-| `execute_command(vm_id, command, wait?)` | Free shell command (unrestricted VMs only) | service token |
-| `trigger_update(vm_id)` | Trigger worker self-update | service token |
-| `get_task(task_id)` | Poll task status and result | service token |
-| `get_audit_log(vm_id?, event_type?, limit?)` | Read audit entries | service token |
+| Tool | Description |
+|---|---|
+| `list_vms(state?)` | List fleet VMs, optionally by state |
+| `get_vm_status(vm_id)` | Full VM status (state, mode, version, heartbeat) |
+| `execute_action(vm_id, action, params?, wait?)` | Run a whitelisted action |
+| `execute_command(vm_id, command, wait?)` | Free shell command (unrestricted VMs only) |
+| `trigger_update(vm_id)` | Trigger worker self-update |
+| `get_task(task_id)` | Poll task status and result |
+| `get_audit_log(vm_id?, event_type?, limit?)` | Read audit entries |
 
 ### Whitelisted actions
 
@@ -288,10 +328,16 @@ Once connected, you can ask your agent things like:
 
 ## Security
 
-- The **service token grants admin-equivalent access**. Treat it like a password:
-  - Don't commit it to git.
-  - Don't share it across environments (use a different token per agent).
-  - Rotate it if compromised (update `.env` + restart hub + update agent config).
+Two tokens are involved — don't confuse them:
+
+| Token | Env var | Direction | Purpose |
+|---|---|---|---|
+| **Service token** | `HUGINN_MCP_SERVICE_TOKEN` | MCP server → Hub | Internal. The MCP server uses this to authenticate with the hub API. |
+| **Client token** | `HUGINN_MCP_MCP_CLIENT_TOKEN` | Agent → MCP server | External. Agents must send this as `Authorization: Bearer <token>` to reach the HTTP endpoint. |
+
+- The **service token** grants admin-equivalent access to the hub. Keep it secret.
+- The **client token** protects the MCP HTTP endpoint itself. Without it, anyone
+  who can reach port 9000 can execute commands on your fleet.
 - All agent actions are **logged in the audit trail** (actor type: `agent`).
 - `execute_command` requires the VM to be in **unrestricted mode** (set by an
   admin in the dashboard, audited on every toggle).
@@ -317,14 +363,18 @@ location /mcp {
 ### Token rotation
 
 ```bash
-# Generate a new token
-NEW_TOKEN=$(openssl rand -hex 32)
+# Generate new tokens
+SERVICE_TOKEN=$(openssl rand -hex 32)
+CLIENT_TOKEN=$(openssl rand -hex 32)
 
-# Update hub
-sed -i "s/HUGINN_MCP_SERVICE_TOKEN=.*/HUGINN_MCP_SERVICE_TOKEN=$NEW_TOKEN/" deploy/.env
+# Update .env
+sed -i "s/HUGINN_MCP_SERVICE_TOKEN=.*/HUGINN_MCP_SERVICE_TOKEN=$SERVICE_TOKEN/" deploy/.env
+sed -i "s/HUGINN_MCP_CLIENT_TOKEN=.*/HUGINN_MCP_CLIENT_TOKEN=$CLIENT_TOKEN/" deploy/.env
+
+# Restart
 cd deploy && docker compose restart hub mcp
 
-# Update all agent configs with the new token
+# Update all agent configs with the new client token
 ```
 
 ---
@@ -333,9 +383,10 @@ cd deploy && docker compose restart hub mcp
 
 | Problem | Cause | Fix |
 |---|---|---|
-| Agent can't connect | Wrong URL or port | Check `HUGINN_MCP_HOST` / `HUGINN_MCP_PORT` |
-| `401 Unauthorized` | Token mismatch | Ensure token matches hub's `HUGINN_MCP_SERVICE_TOKEN` |
+| `401 Unauthorized` from MCP | Missing or wrong client token | Add `Authorization: Bearer <client-token>` header |
+| `401 Unauthorized` from hub | Service token mismatch | Ensure `HUGINN_MCP_SERVICE_TOKEN` matches hub |
 | `execute_command` fails | VM not in unrestricted mode | Enable unrestricted mode in dashboard |
 | `Connection refused` | MCP server not running | `docker compose up mcp` or check logs |
 | Tools not appearing in agent | Config not loaded | Restart the agent after editing config |
 | `HubError 500` | Hub is down | Check `docker compose logs hub` |
+| WARNING: no auth on startup | `MCP_CLIENT_TOKEN` not set | Set the token in `.env` and restart |

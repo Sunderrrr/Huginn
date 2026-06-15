@@ -24,6 +24,7 @@ duplicated, and it never contacts workers directly.
 | `HUGINN_MCP_SERVICE_TOKEN` | — | Service token (must match the hub's `HUGINN_MCP_SERVICE_TOKEN`). |
 | `HUGINN_MCP_TRANSPORT` | `stdio` | `stdio` or `streamable-http`. |
 | `HUGINN_MCP_HOST` / `HUGINN_MCP_PORT` | `0.0.0.0` / `9000` | HTTP bind (streamable-http). |
+| `HUGINN_MCP_MCP_CLIENT_TOKEN` | — | Bearer token agents must send to reach the HTTP endpoint. **Required for streamable-http in production.** Ignored for stdio. |
 
 ## Adding it to an agent
 
@@ -47,18 +48,24 @@ duplicated, and it never contacts workers directly.
 
 ### Streamable HTTP (remote)
 
-Run the server (or the `mcp` compose service) with
-`HUGINN_MCP_TRANSPORT=streamable-http`, then point the agent at it:
+Start the server (or the `mcp` compose service) with `HUGINN_MCP_TRANSPORT=streamable-http`
+and `HUGINN_MCP_MCP_CLIENT_TOKEN=<token>`, then point the agent at it:
 
 ```json
 {
   "mcpServers": {
     "huginn": {
-      "url": "https://mcp.example.com/mcp"
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <mcp-client-token>"
+      }
     }
   }
 }
 ```
+
+> **Without `HUGINN_MCP_MCP_CLIENT_TOKEN`**, the HTTP endpoint is open to anyone
+> who can reach it. Always set this token in production.
 
 ## Connecting to other agents
 
@@ -66,8 +73,18 @@ See [MCP Agent Integrations](mcp-agents.md) for detailed setup guides for
 Hermes, Claude Desktop, Claude Code, Cursor, Continue, OpenAI proxies, and more.
 
 ## Security notes
+
+Two tokens are involved — don't confuse them:
+
+| Token | Env var | Purpose |
+|---|---|---|
+| **Service token** | `HUGINN_MCP_SERVICE_TOKEN` | MCP server → Hub (internal). The MCP server uses this to call the hub API. |
+| **Client token** | `HUGINN_MCP_MCP_CLIENT_TOKEN` | Agent → MCP server (external). Agents must send this as `Authorization: Bearer <token>` to reach the HTTP endpoint. |
+
 - The service token grants admin-equivalent agent access — keep it secret and
   scope network access to the MCP endpoint.
+- The client token protects the MCP HTTP endpoint itself. Without it, anyone who
+  can reach port 9000 can execute commands on your fleet.
 - All actions flow through the same hub authz, rate limits, and audit log as the
   dashboard. `execute_command` still requires the target VM to be in unrestricted
   mode.

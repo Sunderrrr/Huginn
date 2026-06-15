@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"  # noqa: S104 - intended to bind all interfaces in a container
     port: int = 9000
 
+    # HTTP auth: agents must send `Authorization: Bearer <this token>`.
+    # Only enforced for streamable-http transport. Ignored for stdio.
+    # Leave empty to disable (not recommended for exposed endpoints).
+    mcp_client_token: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
