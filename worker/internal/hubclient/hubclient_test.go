@@ -54,7 +54,7 @@ func TestPollNextTaskNullMeansNoWork(t *testing.T) {
 	}))
 	defer ts.Close()
 	c, _ := New(Options{BaseURL: ts.URL, AllowInsecure: true, HTTPClient: ts.Client()})
-	task, err := c.PollNextTask(context.Background())
+	task, err := c.PollNextTask(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("PollNextTask: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestPollNextTaskReturnsTask(t *testing.T) {
 	}))
 	defer ts.Close()
 	c, _ := New(Options{BaseURL: ts.URL, AllowInsecure: true, HTTPClient: ts.Client()})
-	task, err := c.PollNextTask(context.Background())
+	task, err := c.PollNextTask(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("PollNextTask: %v", err)
 	}

@@ -36,6 +36,41 @@ async def test_whitelist_action_full_cycle(client, admin_headers, enrolled_worke
     assert final.json()["stdout"] == "ok"
 
 
+async def test_long_poll_returns_empty_when_idle(client, enrolled_worker) -> None:
+    w = await enrolled_worker()
+    # With a tiny wait and no queued task, returns null after the wait (not 30s).
+    poll = await client.get("/api/worker/tasks/next?wait=1", headers=w["headers"])
+    assert poll.status_code == 200
+    assert poll.json() is None
+
+
+async def test_long_poll_picks_up_queued_task(
+    client, admin_headers, enrolled_worker
+) -> None:
+    import asyncio
+
+    w = await enrolled_worker()
+
+    async def queue_after_delay() -> str:
+        await asyncio.sleep(0.6)
+        resp = await client.post(
+            f"/api/vms/{w['vm_id']}/actions",
+            json={"action": "status"},
+            headers=admin_headers,
+        )
+        return resp.json()["id"]
+
+    # Start the long-poll and the delayed enqueue concurrently.
+    poll_task = asyncio.create_task(
+        client.get("/api/worker/tasks/next?wait=5", headers=w["headers"])
+    )
+    task_id = await queue_after_delay()
+    poll = await poll_task
+    assert poll.status_code == 200
+    assert poll.json() is not None
+    assert poll.json()["id"] == task_id
+
+
 async def test_unknown_action_rejected(client, admin_headers, enrolled_worker) -> None:
     w = await enrolled_worker()
     resp = await client.post(

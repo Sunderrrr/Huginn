@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Internal-website/Huginn/worker/internal/config"
@@ -27,16 +28,35 @@ type Agent struct {
 	State             *config.State
 	HeartbeatInterval time.Duration
 	PollInterval      time.Duration
-	Logger            *slog.Logger
+	// LongPollSeconds is how long the hub holds an empty /tasks/next request.
+	// Tasks are picked up the instant they are queued; 0 disables long-polling
+	// (falls back to immediate-return polling with PollInterval backoff).
+	LongPollSeconds int
+	Logger          *slog.Logger
 
 	// HealthCommand validates a freshly swapped binary (defaults to running
 	// "<binary> healthcheck"). Injectable for tests.
 	HealthCommand func(ctx context.Context, binaryPath string) error
 
+	// mu guards execMode, which the heartbeat goroutine writes and the poll loop
+	// reads concurrently.
+	mu sync.Mutex
 	// execMode is the VM's exec mode as last reported by the hub heartbeat. The
 	// worker refuses free-command tasks unless this is "unrestricted" — a local
 	// defense-in-depth gate so the hub alone cannot enable arbitrary shell.
 	execMode string
+}
+
+func (a *Agent) setExecMode(mode string) {
+	a.mu.Lock()
+	a.execMode = mode
+	a.mu.Unlock()
+}
+
+func (a *Agent) getExecMode() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.execMode
 }
 
 // New builds an Agent with sensible defaults.
@@ -47,6 +67,7 @@ func New(client *hubclient.Client, state *config.State, logger *slog.Logger) *Ag
 		State:             state,
 		HeartbeatInterval: 30 * time.Second,
 		PollInterval:      2 * time.Second,
+		LongPollSeconds:   25,
 		Logger:            logger,
 		HealthCommand:     defaultHealthCommand,
 	}
@@ -57,36 +78,57 @@ func New(client *hubclient.Client, state *config.State, logger *slog.Logger) *Ag
 const maxIdlePollInterval = 30 * time.Second
 
 // Run loops until ctx is cancelled or an update requires a restart (in which case
-// it returns nil so the supervisor can relaunch the new binary). Polling backs off
-// when idle and snaps back to the base interval as soon as there is work.
+// it returns nil so the supervisor can relaunch the new binary).
+//
+// When LongPollSeconds > 0 the hub holds an empty /tasks/next request open until
+// a task is queued (or the wait elapses), so tasks are picked up near-instantly
+// and an idle worker does not busy-poll. When it is 0, the loop falls back to
+// immediate-return polling with exponential backoff.
 func (a *Agent) Run(ctx context.Context) error {
 	hbTicker := time.NewTicker(a.HeartbeatInterval)
 	defer hbTicker.Stop()
 	a.heartbeat(ctx)
 
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hbTicker.C:
+				a.heartbeat(ctx)
+			}
+		}
+	}()
+
 	interval := a.PollInterval
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return ctx.Err()
-		case <-hbTicker.C:
-			a.heartbeat(ctx)
-		default:
-			didWork, restart := a.pollOnce(ctx)
-			if restart {
-				a.Logger.Info("update applied; exiting for supervised restart")
-				return nil
-			}
-			if didWork {
-				interval = a.PollInterval
-			} else if interval < maxIdlePollInterval {
-				interval *= 2
-				if interval > maxIdlePollInterval {
-					interval = maxIdlePollInterval
-				}
-			}
-			a.sleep(ctx, interval)
 		}
+		didWork, restart := a.pollOnce(ctx)
+		if restart {
+			a.Logger.Info("update applied; exiting for supervised restart")
+			return nil
+		}
+		if a.LongPollSeconds > 0 {
+			// The hub already blocked for us; loop straight back unless we hit an
+			// error (didWork is false on both "no task" and "error"), in which case
+			// a short pause avoids a tight error loop.
+			if !didWork {
+				a.sleep(ctx, a.PollInterval)
+			}
+			continue
+		}
+		// Immediate-return polling: back off when idle.
+		if didWork {
+			interval = a.PollInterval
+		} else if interval < maxIdlePollInterval {
+			interval *= 2
+			if interval > maxIdlePollInterval {
+				interval = maxIdlePollInterval
+			}
+		}
+		a.sleep(ctx, interval)
 	}
 }
 
@@ -96,7 +138,7 @@ func (a *Agent) heartbeat(ctx context.Context) {
 		a.Logger.Warn("heartbeat failed", "err", err)
 		return
 	}
-	a.execMode = resp.ExecMode
+	a.setExecMode(resp.ExecMode)
 	// Merge hub-provided release domains into the built-in allowlist. The hub can
 	// ADD domains but never remove the built-in defaults, and any domain it pushes
 	// must pass local validation (no localhost/.local/.internal). This keeps the
@@ -114,7 +156,9 @@ func (a *Agent) heartbeat(ctx context.Context) {
 				seen[d] = true
 			}
 		}
+		a.mu.Lock()
 		a.State.AllowedReleaseDomains = merged
+		a.mu.Unlock()
 	}
 }
 
@@ -139,7 +183,7 @@ func isSafeReleaseDomain(host string) bool {
 // pollOnce fetches and runs at most one task. It returns whether it handled a
 // task (for poll backoff) and whether a restart is needed (after an update).
 func (a *Agent) pollOnce(ctx context.Context) (didWork bool, restart bool) {
-	task, err := a.Client.PollNextTask(ctx)
+	task, err := a.Client.PollNextTask(ctx, a.LongPollSeconds)
 	if err != nil {
 		a.Logger.Warn("poll failed", "err", err)
 		return false, false
@@ -187,7 +231,7 @@ func (a *Agent) runCommand(ctx context.Context, task *hubclient.Task) hubclient.
 	// Local defense in depth: even though the hub gates command tasks on the VM's
 	// unrestricted mode, the worker independently refuses to run a shell unless it
 	// has itself observed unrestricted mode via heartbeat.
-	if a.execMode != "unrestricted" {
+	if a.getExecMode() != "unrestricted" {
 		return failure("worker refused free command: unrestricted mode not enabled")
 	}
 	command, _ := task.Payload["command"].(string)
@@ -213,7 +257,10 @@ func (a *Agent) runUpdate(ctx context.Context, task *hubclient.Task) (hubclient.
 		BinaryPath:   a.State.BinaryLocation(),
 	}
 	health := func(c context.Context) error { return a.HealthCommand(c, spec.BinaryPath) }
-	updater := update.NewUpdater(a.State.AllowedDomains(), nil, health)
+	a.mu.Lock()
+	allowedDomains := a.State.AllowedDomains()
+	a.mu.Unlock()
+	updater := update.NewUpdater(allowedDomains, nil, health)
 	if err := updater.Apply(ctx, spec); err != nil {
 		return failure("update failed: " + err.Error()), false
 	}

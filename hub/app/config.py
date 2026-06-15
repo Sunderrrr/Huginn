@@ -23,6 +23,9 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://huginn:huginn@localhost:5432/huginn"
+    # Connection pool — long-poll holds a connection briefly per active worker.
+    db_pool_size: int = 20
+    db_max_overflow: int = 30
 
     # Security
     jwt_secret: str = "change-me-please-generate-a-real-secret"

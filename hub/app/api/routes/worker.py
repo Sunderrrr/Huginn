@@ -4,6 +4,7 @@ all other worker endpoints (added later) use the per-worker secret.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -111,14 +112,43 @@ async def heartbeat(
     )
 
 
+_POLL_INTERVAL_SECONDS = 0.5
+_MAX_WAIT_SECONDS = 25.0
+
+
 @router.get("/tasks/next", response_model=WorkerTask | None)
 async def next_task(
     vm: VM = Depends(current_worker),
     session: AsyncSession = Depends(get_session),
+    wait: float = 0.0,
 ) -> WorkerTask | None:
-    """Hand the worker its next queued task (long-poll style; returns null if idle)."""
+    """Hand the worker its next queued task.
+
+    With ``wait>0`` this long-polls: if the queue is empty it re-checks every
+    ``_POLL_INTERVAL_SECONDS`` until a task appears or ``wait`` (capped at
+    ``_MAX_WAIT_SECONDS``) elapses, then returns null. This gives near-instant
+    task pickup without the worker hammering the hub.
+
+    To avoid holding a pooled DB connection across the whole wait, the request's
+    session is committed (which records the heartbeat and releases the
+    connection) and each re-check opens its own short-lived session.
+    """
     vm.last_heartbeat_at = utcnow()
+
     task = await tasks_service.claim_next_task(session, vm)
+    if task is None and wait > 0:
+        deadline = min(wait, _MAX_WAIT_SECONDS)
+        waited = 0.0
+        while waited < deadline:
+            # Commit between checks so this connection's read snapshot is dropped
+            # and the next claim observes tasks committed by other connections.
+            await session.commit()
+            await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+            waited += _POLL_INTERVAL_SECONDS
+            task = await tasks_service.claim_next_task(session, vm)
+            if task is not None:
+                break
+
     if task is None:
         return None
     return WorkerTask(

@@ -75,9 +75,9 @@ type HeartbeatRequest struct {
 }
 
 type HeartbeatResponse struct {
-	TargetWorkerVersion    string   `json:"target_worker_version"`
-	ExecMode               string   `json:"exec_mode"`
-	AllowedReleaseDomains  []string `json:"allowed_release_domains"`
+	TargetWorkerVersion   string   `json:"target_worker_version"`
+	ExecMode              string   `json:"exec_mode"`
+	AllowedReleaseDomains []string `json:"allowed_release_domains"`
 }
 
 // Task is a unit of work handed to the worker.
@@ -115,10 +115,13 @@ func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (*Heartbea
 	return &out, nil
 }
 
-// PollNextTask returns the next queued task, or nil when the queue is empty.
-func (c *Client) PollNextTask(ctx context.Context) (*Task, error) {
+// PollNextTask long-polls for the next queued task. The hub holds the request
+// open for up to waitSeconds (server-capped) and returns as soon as a task is
+// available, or nil if the wait elapses with an empty queue.
+func (c *Client) PollNextTask(ctx context.Context, waitSeconds int) (*Task, error) {
 	var task *Task
-	if err := c.do(ctx, http.MethodGet, "/api/worker/tasks/next", nil, &task, true); err != nil {
+	path := fmt.Sprintf("/api/worker/tasks/next?wait=%d", waitSeconds)
+	if err := c.do(ctx, http.MethodGet, path, nil, &task, true); err != nil {
 		return nil, err
 	}
 	return task, nil
