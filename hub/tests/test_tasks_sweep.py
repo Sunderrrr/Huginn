@@ -75,15 +75,15 @@ async def test_fresh_task_not_swept(session) -> None:
 
 async def test_stale_heartbeat_marks_vm_offline(session) -> None:
     vm = await _make_vm(session, last_heartbeat_at=utcnow() - timedelta(hours=1))
-    count = await tasks_service.sweep_offline_vms(session)
-    assert count == 1
+    gone = await tasks_service.sweep_offline_vms(session)
+    assert len(gone) == 1
     await session.refresh(vm)
     assert vm.state is VMState.offline
 
 
 async def test_recent_heartbeat_stays_active(session) -> None:
     vm = await _make_vm(session, last_heartbeat_at=utcnow())
-    assert await tasks_service.sweep_offline_vms(session) == 0
+    assert await tasks_service.sweep_offline_vms(session) == []
     await session.refresh(vm)
     assert vm.state is VMState.active
 

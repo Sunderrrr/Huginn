@@ -24,6 +24,10 @@ class User(Base, TimestampMixin):
     oidc_subject: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
+    # Distinguished Name for LDAP-provisioned users (dedup key, like oidc_subject).
+    ldap_dn: Mapped[str | None] = mapped_column(
+        String(512), unique=True, nullable=True, index=True
+    )
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, name="user_role"), default=UserRole.readonly, nullable=False
     )

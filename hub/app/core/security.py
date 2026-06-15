@@ -59,10 +59,16 @@ def hash_secret(secret: str) -> str:
 
 
 def verify_secret(secret: str, expected_hash: str | None) -> bool:
-    """Timing-safe comparison of a secret against its stored HMAC."""
-    if not expected_hash:
-        return False
+    """Timing-safe comparison of a secret against its stored HMAC.
+
+    Always computes the HMAC, even when ``expected_hash`` is None, so the timing
+    does not reveal whether a worker/VM exists (mitigates enumeration).
+    """
     candidate = hash_secret(secret)
+    if not expected_hash:
+        # Compare against a dummy of equal length to keep timing constant.
+        hmac.compare_digest(candidate, candidate)
+        return False
     return hmac.compare_digest(candidate, expected_hash)
 
 

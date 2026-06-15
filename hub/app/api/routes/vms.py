@@ -9,11 +9,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import client_ip, get_principal, require_admin
+from app.api.deps import (
+    accessible_vm_ids,
+    client_ip,
+    get_principal,
+    principal_can_access_vm,
+    require_admin,
+)
 from app.core import audit
 from app.core.principal import Principal
 from app.db import get_session
-from app.models.enums import ExecMode, TaskStatus, VMState
+from app.models.enums import ExecMode, VMState
 from app.schemas.vm import ExecModeUpdate, VMOut
 from app.services import tasks as tasks_service
 from app.services import vms as vms_service
@@ -38,7 +44,8 @@ async def list_vms(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> list[VMOut]:
-    vms = await vms_service.list_vms(session, state)
+    allowed = await accessible_vm_ids(session, principal)
+    vms = await vms_service.list_vms(session, state, allowed_vm_ids=allowed)
     return [VMOut.model_validate(v) for v in vms]
 
 
@@ -48,6 +55,8 @@ async def get_vm(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> VMOut:
+    if not await principal_can_access_vm(session, principal, vm_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "access to this VM denied")
     vm = await _load_vm(session, vm_id)
     return VMOut.model_validate(vm)
 

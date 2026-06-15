@@ -17,13 +17,14 @@ HTTP endpoint is open to anyone who can reach it.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.hub_client import HubClient, HubError
 
 logger = logging.getLogger("huginn.mcp")
@@ -53,7 +54,8 @@ class BearerAuthASGI:
         if scope["type"] == "http":
             headers = dict(scope.get("headers", []))
             auth = headers.get(b"authorization", b"").decode()
-            if auth.startswith("Bearer ") and auth[7:] == self._token:
+            presented = auth[7:] if auth.startswith("Bearer ") else ""
+            if presented and hmac.compare_digest(presented, self._token):
                 await self._app(scope, receive, send)
                 return
             # Reject with 401
@@ -142,7 +144,13 @@ async def get_audit_log(
 
 
 def main() -> None:
-    if settings.transport == "streamable-http" and settings.mcp_client_token:
+    if settings.transport == "streamable-http":
+        # Fail closed: never expose the HTTP endpoint without a client token.
+        if not settings.mcp_client_token:
+            raise SystemExit(
+                "refusing to start streamable-http without a client token — "
+                "set HUGINN_MCP_MCP_CLIENT_TOKEN (or ensure the hub has one to fetch)"
+            )
         import uvicorn
 
         raw_app = mcp.streamable_http_app()
@@ -156,11 +164,6 @@ def main() -> None:
             log_level="info",
         )
     else:
-        if settings.transport == "streamable-http" and not settings.mcp_client_token:
-            logger.warning(
-                "streamable-http transport has NO authentication — "
-                "set HUGINN_MCP_MCP_CLIENT_TOKEN to secure the endpoint"
-            )
         mcp.run(transport=settings.transport)
 
 

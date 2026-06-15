@@ -59,6 +59,28 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Hard global request-body cap (do not trust Content-Length alone). Sized to
+    # the largest legitimate body: a worker result carries stdout+stderr each up
+    # to max_output_bytes. Per-endpoint command-input limits stay stricter via
+    # the enforce_body_size dependency.
+    _global_body_cap = settings.max_output_bytes * 2 + 65_536
+
+    @app.middleware("http")
+    async def limit_body_size(request, call_next):  # type: ignore[no-untyped-def]
+        from fastapi.responses import JSONResponse
+
+        cl = request.headers.get("content-length")
+        if cl is not None:
+            try:
+                if int(cl) > _global_body_cap:
+                    return JSONResponse({"detail": "request body too large"}, status_code=413)
+            except ValueError:
+                pass
+        body = await request.body()
+        if len(body) > _global_body_cap:
+            return JSONResponse({"detail": "request body too large"}, status_code=413)
+        return await call_next(request)
+
     if settings.cors_origins:
         from fastapi.middleware.cors import CORSMiddleware
 
@@ -66,8 +88,8 @@ def create_app() -> FastAPI:
             CORSMiddleware,
             allow_origins=settings.cors_origins,
             allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["Authorization", "Content-Type", "X-MCP-Service-Token"],
         )
 
     from app.api.routes import (
@@ -96,7 +118,7 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:
-        return {"status": "ok", "env": settings.env}
+        return {"status": "ok"}
 
     return app
 

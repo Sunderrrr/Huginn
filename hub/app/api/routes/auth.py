@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,17 +13,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import client_ip, get_principal
 from app.config import Settings, get_settings
 from app.core import audit, security
+from app.core.ldap import LDAPClient
 from app.core.oidc import OIDCClient, OIDCError
 from app.core.principal import Principal
+from app.core.ratelimit import RateLimiter
 from app.db import get_session
 from app.models.enums import ActorType
 from app.models.user_vm_access import UserVMAccess
 from app.schemas.auth import LoginRequest, OIDCStartResponse, TokenResponse, UserOut
+from app.services import settings_service
 from app.services import users as users_service
+
+logger = logging.getLogger("huginn.hub.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _OIDC_STATE_COOKIE = "huginn_oidc_state"
+
+# Per-IP brute-force guard on login (5 attempts/minute).
+_login_limiter = RateLimiter(5)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -30,8 +41,32 @@ async def login(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> TokenResponse:
+    ip = client_ip(request) or "unknown"
+    # Block only when too many *failed* attempts have accumulated for this IP, so
+    # legitimate logins are never throttled but brute force is.
+    if not _login_limiter.check(f"login:{ip}"):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, "too many failed login attempts; slow down"
+        )
+    # Local password first — guarantees the bootstrap admin can always log in.
     user = await users_service.authenticate(session, body.username, body.password)
+    # Fall back to LDAP if enabled and local auth did not match.
     if user is None:
+        settings_row = await settings_service.get_settings_row(session)
+        if settings_row is not None and settings_row.ldap_enabled:
+            client = LDAPClient(settings_row)
+            claims = await run_in_threadpool(
+                client.authenticate, body.username, body.password
+            )
+            if claims is not None:
+                user = await users_service.upsert_ldap_user(
+                    session,
+                    ldap_dn=claims.dn,
+                    username=claims.username,
+                    email=claims.email,
+                )
+    if user is None:
+        _login_limiter.allow(f"login:{ip}")  # count this failed attempt
         await audit.record(
             session,
             actor_type=ActorType.system,
@@ -65,6 +100,24 @@ async def me(
     )
     vm_ids = [row[0] for row in result.all()]
     return UserOut.model_validate(principal.user).model_copy(update={"vm_ids": vm_ids})
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    request: Request,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Record a logout. JWTs are short-lived and `is_active` is checked per
+    request, so there is no server-side blacklist; the client discards its token.
+    """
+    await audit.record(
+        session,
+        actor_type=principal.actor_type,
+        actor_id=principal.actor_id,
+        event_type="logout",
+        source_ip=client_ip(request),
+    )
 
 
 @router.get("/oidc/login", response_model=OIDCStartResponse)
@@ -106,7 +159,10 @@ async def oidc_callback(
     try:
         claims = await client.exchange_code(code)
     except OIDCError as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"OIDC error: {exc}") from exc
+        logger.warning("OIDC callback failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "OIDC authentication failed"
+        ) from exc
 
     user = await users_service.upsert_oidc_user(
         session, subject=claims.subject, username=claims.username, email=claims.email

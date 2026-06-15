@@ -20,10 +20,22 @@ async def get(session: AsyncSession, vm_id: uuid.UUID) -> VM | None:
     return await session.get(VM, vm_id)
 
 
-async def list_vms(session: AsyncSession, state: VMState | None = None) -> list[VM]:
+async def list_vms(
+    session: AsyncSession,
+    state: VMState | None = None,
+    allowed_vm_ids: list[uuid.UUID] | None = None,
+) -> list[VM]:
+    """List VMs. When ``allowed_vm_ids`` is provided, restrict to those ids.
+
+    ``None`` means unrestricted (admin/agent). An empty list returns nothing.
+    """
     stmt = select(VM).order_by(VM.created_at.desc())
     if state is not None:
         stmt = stmt.where(VM.state == state)
+    if allowed_vm_ids is not None:
+        if not allowed_vm_ids:
+            return []
+        stmt = stmt.where(VM.id.in_(allowed_vm_ids))
     result = await session.execute(stmt)
     return list(result.scalars().all())
 

@@ -28,6 +28,11 @@ async def get_by_oidc_subject(session: AsyncSession, subject: str) -> User | Non
     return result.scalar_one_or_none()
 
 
+async def get_by_ldap_dn(session: AsyncSession, dn: str) -> User | None:
+    result = await session.execute(select(User).where(User.ldap_dn == dn))
+    return result.scalar_one_or_none()
+
+
 async def authenticate(session: AsyncSession, username: str, password: str) -> User | None:
     """Verify credentials. Always spends hashing work to limit user enumeration."""
     user = await get_by_username(session, username)
@@ -60,6 +65,30 @@ async def upsert_oidc_user(
             password_hash=None,
         )
         session.add(user)
+    user.last_login_at = utcnow()
+    await session.flush()
+    return user
+
+
+async def upsert_ldap_user(
+    session: AsyncSession, *, ldap_dn: str, username: str, email: str | None
+) -> User:
+    """Find or create a user from LDAP attributes."""
+    user = await get_by_ldap_dn(session, ldap_dn)
+    if user is None:
+        # An existing local user with the same username adopts the LDAP DN.
+        user = await get_by_username(session, username)
+        if user is None:
+            user = User(
+                username=username,
+                email=email,
+                ldap_dn=ldap_dn,
+                role=UserRole.readonly,
+                password_hash=None,
+            )
+            session.add(user)
+        else:
+            user.ldap_dn = ldap_dn
     user.last_login_at = utcnow()
     await session.flush()
     return user

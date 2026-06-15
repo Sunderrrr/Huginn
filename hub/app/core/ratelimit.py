@@ -28,3 +28,12 @@ class RateLimiter:
                 return False
             self._buckets[key] = (start, count + 1)
             return True
+
+    def check(self, key: str) -> bool:
+        """Return whether the key is currently under the limit, without consuming."""
+        now = time.monotonic()
+        with self._lock:
+            start, count = self._buckets.get(key, (now, 0))
+            if now - start >= self._window:
+                return True
+            return count < self._max

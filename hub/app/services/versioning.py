@@ -29,15 +29,25 @@ def _asset_name(arch: WorkerArch) -> str:
 
 
 def validate_release_domain(domain: str) -> None:
-    """Reject allowlist entries that are unsafe (localhost, .local, .internal).
+    """Reject allowlist entries that are unsafe.
 
-    IP literals are allowed for self-hosted deployments (e.g. LAN hub at 172.16.x.x).
+    Private/LAN IPs are allowed for self-hosted deployments (e.g. hub at
+    172.16.x.x), but loopback, link-local (cloud metadata), and the unspecified
+    address are always rejected, as are localhost/.local/.internal names.
     """
     host = domain.strip().lower()
     if not host or "/" in host or ":" in host:
         raise SSRFError(f"invalid release domain: {domain!r}")
     if host in {"localhost"} or host.endswith(".local") or host.endswith(".internal"):
         raise SSRFError(f"release domain not allowed: {domain!r}")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (
+        ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast
+    ):
+        raise SSRFError(f"release domain not allowed (loopback/link-local): {domain!r}")
 
 
 def validate_url_host(url: str, allowed_domains: list[str]) -> None:

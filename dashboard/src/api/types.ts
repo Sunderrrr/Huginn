@@ -102,6 +102,13 @@ export interface Settings {
   target_release_repo: string;
   allowed_release_domains: string[];
   updated_at: string;
+  // SSO / OIDC / LDAP / notifications fields are admin-only and optional here.
+  notifications_enabled?: boolean;
+  discord_webhook_url?: string | null;
+  generic_webhook_url?: string | null;
+  notify_vm_offline?: boolean;
+  notify_vm_recovered?: boolean;
+  notify_task_failure?: boolean;
 }
 
 export interface McpTokenResponse {

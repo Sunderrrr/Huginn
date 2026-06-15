@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
+import { api } from "../api/client";
 import { useSettings, useUpdateSettings } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 import { useToast } from "../components/Toast";
@@ -36,6 +37,14 @@ export function SettingsPage() {
   const [ldapStartTls, setLdapStartTls] = useState(false);
   const [ldapUseLdaps, setLdapUseLdaps] = useState(false);
 
+  // Notifications
+  const [notifEnabled, setNotifEnabled] = useState(false);
+  const [discordUrl, setDiscordUrl] = useState("");
+  const [genericUrl, setGenericUrl] = useState("");
+  const [notifyOffline, setNotifyOffline] = useState(true);
+  const [notifyRecovered, setNotifyRecovered] = useState(false);
+  const [notifyTaskFailure, setNotifyTaskFailure] = useState(false);
+
   useEffect(() => {
     if (settings) {
       setVersion(settings.target_worker_version);
@@ -44,11 +53,12 @@ export function SettingsPage() {
     }
   }, [settings]);
 
-  // Extended settings from API (includes OIDC/LDAP)
+  // Extended settings from API (OIDC/LDAP/notifications, admin-only fields).
   useEffect(() => {
-    fetch("/api/settings", { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } })
-      .then((r) => r.json())
-      .then((s: Record<string, unknown>) => {
+    if (!isAdmin) return;
+    api
+      .get<Record<string, unknown>>("/api/settings")
+      .then((s) => {
         if (s.oidc_enabled !== undefined) {
           setOidcEnabled(!!s.oidc_enabled);
           setOidcIssuer((s.oidc_issuer as string) || "");
@@ -65,9 +75,17 @@ export function SettingsPage() {
           setLdapStartTls(!!s.ldap_start_tls);
           setLdapUseLdaps(!!s.ldap_use_ldaps);
         }
+        if (s.notifications_enabled !== undefined) {
+          setNotifEnabled(!!s.notifications_enabled);
+          setDiscordUrl((s.discord_webhook_url as string) || "");
+          setGenericUrl((s.generic_webhook_url as string) || "");
+          setNotifyOffline(!!s.notify_vm_offline);
+          setNotifyRecovered(!!s.notify_vm_recovered);
+          setNotifyTaskFailure(!!s.notify_task_failure);
+        }
       })
       .catch(() => {});
-  }, []);
+  }, [isAdmin]);
 
   async function save() {
     try {
@@ -89,6 +107,12 @@ export function SettingsPage() {
         ldap_user_search_filter: ldapUserSearchFilter,
         ldap_start_tls: ldapStartTls,
         ldap_use_ldaps: ldapUseLdaps,
+        notifications_enabled: notifEnabled,
+        discord_webhook_url: discordUrl,
+        generic_webhook_url: genericUrl,
+        notify_vm_offline: notifyOffline,
+        notify_vm_recovered: notifyRecovered,
+        notify_task_failure: notifyTaskFailure,
       } as Partial<Settings> & Record<string, unknown>);
       toast("ok", "settings saved");
     } catch (e: unknown) {
@@ -202,6 +226,45 @@ export function SettingsPage() {
               )}
             </div>
             <Hint>LDAPS uses port 636 with SSL. StartTLS upgrades a plain connection on port 389.</Hint>
+          </div>
+        </motion.div>
+
+        {/* Notifications */}
+        <motion.div className="panel panel--bracket" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} style={{ padding: 24 }}>
+          <div className="spread" style={{ marginBottom: 16 }}>
+            <SectionTitle>Notifications</SectionTitle>
+            {isAdmin && (
+              <label className="row" style={{ gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={notifEnabled} onChange={(e) => setNotifEnabled(e.target.checked)} />
+                <span style={{ fontSize: 13 }}>Enabled</span>
+              </label>
+            )}
+          </div>
+          <div className="stack" style={{ gap: 18 }}>
+            <Field label="Discord webhook URL">
+              <input className="field" value={discordUrl} onChange={(e) => setDiscordUrl(e.target.value)} disabled={!isAdmin} placeholder="https://discord.com/api/webhooks/..." />
+            </Field>
+            <Field label="Generic webhook URL">
+              <input className="field" value={genericUrl} onChange={(e) => setGenericUrl(e.target.value)} disabled={!isAdmin} placeholder="https://example.com/hook (Slack, n8n, custom)" />
+              <Hint>Receives a JSON payload: {"{ event, message, vm, task, ts }"}.</Hint>
+            </Field>
+            <div>
+              <label className="lbl">Events</label>
+              <div className="stack" style={{ gap: 8, marginTop: 4 }}>
+                <label className="row" style={{ gap: 8, cursor: "pointer" }}>
+                  <input type="checkbox" checked={notifyOffline} onChange={(e) => setNotifyOffline(e.target.checked)} disabled={!isAdmin} />
+                  <span style={{ fontSize: 13 }}>VM went offline</span>
+                </label>
+                <label className="row" style={{ gap: 8, cursor: "pointer" }}>
+                  <input type="checkbox" checked={notifyRecovered} onChange={(e) => setNotifyRecovered(e.target.checked)} disabled={!isAdmin} />
+                  <span style={{ fontSize: 13 }}>VM recovered</span>
+                </label>
+                <label className="row" style={{ gap: 8, cursor: "pointer" }}>
+                  <input type="checkbox" checked={notifyTaskFailure} onChange={(e) => setNotifyTaskFailure(e.target.checked)} disabled={!isAdmin} />
+                  <span style={{ fontSize: 13 }}>Task failed</span>
+                </label>
+              </div>
+            </div>
           </div>
         </motion.div>
 

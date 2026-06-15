@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/Internal-website/Huginn/worker/internal/config"
@@ -96,10 +97,43 @@ func (a *Agent) heartbeat(ctx context.Context) {
 		return
 	}
 	a.execMode = resp.ExecMode
-	// Update allowed release domains from hub if provided
+	// Merge hub-provided release domains into the built-in allowlist. The hub can
+	// ADD domains but never remove the built-in defaults, and any domain it pushes
+	// must pass local validation (no localhost/.local/.internal). This keeps the
+	// defense-in-depth model: a compromised hub cannot point the worker at
+	// arbitrary internal hosts.
 	if len(resp.AllowedReleaseDomains) > 0 {
-		a.State.AllowedReleaseDomains = resp.AllowedReleaseDomains
+		merged := append([]string{}, config.DefaultAllowedReleaseDomains...)
+		seen := map[string]bool{}
+		for _, d := range merged {
+			seen[d] = true
+		}
+		for _, d := range resp.AllowedReleaseDomains {
+			if !seen[d] && isSafeReleaseDomain(d) {
+				merged = append(merged, d)
+				seen[d] = true
+			}
+		}
+		a.State.AllowedReleaseDomains = merged
 	}
+}
+
+// isSafeReleaseDomain rejects loopback/link-local/internal names a malicious hub
+// might try to push into the worker's allowlist.
+func isSafeReleaseDomain(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" || strings.Contains(h, "/") {
+		return false
+	}
+	if h == "localhost" || strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") {
+		return false
+	}
+	// Block known dangerous IP literals.
+	switch h {
+	case "169.254.169.254", "127.0.0.1", "0.0.0.0", "::1":
+		return false
+	}
+	return true
 }
 
 // pollOnce fetches and runs at most one task. It returns whether it handled a

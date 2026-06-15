@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
+    accessible_vm_ids,
     client_ip,
     enforce_body_size,
     rate_limit_exec,
@@ -25,7 +26,13 @@ from app.core.principal import Principal
 from app.db import get_session
 from app.models.enums import TaskStatus
 from app.models.task import Task
-from app.schemas.task import ActionRequest, CommandRequest, TaskOut
+from app.schemas.task import (
+    ActionRequest,
+    BulkActionRequest,
+    BulkActionResult,
+    CommandRequest,
+    TaskOut,
+)
 from app.services import settings_service
 from app.services import tasks as tasks_service
 from app.services import vms as vms_service
@@ -63,6 +70,60 @@ async def _maybe_wait(session: AsyncSession, task: Task, wait: bool) -> Task:
         await session.commit()
         await asyncio.sleep(_WAIT_POLL_SECONDS)
         waited += _WAIT_POLL_SECONDS
+
+
+@router.post(
+    "/bulk/actions",
+    response_model=list[BulkActionResult],
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_bulk_action(
+    body: BulkActionRequest,
+    request: Request,
+    principal: Principal = Depends(rate_limit_exec),
+    _size: None = Depends(enforce_body_size),
+    session: AsyncSession = Depends(get_session),
+) -> list[BulkActionResult]:
+    """Queue the same whitelisted action on multiple VMs (async, no wait).
+
+    VMs the caller cannot access are silently skipped (access filtered).
+    """
+    allowed = await accessible_vm_ids(session, principal)
+    allowed_set = set(allowed) if allowed is not None else None
+
+    results: list[BulkActionResult] = []
+    for vm_id in body.vm_ids:
+        if allowed_set is not None and vm_id not in allowed_set:
+            results.append(BulkActionResult(vm_id=vm_id, status="error", error="access denied"))
+            continue
+        vm = await vms_service.get(session, vm_id)
+        if vm is None:
+            results.append(BulkActionResult(vm_id=vm_id, status="error", error="not found"))
+            continue
+        try:
+            task = await tasks_service.create_action_task(
+                session,
+                vm=vm,
+                action_name=body.action,
+                params=body.params,
+                created_by=principal.actor_id,
+            )
+        except (ActionError, tasks_service.ExecForbidden) as exc:
+            results.append(BulkActionResult(vm_id=vm_id, status="error", error=str(exc)))
+            continue
+        await audit.record(
+            session,
+            actor_type=principal.actor_type,
+            actor_id=principal.actor_id,
+            event_type="execute_action",
+            vm_id=vm.id,
+            action_name=body.action,
+            detail={"params": body.params, "task_id": str(task.id), "bulk": True},
+            source_ip=client_ip(request),
+        )
+        results.append(BulkActionResult(vm_id=vm_id, task_id=task.id, status="queued"))
+    await session.commit()
+    return results
 
 
 @router.post("/{vm_id}/actions", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)

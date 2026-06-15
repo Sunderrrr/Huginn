@@ -13,10 +13,20 @@
 # Only Caddy publishes ports (80/443); all other services stay on the internal
 # network.
 # ============================================================================
+
+# Shared container hardening: no privilege escalation, drop all Linux caps.
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set in .env.prod}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.prod}
@@ -30,6 +40,7 @@ services:
       retries: 10
 
   hub:
+    <<: *hardening
     build:
       context: ../hub
     restart: unless-stopped
@@ -55,6 +66,7 @@ services:
       - "8000"
 
   mcp:
+    <<: *hardening
     build:
       context: ../mcp
     restart: unless-stopped
@@ -77,6 +89,8 @@ services:
         # Same origin as the dashboard — the browser calls /api on this host.
         VITE_HUB_URL: https://${HUGINN_DOMAIN}
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - hub
     expose:
@@ -85,6 +99,8 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - hub
       - dashboard

@@ -18,15 +18,25 @@ from app.services.versioning import SSRFError, validate_release_domain
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
-@router.get("", response_model=SettingsOut)
+@router.get("")
 async def get_settings_endpoint(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
-) -> SettingsOut:
+) -> dict:
     row = await settings_service.get_settings_row(session)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "settings not initialized")
-    return SettingsOut.model_validate(row)
+    full = SettingsOut.model_validate(row).model_dump(mode="json")
+    if principal.is_admin:
+        return full
+    # Non-admins only get fleet fields; SSO/LDAP/notification config is hidden.
+    public_keys = {
+        "target_worker_version",
+        "target_release_repo",
+        "allowed_release_domains",
+        "updated_at",
+    }
+    return {k: v for k, v in full.items() if k in public_keys}
 
 
 @router.put("", response_model=SettingsOut)
@@ -50,12 +60,17 @@ async def update_settings_endpoint(
         setattr(row, key, value)
     if principal.user is not None:
         row.updated_by = principal.user.id
+    # Never write secrets into the audit log.
+    _SECRET_KEYS = {"ldap_bind_password", "oidc_client_secret"}
+    audit_detail = {
+        k: ("***" if k in _SECRET_KEYS else v) for k, v in changed.items()
+    }
     await audit.record(
         session,
         actor_type=principal.actor_type,
         actor_id=principal.actor_id,
         event_type="settings_update",
-        detail=changed,
+        detail=audit_detail,
         source_ip=client_ip(request),
     )
     return SettingsOut.model_validate(row)

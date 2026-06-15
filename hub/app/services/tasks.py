@@ -6,6 +6,7 @@ import uuid
 from datetime import timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -39,6 +40,24 @@ async def _find_idempotent(
         select(Task).where(Task.vm_id == vm_id, Task.idempotency_key == key)
     )
     return result.scalar_one_or_none()
+
+
+async def _insert_idempotent(session: AsyncSession, task: Task) -> Task:
+    """Insert a task, returning the existing one if a concurrent insert won the race.
+
+    The partial unique index on (vm_id, idempotency_key) makes the DB the
+    authority; on conflict we look the winner up and return it.
+    """
+    session.add(task)
+    try:
+        await session.flush()
+        return task
+    except IntegrityError:
+        await session.rollback()
+        existing = await _find_idempotent(session, task.vm_id, task.idempotency_key)
+        if existing is not None:
+            return existing
+        raise
 
 
 async def create_action_task(
@@ -86,9 +105,7 @@ async def create_action_task(
         created_by=created_by,
         idempotency_key=idempotency_key,
     )
-    session.add(task)
-    await session.flush()
-    return task
+    return await _insert_idempotent(session, task)
 
 
 async def create_command_task(
@@ -122,9 +139,7 @@ async def create_command_task(
         created_by=created_by,
         idempotency_key=idempotency_key,
     )
-    session.add(task)
-    await session.flush()
-    return task
+    return await _insert_idempotent(session, task)
 
 
 async def create_update_task(
@@ -265,18 +280,21 @@ async def sweep_timeouts(session: AsyncSession) -> int:
     return swept
 
 
-async def sweep_offline_vms(session: AsyncSession) -> int:
-    """Mark active VMs OFFLINE when their heartbeat is stale."""
+async def sweep_offline_vms(session: AsyncSession) -> list[VM]:
+    """Mark active VMs OFFLINE when their heartbeat is stale.
+
+    Returns the VMs that transitioned this sweep (for notifications).
+    """
     settings = get_settings()
     now = utcnow()
     cutoff = timedelta(seconds=settings.heartbeat_offline_seconds)
     result = await session.execute(select(VM).where(VM.state == VMState.active))
-    count = 0
+    gone_offline: list[VM] = []
     for vm in result.scalars():
         if vm.last_heartbeat_at is None:
             continue
         if as_aware_utc(vm.last_heartbeat_at) + cutoff < now:
             vm.state = VMState.offline
-            count += 1
+            gone_offline.append(vm)
     await session.flush()
-    return count
+    return gone_offline

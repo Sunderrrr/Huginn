@@ -156,7 +156,7 @@ function CreateUserModal({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            minLength={8}
+            minLength={12}
           />
         </div>
         <div>
@@ -345,7 +345,7 @@ function EditUserModal({
                 value={newPw}
                 onChange={(e) => setNewPw(e.target.value)}
                 required
-                minLength={8}
+                minLength={12}
                 autoFocus
               />
               <input
@@ -355,7 +355,7 @@ function EditUserModal({
                 value={confirmPw}
                 onChange={(e) => setConfirmPw(e.target.value)}
                 required
-                minLength={8}
+                minLength={12}
               />
               <div className="row" style={{ gap: 8 }}>
                 <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowPwForm(false)}>

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +31,7 @@ async def create_token(
     plaintext = security.generate_secret()
     # ttl_seconds=0 means never expires → set to far future
     if ttl_seconds == 0:
-        expires_at = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        expires_at = datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC)
     else:
         expires_at = utcnow() + timedelta(seconds=ttl_seconds)
     token = EnrollmentToken(

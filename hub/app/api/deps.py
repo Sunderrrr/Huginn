@@ -78,6 +78,41 @@ async def require_operator(principal: Principal = Depends(get_principal)) -> Pri
     return principal
 
 
+async def principal_can_access_vm(
+    session: AsyncSession, principal: Principal, vm_id: uuid.UUID
+) -> bool:
+    """True if the principal may access the given VM.
+
+    Admins and the MCP agent always can; operators/readonly need an entry in
+    ``user_vm_access``.
+    """
+    if principal.is_admin or principal.actor_type is ActorType.agent:
+        return True
+    if principal.user is None:
+        return False
+    result = await session.execute(
+        select(UserVMAccess.vm_id).where(
+            UserVMAccess.user_id == principal.user.id,
+            UserVMAccess.vm_id == vm_id,
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def accessible_vm_ids(
+    session: AsyncSession, principal: Principal
+) -> list[uuid.UUID] | None:
+    """VM ids the principal may see, or None when unrestricted (admin/agent)."""
+    if principal.is_admin or principal.actor_type is ActorType.agent:
+        return None
+    if principal.user is None:
+        return []
+    result = await session.execute(
+        select(UserVMAccess.vm_id).where(UserVMAccess.user_id == principal.user.id)
+    )
+    return [row[0] for row in result.all()]
+
+
 async def require_vm_access(
     vm_id: uuid.UUID,
     principal: Principal = Depends(get_principal),
@@ -90,19 +125,7 @@ async def require_vm_access(
     - Operator/readonly: must have an entry in ``user_vm_access``.
     - No VMs assigned: sees nothing (403).
     """
-    if principal.is_admin or principal.actor_type is ActorType.agent:
-        return principal
-
-    if principal.user is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "access denied")
-
-    result = await session.execute(
-        select(UserVMAccess).where(
-            UserVMAccess.user_id == principal.user.id,
-            UserVMAccess.vm_id == vm_id,
-        )
-    )
-    if result.scalar_one_or_none() is None:
+    if not await principal_can_access_vm(session, principal, vm_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "access to this VM denied")
     return principal
 

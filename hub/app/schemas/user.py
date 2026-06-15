@@ -11,7 +11,7 @@ from app.models.enums import UserRole
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=1, max_length=255)
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=12, max_length=128)
     email: str | None = None
     role: UserRole = UserRole.readonly
     vm_ids: list[uuid.UUID] = []
@@ -36,7 +36,7 @@ class UserOut(BaseModel):
 
 class PasswordChange(BaseModel):
     old_password: str | None = None  # Required for self-change, optional for admin reset
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
 
 
 class UserVmAccessUpdate(BaseModel):

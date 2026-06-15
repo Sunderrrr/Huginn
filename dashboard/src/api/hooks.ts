@@ -130,6 +130,26 @@ export function useRunAction() {
   });
 }
 
+export interface BulkActionResult {
+  vm_id: string;
+  task_id: string | null;
+  status: string;
+  error: string | null;
+}
+
+export function useBulkRunAction() {
+  const invalidate = useInvalidate(["audit"]);
+  return useMutation({
+    mutationFn: (vars: { vm_ids: string[]; action: string; params?: Record<string, string> }) =>
+      api.post<BulkActionResult[]>(`/api/vms/bulk/actions`, {
+        vm_ids: vars.vm_ids,
+        action: vars.action,
+        params: vars.params ?? {},
+      }),
+    onSuccess: invalidate,
+  });
+}
+
 export function useRunCommand() {
   const invalidate = useInvalidate(["audit"]);
   return useMutation({

@@ -44,6 +44,14 @@ class Setting(Base):
     ldap_start_tls: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     ldap_use_ldaps: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Notifications (admin-configurable from dashboard)
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    discord_webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    generic_webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    notify_vm_offline: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_vm_recovered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    notify_task_failure: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False

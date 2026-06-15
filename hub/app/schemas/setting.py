@@ -31,6 +31,14 @@ class SettingsOut(BaseModel):
     ldap_start_tls: bool
     ldap_use_ldaps: bool
 
+    # Notifications
+    notifications_enabled: bool
+    discord_webhook_url: str | None
+    generic_webhook_url: str | None
+    notify_vm_offline: bool
+    notify_vm_recovered: bool
+    notify_task_failure: bool
+
 
 class SettingsUpdate(BaseModel):
     target_worker_version: str | None = Field(default=None, max_length=64)
@@ -54,3 +62,11 @@ class SettingsUpdate(BaseModel):
     ldap_user_search_filter: str | None = Field(default=None, max_length=512)
     ldap_start_tls: bool | None = None
     ldap_use_ldaps: bool | None = None
+
+    # Notifications
+    notifications_enabled: bool | None = None
+    discord_webhook_url: str | None = Field(default=None, max_length=512)
+    generic_webhook_url: str | None = Field(default=None, max_length=512)
+    notify_vm_offline: bool | None = None
+    notify_vm_recovered: bool | None = None
+    notify_task_failure: bool | None = None

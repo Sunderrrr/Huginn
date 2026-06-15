@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, Index, Integer, String, Text, Uuid
+from sqlalchemy import DateTime, Enum, Index, Integer, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, JSONType
@@ -16,8 +16,18 @@ from app.models.mixins import TimestampMixin
 
 class Task(Base, TimestampMixin):
     __tablename__ = "tasks"
-    # Composite index for the hot worker-poll query: pending tasks for a VM.
-    __table_args__ = (Index("ix_tasks_vm_status", "vm_id", "status"),)
+    __table_args__ = (
+        # Composite index for the hot worker-poll query: pending tasks for a VM.
+        Index("ix_tasks_vm_status", "vm_id", "status"),
+        # At most one task per (vm_id, idempotency_key) when a key is provided.
+        Index(
+            "uq_tasks_vm_idempotency",
+            "vm_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     vm_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)

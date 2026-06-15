@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import uuid
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import UserRole
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=255)
+    # Cap length to bound Argon2 work (anti-DoS).
+    password: str = Field(max_length=128)
 
 
 class TokenResponse(BaseModel):

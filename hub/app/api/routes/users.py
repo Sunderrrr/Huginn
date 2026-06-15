@@ -97,7 +97,7 @@ async def create_user(
     await record(
         session,
         actor_type=ActorType.user,
-        actor_id=str(principal.user.id),
+        actor_id=principal.actor_id,
         event_type="user_created",
         detail={"username": user.username, "role": user.role.value},
         source_ip=client_ip(request),
@@ -128,7 +128,7 @@ async def update_user(
     session: AsyncSession = Depends(get_session),
 ) -> UserOut:
     user = await _get_user_or_404(user_id, session)
-    changes = {}
+    changes: dict[str, dict[str, object]] = {}
     if body.role is not None:
         changes["role"] = {"old": user.role.value, "new": body.role.value}
         user.role = body.role
@@ -141,7 +141,7 @@ async def update_user(
         await record(
             session,
             actor_type=ActorType.user,
-            actor_id=str(principal.user.id),
+            actor_id=principal.actor_id,
             event_type="user_updated",
             detail={"user_id": str(user_id), **changes},
             source_ip=client_ip(request),
@@ -159,13 +159,13 @@ async def deactivate_user(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     user = await _get_user_or_404(user_id, session)
-    if user.id == principal.user.id:
+    if str(user.id) == principal.actor_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot deactivate yourself")
     user.is_active = False
     await record(
         session,
         actor_type=ActorType.user,
-        actor_id=str(principal.user.id),
+        actor_id=principal.actor_id,
         event_type="user_deactivated",
         detail={"user_id": str(user_id)},
         source_ip=client_ip(request),
@@ -187,11 +187,15 @@ async def change_password(
     is_self = principal.user and principal.user.id == user_id
     if is_self:
         if not body.old_password:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "old_password required for self-change")
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "old_password required for self-change"
+            )
         if not security.verify_password(body.old_password, user.password_hash):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "incorrect old password")
     elif not principal.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required to reset other passwords")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "admin role required to reset other passwords"
+        )
 
     user.password_hash = security.hash_password(body.new_password)
     await record(
@@ -219,7 +223,7 @@ async def set_user_vms(
     await record(
         session,
         actor_type=ActorType.user,
-        actor_id=str(principal.user.id),
+        actor_id=principal.actor_id,
         event_type="user_vm_access_changed",
         detail={"user_id": str(user_id), "vm_count": len(body.vm_ids)},
         source_ip=client_ip(request),

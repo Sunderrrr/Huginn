@@ -13,7 +13,7 @@ from app.api.deps import client_ip, current_worker
 from app.config import Settings, get_settings
 from app.core import audit
 from app.db import get_session
-from app.models.enums import ActorType, VMState
+from app.models.enums import ActorType, TaskStatus, VMState
 from app.models.mixins import utcnow
 from app.models.vm import VM
 from app.schemas.enrollment import WorkerEnrollRequest, WorkerEnrollResponse
@@ -24,6 +24,7 @@ from app.schemas.task import (
     WorkerTask,
 )
 from app.services import enrollment as enrollment_service
+from app.services import notifications as notifications_service
 from app.services import settings_service
 from app.services import tasks as tasks_service
 
@@ -90,12 +91,19 @@ async def heartbeat(
     if body.ip_address:
         vm.ip_address = body.ip_address
     # Recover from OFFLINE on a fresh heartbeat.
+    recovered = False
     if vm.state is VMState.offline:
         vm.state = VMState.active
+        recovered = True
 
     row = await settings_service.get_settings_row(session)
     target = row.target_worker_version if row else get_settings().target_worker_version
     allowed_domains = list(row.allowed_release_domains) if row else []
+
+    if recovered:
+        await session.commit()
+        await notifications_service.notify(row, "vm_recovered", vm=vm)
+
     return HeartbeatResponse(
         target_worker_version=target,
         exec_mode=vm.exec_mode.value,
@@ -140,3 +148,9 @@ async def submit_result(
     )
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found for this worker")
+
+    # Notify on failure (best-effort, after commit).
+    if body.status in (TaskStatus.failed, TaskStatus.timeout, TaskStatus.dead_letter):
+        await session.commit()
+        row = await settings_service.get_settings_row(session)
+        await notifications_service.notify(row, "task_failure", vm=vm, task=task)
