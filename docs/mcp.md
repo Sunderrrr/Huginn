@@ -60,6 +60,11 @@ Run the server (or the `mcp` compose service) with
 }
 ```
 
+## Connecting to other agents
+
+See [MCP Agent Integrations](mcp-agents.md) for detailed setup guides for
+Hermes, Claude Desktop, Claude Code, Cursor, Continue, OpenAI proxies, and more.
+
 ## Security notes
 - The service token grants admin-equivalent agent access — keep it secret and
   scope network access to the MCP endpoint.
