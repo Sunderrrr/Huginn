@@ -10,7 +10,6 @@ export function AccessTokensPage() {
   const toast = useToast();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [newToken, setNewToken] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   const handleRegenerate = () => {
     regenerate.mutate(undefined, {
@@ -23,63 +22,45 @@ export function AccessTokensPage() {
     });
   };
 
-  const handleCopy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      toast("err", "Failed to copy");
-    }
+  const copy = (text: string) => {
+    navigator.clipboard?.writeText(text);
+    toast("ok", "token copied");
   };
 
   if (isLoading) return <span className="spin" />;
 
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-      <div style={{ marginBottom: 24 }}>
-        <div className="eyebrow">security</div>
-        <h1 className="display" style={{ fontSize: 28, letterSpacing: "0.08em", margin: "8px 0" }}>
-          MCP Token
-        </h1>
-        <p style={{ color: "var(--dim)", fontSize: 13, lineHeight: 1.6, maxWidth: 560 }}>
-          Agents must send <code style={{ color: "var(--ember)" }}>Authorization: Bearer &lt;token&gt;</code>{" "}
-          to reach the MCP HTTP endpoint. Without this token, the endpoint is open to anyone who can reach it.
-        </p>
-      </div>
+    <div>
+      <div className="eyebrow">security</div>
+      <h1 className="display" style={{ fontSize: 28, letterSpacing: "0.08em", marginBottom: 20 }}>
+        MCP Token
+      </h1>
 
-      <div className="panel panel--bracket" style={{ marginBottom: 24, maxWidth: 620 }}>
-        <div className="stack" style={{ gap: 16 }}>
+      <motion.div
+        className="panel panel--bracket"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        style={{ padding: 20, maxWidth: 620 }}
+      >
+        <div className="stack" style={{ gap: 18 }}>
+          <p className="muted tiny" style={{ lineHeight: 1.6 }}>
+            Agents must send <code style={{ color: "var(--ember-soft)" }}>Authorization: Bearer &lt;token&gt;</code>{" "}
+            to reach the MCP HTTP endpoint. Without it, the endpoint is open to anyone who can reach it.
+          </p>
+
           <div>
             <label className="lbl">Current token</label>
-            <div className="row" style={{ gap: 12 }}>
-              <div
-                className="codeblock"
-                style={{
-                  flex: 1,
-                  padding: "12px 16px",
-                  background: "var(--void)",
-                  borderRadius: 6,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 14,
-                  letterSpacing: "0.04em",
-                  color: tokenData?.masked ? "var(--bone)" : "var(--dim)",
-                }}
-              >
-                {tokenData?.masked || "(not set)"}
-              </div>
-              {tokenData?.token && (
-                <button
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => handleCopy(tokenData.token)}
-                >
-                  {copied ? "✓ Copied" : "Copy"}
-                </button>
-              )}
+            <div className="codeblock" style={{ userSelect: "all" }}>
+              {tokenData?.masked || "(not set)"}
             </div>
           </div>
 
-          <div className="row" style={{ gap: 12 }}>
+          <div className="row" style={{ gap: 10 }}>
+            {tokenData?.token && (
+              <button className="btn" onClick={() => copy(tokenData.token)}>
+                Copy token
+              </button>
+            )}
             <button
               className="btn btn--danger"
               onClick={() => setConfirmOpen(true)}
@@ -89,68 +70,48 @@ export function AccessTokensPage() {
             </button>
           </div>
 
-          <div
-            className="muted tiny"
-            style={{ padding: "10px 14px", borderLeft: "3px solid var(--amber)", background: "rgba(255,180,0,0.05)", borderRadius: 4 }}
-          >
+          <div className="muted tiny" style={{ lineHeight: 1.6 }}>
             After regeneration, update all agent configs with the new token. The old token stops working immediately.
           </div>
         </div>
-      </div>
+      </motion.div>
 
       {/* Confirm regeneration */}
-      {confirmOpen && (
-        <Modal open onClose={() => setConfirmOpen(false)} title="Regenerate MCP Token" width={480}>
-          <div className="stack" style={{ gap: 16 }}>
-            <p style={{ color: "var(--dim)", lineHeight: 1.6 }}>
-              This will immediately invalidate the current token. All agents using it will be disconnected.
-            </p>
-            <p style={{ fontWeight: 600 }}>Continue?</p>
-            <div className="spread">
-              <button className="btn btn--ghost" onClick={() => setConfirmOpen(false)}>
-                Cancel
-              </button>
-              <button className="btn btn--danger" onClick={handleRegenerate}>
-                Regenerate
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Regenerate MCP token" width={480}>
+        <p style={{ marginBottom: 16 }}>
+          This immediately invalidates the current token. All agents using it will be disconnected.
+        </p>
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <button className="btn btn--ghost" onClick={() => setConfirmOpen(false)}>
+            Cancel
+          </button>
+          <button className="btn btn--danger" onClick={handleRegenerate}>
+            Regenerate
+          </button>
+        </div>
+      </Modal>
 
       {/* Show new token after regeneration */}
-      {newToken && (
-        <Modal open onClose={() => setNewToken(null)} title="New MCP Token" width={520}>
-          <div className="stack" style={{ gap: 16 }}>
-            <p style={{ color: "var(--dim)", lineHeight: 1.6 }}>
-              Copy this token now — it will not be shown again.
+      <Modal open={!!newToken} onClose={() => setNewToken(null)} title="New MCP token" width={620}>
+        {newToken && (
+          <div>
+            <p className="muted tiny" style={{ marginBottom: 12 }}>
+              Copy this now — the token is shown only once.
             </p>
-            <div
-              className="codeblock"
-              style={{
-                padding: "14px 16px",
-                background: "var(--void)",
-                borderRadius: 6,
-                fontFamily: "var(--font-mono)",
-                fontSize: 13,
-                wordBreak: "break-all",
-                color: "var(--signal)",
-                border: "1px solid var(--signal)",
-              }}
-            >
+            <div className="codeblock" style={{ color: "var(--ember-soft)", userSelect: "all" }}>
               {newToken}
             </div>
-            <div className="spread">
-              <button className="btn btn--ghost" onClick={() => setNewToken(null)}>
-                Close
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 18 }}>
+              <button className="btn" onClick={() => copy(newToken)}>
+                Copy token
               </button>
-              <button className="btn btn--primary" onClick={() => handleCopy(newToken)}>
-                {copied ? "✓ Copied" : "Copy to clipboard"}
+              <button className="btn btn--primary" onClick={() => setNewToken(null)}>
+                Done
               </button>
             </div>
           </div>
-        </Modal>
-      )}
-    </motion.div>
+        )}
+      </Modal>
+    </div>
   );
 }
