@@ -51,6 +51,11 @@ func (s *State) BinaryLocation() string {
 	return DefaultBinaryPath
 }
 
+// StateDir returns the directory containing the state file.
+func (s *State) StateDir() string {
+	return DefaultStateDir
+}
+
 // StatePath returns the state file path for a given directory.
 func StatePath(dir string) string {
 	if dir == "" {

@@ -28,6 +28,7 @@ class UserOut(BaseModel):
     email: str | None
     role: UserRole
     is_active: bool
+    vm_ids: list[uuid.UUID] = []
 
 
 class OIDCStartResponse(BaseModel):

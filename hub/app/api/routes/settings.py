@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,3 +59,41 @@ async def update_settings_endpoint(
         source_ip=client_ip(request),
     )
     return SettingsOut.model_validate(row)
+
+
+@router.get("/mcp-token")
+async def get_mcp_token(
+    principal: Principal = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    """Return the current MCP client token (masked)."""
+    row = await settings_service.get_settings_row(session)
+    if row is None or not row.mcp_client_token:
+        return {"token": "", "masked": "(not set)"}
+    t = row.mcp_client_token
+    masked = f"****{t[-8:]}" if len(t) > 8 else "****"
+    return {"token": t, "masked": masked}
+
+
+@router.put("/mcp-token")
+async def regenerate_mcp_token(
+    request: Request,
+    principal: Principal = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    """Generate a new MCP client token and return it (shown once)."""
+    row = await settings_service.get_settings_row(session)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "settings not initialized")
+    new_token = secrets.token_hex(32)
+    row.mcp_client_token = new_token
+    await audit.record(
+        session,
+        actor_type=principal.actor_type,
+        actor_id=principal.actor_id,
+        event_type="mcp_token_regenerated",
+        detail={},
+        source_ip=client_ip(request),
+    )
+    await session.commit()
+    return {"token": new_token, "masked": f"****{new_token[-8:]}"}

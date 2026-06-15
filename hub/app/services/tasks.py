@@ -154,6 +154,27 @@ async def create_update_task(
     return task
 
 
+async def create_uninstall_task(
+    session: AsyncSession,
+    *,
+    vm: VM,
+    created_by: str,
+) -> Task:
+    """Create an uninstall task that tells the worker to remove itself."""
+    _require_active(vm)
+    task = Task(
+        vm_id=vm.id,
+        type=TaskType.uninstall,
+        action_name="uninstall",
+        payload={"uninstall": True},
+        status=TaskStatus.pending,
+        created_by=created_by,
+    )
+    session.add(task)
+    await session.flush()
+    return task
+
+
 async def get_task(session: AsyncSession, task_id: uuid.UUID) -> Task | None:
     return await session.get(Task, task_id)
 

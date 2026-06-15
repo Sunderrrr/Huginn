@@ -8,6 +8,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"os"
 	"os/exec"
 	"time"
 
@@ -125,6 +126,8 @@ func (a *Agent) dispatch(ctx context.Context, task *hubclient.Task) (hubclient.T
 		return a.runCommand(ctx, task), false
 	case "update":
 		return a.runUpdate(ctx, task)
+	case "uninstall":
+		return a.runUninstall(ctx, task), false
 	default:
 		return failure("unknown task type: " + task.Type), false
 	}
@@ -178,6 +181,37 @@ func (a *Agent) runUpdate(ctx context.Context, task *hubclient.Task) (hubclient.
 	}
 	return hubclient.TaskResult{Status: "succeeded", ExitCode: intPtr(0),
 		Stdout: "updated to " + spec.Version}, true
+}
+
+// runUninstall removes the worker service and binary from the host.
+// This is a best-effort cleanup triggered before VM revocation.
+// After reporting success, the worker should exit (the service will be gone).
+func (a *Agent) runUninstall(ctx context.Context, task *hubclient.Task) hubclient.TaskResult {
+	a.Logger.Info("uninstall requested — removing worker service")
+
+	// 1. Stop and disable the systemd service (ignore errors — may already be stopped)
+	_ = exec.CommandContext(ctx, "systemctl", "stop", "huginn-worker").Run()
+	_ = exec.CommandContext(ctx, "systemctl", "disable", "huginn-worker").Run()
+
+	// 2. Remove the systemd unit file
+	_ = os.Remove("/etc/systemd/system/huginn-worker.service")
+
+	// 3. Reload systemd daemon
+	_ = exec.CommandContext(ctx, "systemctl", "daemon-reload").Run()
+
+	// 4. Remove the binary
+	binaryPath := a.State.BinaryLocation()
+	_ = os.Remove(binaryPath)
+
+	// 5. Remove the state directory (config, secrets)
+	_ = os.RemoveAll(a.State.StateDir())
+
+	a.Logger.Info("uninstall complete — worker will exit after reporting result")
+	return hubclient.TaskResult{
+		Status:   "succeeded",
+		ExitCode: intPtr(0),
+		Stdout:   "worker service removed, binary and state cleaned up",
+	}
 }
 
 func (a *Agent) sleep(ctx context.Context, d time.Duration) {

@@ -21,7 +21,13 @@ async def ensure_settings(session: AsyncSession, app_settings: AppSettings) -> S
             target_worker_version=app_settings.target_worker_version,
             target_release_repo=app_settings.target_release_repo,
             allowed_release_domains=list(app_settings.allowed_release_domains),
+            mcp_client_token=app_settings.mcp_client_token or None,
         )
         session.add(row)
         await session.flush()
+    else:
+        # Backfill mcp_client_token from env if not yet set in DB
+        if row.mcp_client_token is None and app_settings.mcp_client_token:
+            row.mcp_client_token = app_settings.mcp_client_token
+            await session.flush()
     return row

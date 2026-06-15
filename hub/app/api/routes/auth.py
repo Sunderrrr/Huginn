@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import client_ip, get_principal
@@ -13,6 +14,7 @@ from app.core.oidc import OIDCClient, OIDCError
 from app.core.principal import Principal
 from app.db import get_session
 from app.models.enums import ActorType
+from app.models.user_vm_access import UserVMAccess
 from app.schemas.auth import LoginRequest, OIDCStartResponse, TokenResponse, UserOut
 from app.services import users as users_service
 
@@ -51,11 +53,18 @@ async def login(
 
 
 @router.get("/me", response_model=UserOut)
-async def me(principal: Principal = Depends(get_principal)) -> UserOut:
+async def me(
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> UserOut:
     if principal.user is None:
         # Agent principal (MCP) has no user record.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no user for this principal")
-    return UserOut.model_validate(principal.user)
+    result = await session.execute(
+        select(UserVMAccess.vm_id).where(UserVMAccess.user_id == principal.user.id)
+    )
+    vm_ids = [row[0] for row in result.all()]
+    return UserOut.model_validate(principal.user).model_copy(update={"vm_ids": vm_ids})
 
 
 @router.get("/oidc/login", response_model=OIDCStartResponse)

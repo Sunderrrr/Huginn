@@ -24,6 +24,7 @@ class Setting(Base):
     allowed_release_domains: Mapped[list[str]] = mapped_column(
         JSONType, default=list, nullable=False
     )
+    mcp_client_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False

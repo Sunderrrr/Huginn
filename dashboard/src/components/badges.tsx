@@ -1,4 +1,4 @@
-import type { ExecMode, TaskStatus, VMState } from "../api/types";
+import type { ExecMode, TaskStatus, UserRole, VMState } from "../api/types";
 
 const STATE_CLASS: Record<VMState, string> = {
   active: "badge--active",
@@ -38,6 +38,20 @@ export function TaskStatusTag({ status }: { status: TaskStatus }) {
   return (
     <span style={{ color: TASK_COLOR[status], fontWeight: 600, letterSpacing: "0.08em" }}>
       {status.toUpperCase()}
+    </span>
+  );
+}
+
+const ROLE_COLOR: Record<UserRole, string> = {
+  admin: "var(--ember)",
+  operator: "var(--amber)",
+  readonly: "var(--dim)",
+};
+
+export function RoleBadge({ role }: { role: UserRole }) {
+  return (
+    <span className="badge" style={{ color: ROLE_COLOR[role], borderColor: ROLE_COLOR[role] }}>
+      {role}
     </span>
   );
 }

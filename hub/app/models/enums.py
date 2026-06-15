@@ -7,6 +7,7 @@ import enum
 
 class UserRole(enum.StrEnum):
     admin = "admin"
+    operator = "operator"
     readonly = "readonly"
 
 
@@ -31,6 +32,7 @@ class TaskType(enum.StrEnum):
     action = "action"
     command = "command"
     update = "update"
+    uninstall = "uninstall"
 
 
 class TaskStatus(enum.StrEnum):

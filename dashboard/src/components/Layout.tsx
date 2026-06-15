@@ -56,8 +56,25 @@ const NAV = [
   { to: "/settings", label: "Settings" },
 ];
 
+const ADMIN_NAV = [
+  { to: "/users", label: "Users" },
+  { to: "/access-tokens", label: "Access Tokens" },
+];
+
+function roleColor(role: string | undefined): string {
+  switch (role) {
+    case "admin":
+      return "var(--ember)";
+    case "operator":
+      return "var(--amber)";
+    default:
+      return "var(--dim)";
+  }
+}
+
 export function Layout() {
   const { user, logout } = useAuth();
+  const isAdmin = user?.role === "admin";
 
   return (
     <div style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
@@ -92,7 +109,7 @@ export function Layout() {
               <div style={{ fontSize: 13 }}>{user?.username ?? "—"}</div>
               <div
                 className="eyebrow"
-                style={{ color: user?.role === "admin" ? "var(--ember)" : "var(--dim)" }}
+                style={{ color: roleColor(user?.role) }}
               >
                 {user?.role ?? ""}
               </div>
@@ -122,6 +139,24 @@ export function Layout() {
                 {n.label}
               </NavLink>
             ))}
+            {isAdmin &&
+              ADMIN_NAV.map((n) => (
+                <NavLink
+                  key={n.to}
+                  to={n.to}
+                  className="display"
+                  style={({ isActive }) => ({
+                    fontSize: 13,
+                    letterSpacing: "0.12em",
+                    padding: "11px 16px",
+                    color: isActive ? "var(--bone)" : "var(--faint)",
+                    borderBottom: `2px solid ${isActive ? "var(--ember)" : "transparent"}`,
+                    transition: "color 0.15s, border-color 0.15s",
+                  })}
+                >
+                  {n.label}
+                </NavLink>
+              ))}
           </div>
         </nav>
       </header>

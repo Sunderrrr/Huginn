@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -14,8 +15,9 @@ from app.core.jwt import TokenError, decode_access_token
 from app.core.principal import Principal
 from app.core.ratelimit import RateLimiter
 from app.db import get_session
-from app.models.enums import VMState
+from app.models.enums import ActorType, VMState
 from app.models.user import User
+from app.models.user_vm_access import UserVMAccess
 from app.models.vm import VM
 from app.services import users as users_service
 
@@ -70,9 +72,38 @@ async def require_admin(principal: Principal = Depends(get_principal)) -> Princi
 
 
 async def require_operator(principal: Principal = Depends(get_principal)) -> Principal:
-    """Admin user or the trusted agent; read-only users are rejected."""
-    if not principal.can_execute:
+    """Admin or operator user; read-only users are rejected."""
+    if not principal.is_operator:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "operator privileges required")
+    return principal
+
+
+async def require_vm_access(
+    vm_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> Principal:
+    """Ensure the authenticated principal has access to the given VM.
+
+    - Admins: always allowed.
+    - Agent (MCP): always allowed.
+    - Operator/readonly: must have an entry in ``user_vm_access``.
+    - No VMs assigned: sees nothing (403).
+    """
+    if principal.is_admin or principal.actor_type is ActorType.agent:
+        return principal
+
+    if principal.user is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "access denied")
+
+    result = await session.execute(
+        select(UserVMAccess).where(
+            UserVMAccess.user_id == principal.user.id,
+            UserVMAccess.vm_id == vm_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "access to this VM denied")
     return principal
 
 

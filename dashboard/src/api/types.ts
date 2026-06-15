@@ -1,6 +1,6 @@
 export type VMState = "pending" | "active" | "offline" | "revoked";
 export type ExecMode = "whitelist" | "unrestricted";
-export type UserRole = "admin" | "readonly";
+export type UserRole = "admin" | "operator" | "readonly";
 export type TaskStatus =
   | "pending"
   | "dispatched"
@@ -17,6 +17,26 @@ export interface User {
   email: string | null;
   role: UserRole;
   is_active: boolean;
+  vm_ids: string[];
+}
+
+export interface UserCreate {
+  username: string;
+  password: string;
+  email?: string;
+  role: UserRole;
+  vm_ids?: string[];
+}
+
+export interface UserUpdate {
+  role?: UserRole;
+  is_active?: boolean;
+  email?: string;
+}
+
+export interface PasswordChange {
+  old_password?: string;
+  new_password: string;
 }
 
 export interface VM {
@@ -37,7 +57,7 @@ export interface VM {
 export interface Task {
   id: string;
   vm_id: string;
-  type: "action" | "command" | "update";
+  type: "action" | "command" | "update" | "uninstall";
   action_name: string | null;
   status: TaskStatus;
   exit_code: number | null;
@@ -82,6 +102,11 @@ export interface Settings {
   target_release_repo: string;
   allowed_release_domains: string[];
   updated_at: string;
+}
+
+export interface McpTokenResponse {
+  token: string;
+  masked: string;
 }
 
 export interface ActionSpec {

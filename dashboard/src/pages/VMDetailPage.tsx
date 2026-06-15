@@ -68,6 +68,7 @@ export function VMDetailPage() {
   const [result, setResult] = useState<Task | null>(null);
   const [confirmMode, setConfirmMode] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [uninstallBeforeRevoke, setUninstallBeforeRevoke] = useState(true);
 
   if (isLoading || !vm) {
     return (
@@ -80,7 +81,8 @@ export function VMDetailPage() {
   const spec = ACTION_CATALOG.find((a) => a.name === action);
   const unrestricted = vm.exec_mode === "unrestricted";
   const stale = vm.worker_version && settings && vm.worker_version !== settings.target_worker_version;
-  const canActOn = isAdmin && (vm.state === "active" || vm.state === "offline");
+  const isOperator = user?.role === "operator";
+  const canActOn = (isAdmin || isOperator) && (vm.state === "active" || vm.state === "offline");
 
   async function doAction() {
     try {
@@ -125,7 +127,7 @@ export function VMDetailPage() {
   async function doRevoke() {
     setConfirmRevoke(false);
     try {
-      await revoke.mutateAsync(id);
+      await revoke.mutateAsync({ id, uninstall: uninstallBeforeRevoke });
       toast("ok", "VM revoked");
     } catch {
       toast("err", "revoke failed");
@@ -198,7 +200,7 @@ export function VMDetailPage() {
             </div>
             {!canActOn ? (
               <div className="muted tiny">
-                {isAdmin ? "node must be active to run actions" : "read-only — execution disabled"}
+                {isAdmin || isOperator ? "node must be active to run actions" : "read-only — execution disabled"}
               </div>
             ) : (
               <>
@@ -329,17 +331,34 @@ export function VMDetailPage() {
 
       {/* Confirm: revoke */}
       <Modal open={confirmRevoke} onClose={() => setConfirmRevoke(false)} title="Revoke node">
-        <p style={{ marginBottom: 16 }}>
-          Revoking <strong>{vm.name}</strong> invalidates its credential — the worker can no longer
-          authenticate. This cannot be undone.
-        </p>
-        <div className="row" style={{ justifyContent: "flex-end" }}>
-          <button className="btn btn--ghost" onClick={() => setConfirmRevoke(false)}>
-            Cancel
-          </button>
-          <button className="btn btn--danger" onClick={doRevoke}>
-            Revoke node
-          </button>
+        <div className="stack" style={{ gap: 16 }}>
+          <p>
+            Revoking <strong>{vm.name}</strong> invalidates its credential — the worker can no longer
+            authenticate. This cannot be undone.
+          </p>
+          {(vm.state === "active" || vm.state === "offline") && (
+            <label className="row" style={{ gap: 10, cursor: "pointer", padding: "10px 14px", background: "var(--void)", borderRadius: 6 }}>
+              <input
+                type="checkbox"
+                checked={uninstallBeforeRevoke}
+                onChange={(e) => setUninstallBeforeRevoke(e.target.checked)}
+              />
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Uninstall worker service first</div>
+                <div className="muted tiny" style={{ marginTop: 2 }}>
+                  Sends an uninstall task to the worker (removes binary + systemd service). Best-effort — revocation proceeds regardless.
+                </div>
+              </div>
+            </label>
+          )}
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <button className="btn btn--ghost" onClick={() => setConfirmRevoke(false)}>
+              Cancel
+            </button>
+            <button className="btn btn--danger" onClick={doRevoke} disabled={revoke.isPending}>
+              {revoke.isPending ? <span className="spin" /> : "Revoke node"}
+            </button>
+          </div>
         </div>
       </Modal>
     </div>

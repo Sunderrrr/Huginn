@@ -9,9 +9,13 @@ import type {
   EnrollmentToken,
   EnrollmentTokenCreated,
   ExecMode,
+  McpTokenResponse,
+  PasswordChange,
   Settings,
   Task,
   User,
+  UserCreate,
+  UserUpdate,
   VM,
 } from "./types";
 
@@ -66,6 +70,20 @@ export function useTokens() {
   });
 }
 
+export function useUsers() {
+  return useQuery({
+    queryKey: ["users"],
+    queryFn: () => api.get<User[]>("/api/users"),
+  });
+}
+
+export function useMcpToken() {
+  return useQuery({
+    queryKey: ["mcp-token"],
+    queryFn: () => api.get<McpTokenResponse>("/api/settings/mcp-token"),
+  });
+}
+
 // --- Mutations ---
 
 function useInvalidate(keys: string[]) {
@@ -84,7 +102,8 @@ export function useApproveVm() {
 export function useRevokeVm() {
   const invalidate = useInvalidate(["vms", "vm", "audit"]);
   return useMutation({
-    mutationFn: (id: string) => api.post<VM>(`/api/vms/${id}/revoke`),
+    mutationFn: (vars: { id: string; uninstall?: boolean }) =>
+      api.post<VM>(`/api/vms/${vars.id}/revoke`, { uninstall: vars.uninstall ?? false }),
     onSuccess: invalidate,
   });
 }
@@ -149,6 +168,62 @@ export function useUpdateSettings() {
   const invalidate = useInvalidate(["settings", "audit"]);
   return useMutation({
     mutationFn: (vars: Partial<Settings>) => api.put<Settings>("/api/settings", vars),
+    onSuccess: invalidate,
+  });
+}
+
+// --- User management ---
+
+export function useCreateUser() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (vars: UserCreate) => api.post<User>("/api/users", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateUser() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (vars: { id: string } & UserUpdate) =>
+      api.put<User>(`/api/users/${vars.id}`, { role: vars.role, is_active: vars.is_active, email: vars.email }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeactivateUser() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/users/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (vars: { id: string } & PasswordChange) =>
+      api.put<{ status: string }>(`/api/users/${vars.id}/password`, {
+        old_password: vars.old_password,
+        new_password: vars.new_password,
+      }),
+  });
+}
+
+export function useSetUserVms() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; vm_ids: string[] }) =>
+      api.put<User>(`/api/users/${vars.id}/vms`, { vm_ids: vars.vm_ids }),
+    onSuccess: invalidate,
+  });
+}
+
+// --- MCP Token ---
+
+export function useRegenerateMcpToken() {
+  const invalidate = useInvalidate(["mcp-token"]);
+  return useMutation({
+    mutationFn: () => api.put<McpTokenResponse>("/api/settings/mcp-token"),
     onSuccess: invalidate,
   });
 }
