@@ -13,6 +13,7 @@ const TTL_OPTIONS = [
   { label: "12 hours", value: 43200 },
   { label: "7 days", value: 604800 },
   { label: "30 days", value: 2592000 },
+  { label: "Never", value: 0 },
 ];
 
 export function TokensPage() {
@@ -91,7 +92,8 @@ export function TokensPage() {
           </thead>
           <tbody>
             {tokens?.map((t) => {
-              const expired = new Date(t.expires_at).getTime() < Date.now();
+              const isNever = new Date(t.expires_at).getFullYear() >= 9999;
+              const expired = !isNever && new Date(t.expires_at).getTime() < Date.now();
               const exhausted = t.uses_count >= t.max_uses;
               const dead = !!t.revoked_at || expired || exhausted;
               return (
@@ -100,7 +102,7 @@ export function TokensPage() {
                   <td className="muted">
                     {t.uses_count}/{t.max_uses}
                   </td>
-                  <td className="muted">{fmtTime(t.expires_at)}</td>
+                  <td className="muted">{isNever ? "Never" : fmtTime(t.expires_at)}</td>
                   <td>
                     {t.revoked_at ? (
                       <span style={{ color: "var(--blood)" }}>revoked</span>

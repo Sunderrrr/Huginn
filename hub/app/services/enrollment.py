@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,13 +29,18 @@ async def create_token(
 ) -> tuple[EnrollmentToken, str]:
     """Create a token; returns the row and the plaintext secret (shown once)."""
     plaintext = security.generate_secret()
+    # ttl_seconds=0 means never expires → set to far future
+    if ttl_seconds == 0:
+        expires_at = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+    else:
+        expires_at = utcnow() + timedelta(seconds=ttl_seconds)
     token = EnrollmentToken(
         token_hash=security.hash_secret(plaintext),
         label=label,
         created_by=created_by,
         max_uses=max_uses,
         uses_count=0,
-        expires_at=utcnow() + timedelta(seconds=ttl_seconds),
+        expires_at=expires_at,
     )
     session.add(token)
     await session.flush()

@@ -17,7 +17,7 @@ export function AccessTokensPage() {
       onSuccess: (data) => {
         setNewToken(data.token);
         setConfirmOpen(false);
-        toast("ok", "MCP client token regenerated");
+        toast("ok", "MCP token regenerated");
       },
       onError: (err: Error) => toast("err", err.message),
     });
@@ -40,60 +40,61 @@ export function AccessTokensPage() {
       <div style={{ marginBottom: 24 }}>
         <div className="eyebrow">security</div>
         <h1 className="display" style={{ fontSize: 28, letterSpacing: "0.08em", margin: "8px 0" }}>
-          Access Tokens
+          MCP Token
         </h1>
-      </div>
-
-      <div className="panel panel--bracket" style={{ marginBottom: 24 }}>
-        <h2 className="display" style={{ fontSize: 16, letterSpacing: "0.1em", marginBottom: 16 }}>
-          MCP Client Token
-        </h2>
-        <p style={{ color: "var(--dim)", fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>
+        <p style={{ color: "var(--dim)", fontSize: 13, lineHeight: 1.6, maxWidth: 560 }}>
           Agents must send <code style={{ color: "var(--ember)" }}>Authorization: Bearer &lt;token&gt;</code>{" "}
           to reach the MCP HTTP endpoint. Without this token, the endpoint is open to anyone who can reach it.
         </p>
+      </div>
 
-        <div className="row" style={{ gap: 12, marginBottom: 16 }}>
-          <div
-            className="codeblock"
-            style={{
-              flex: 1,
-              padding: "12px 16px",
-              background: "var(--void)",
-              borderRadius: 6,
-              fontFamily: "var(--font-mono)",
-              fontSize: 14,
-              letterSpacing: "0.04em",
-              color: tokenData?.masked ? "var(--bone)" : "var(--dim)",
-            }}
-          >
-            {tokenData?.masked || "(not set)"}
+      <div className="panel panel--bracket" style={{ marginBottom: 24, maxWidth: 620 }}>
+        <div className="stack" style={{ gap: 16 }}>
+          <div>
+            <label className="lbl">Current token</label>
+            <div className="row" style={{ gap: 12 }}>
+              <div
+                className="codeblock"
+                style={{
+                  flex: 1,
+                  padding: "12px 16px",
+                  background: "var(--void)",
+                  borderRadius: 6,
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 14,
+                  letterSpacing: "0.04em",
+                  color: tokenData?.masked ? "var(--bone)" : "var(--dim)",
+                }}
+              >
+                {tokenData?.masked || "(not set)"}
+              </div>
+              {tokenData?.token && (
+                <button
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => handleCopy(tokenData.token)}
+                >
+                  {copied ? "✓ Copied" : "Copy"}
+                </button>
+              )}
+            </div>
           </div>
-          {tokenData?.token && (
+
+          <div className="row" style={{ gap: 12 }}>
             <button
-              className="btn btn--ghost btn--sm"
-              onClick={() => handleCopy(tokenData.token)}
+              className="btn btn--danger"
+              onClick={() => setConfirmOpen(true)}
+              disabled={regenerate.isPending}
             >
-              {copied ? "✓ Copied" : "Copy full token"}
+              {regenerate.isPending ? <span className="spin" /> : "Regenerate"}
             </button>
-          )}
-        </div>
+          </div>
 
-        <div className="row" style={{ gap: 12 }}>
-          <button
-            className="btn btn--danger"
-            onClick={() => setConfirmOpen(true)}
-            disabled={regenerate.isPending}
+          <div
+            className="muted tiny"
+            style={{ padding: "10px 14px", borderLeft: "3px solid var(--amber)", background: "rgba(255,180,0,0.05)", borderRadius: 4 }}
           >
-            {regenerate.isPending ? <span className="spin" /> : "Regenerate token"}
-          </button>
-        </div>
-
-        <div
-          className="muted tiny"
-          style={{ marginTop: 12, padding: "10px 14px", borderLeft: "3px solid var(--amber)", background: "rgba(255,180,0,0.05)", borderRadius: 4 }}
-        >
-          After regeneration, update all agent configs with the new token. The old token will stop working immediately.
+            After regeneration, update all agent configs with the new token. The old token stops working immediately.
+          </div>
         </div>
       </div>
 

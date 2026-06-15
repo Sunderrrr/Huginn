@@ -12,7 +12,8 @@ from app.models.enums import WorkerArch
 
 class EnrollmentTokenCreate(BaseModel):
     label: str = Field(default="", max_length=255)
-    ttl_seconds: int = Field(default=3600, ge=60, le=30 * 24 * 3600)
+    # 0 = never expires
+    ttl_seconds: int = Field(default=3600, ge=0, le=30 * 24 * 3600)
     max_uses: int = Field(default=1, ge=1, le=1000)
 
 
