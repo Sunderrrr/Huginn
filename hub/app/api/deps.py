@@ -72,8 +72,8 @@ async def require_admin(principal: Principal = Depends(get_principal)) -> Princi
 
 
 async def require_operator(principal: Principal = Depends(get_principal)) -> Principal:
-    """Admin or operator user; read-only users are rejected."""
-    if not principal.is_operator:
+    """Admin, operator, or agent; read-only users are rejected."""
+    if not principal.can_execute:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "operator privileges required")
     return principal
 

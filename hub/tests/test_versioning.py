@@ -20,6 +20,27 @@ def test_build_release_urls_for_allowed_host() -> None:
     assert urls["checksums_url"].endswith("checksums.txt")
 
 
+def test_build_release_urls_self_hosted() -> None:
+    urls = versioning.build_release_urls(
+        repo="https://hub.example.com/dist",
+        version="v0.1.0",
+        arch=WorkerArch.amd64,
+        allowed_domains=["hub.example.com"],
+    )
+    assert urls["binary_url"] == "https://hub.example.com/dist/huginn-worker-linux-amd64"
+    assert urls["checksums_url"] == "https://hub.example.com/dist/checksums.txt"
+
+
+def test_build_release_urls_self_hosted_ip() -> None:
+    urls = versioning.build_release_urls(
+        repo="https://192.0.2.13/dist",
+        version="v0.1.0",
+        arch=WorkerArch.amd64,
+        allowed_domains=["192.0.2.13"],
+    )
+    assert urls["binary_url"] == "https://192.0.2.13/dist/huginn-worker-linux-amd64"
+
+
 def test_rejects_disallowed_repo_host_injection() -> None:
     # A repo crafted to point the host elsewhere must be blocked by the allowlist.
     with pytest.raises(versioning.SSRFError):
@@ -31,9 +52,9 @@ def test_rejects_disallowed_repo_host_injection() -> None:
         )
 
 
-def test_validate_url_host_rejects_http() -> None:
-    with pytest.raises(versioning.SSRFError):
-        versioning.validate_url_host("http://github.com/x", ["github.com"])
+def test_validate_url_host_allows_http() -> None:
+    # HTTP is allowed for self-hosted artifacts (e.g. LAN hub)
+    versioning.validate_url_host("http://192.0.2.13/dist/checksums.txt", ["192.0.2.13"])
 
 
 def test_validate_url_host_rejects_evil_host() -> None:
@@ -57,10 +78,16 @@ def test_rejects_version_path_traversal() -> None:
         )
 
 
-def test_validate_release_domain_rejects_ip_and_internal() -> None:
-    for bad in ["169.254.169.254", "127.0.0.1", "localhost", "db.internal", "x.local", "10.0.0.5"]:
+def test_validate_release_domain_rejects_localhost_and_internal() -> None:
+    for bad in ["localhost", "db.internal", "x.local"]:
         with pytest.raises(versioning.SSRFError):
             versioning.validate_release_domain(bad)
+
+
+def test_validate_release_domain_allows_ip() -> None:
+    # IPs are allowed for self-hosted deployments (LAN hub)
+    versioning.validate_release_domain("192.0.2.13")
+    versioning.validate_release_domain("10.0.0.5")
 
 
 def test_validate_release_domain_accepts_public_hostname() -> None:
