@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
-import { api } from "../api/client";
 import { useCreateToken, useRevokeToken, useTokens } from "../api/hooks";
 import type { EnrollmentTokenCreated } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -27,6 +26,8 @@ export function TokensPage() {
   const [ttl, setTtl] = useState(3600);
   const [maxUses, setMaxUses] = useState(1);
   const [created, setCreated] = useState<EnrollmentTokenCreated | null>(null);
+  const [reveal, setReveal] = useState(false);
+  const [revealCmd, setRevealCmd] = useState(false);
 
   if (user?.role !== "admin") {
     return <div className="muted">Token management requires an admin account.</div>;
@@ -35,6 +36,8 @@ export function TokensPage() {
   async function onCreate() {
     try {
       const t = await create.mutateAsync({ label, ttl_seconds: ttl, max_uses: maxUses });
+      setReveal(false);
+      setRevealCmd(false);
       setCreated(t);
       setLabel("");
       toast("ok", "token generated");
@@ -43,8 +46,17 @@ export function TokensPage() {
     }
   }
 
+  // The dashboard is served from the same origin the hub is reachable on, so the
+  // installer points workers back here. -k: the machines don't trust the hub's
+  // (internal CA) cert yet — the script then installs the hub CA on first use.
+  const base = window.location.origin;
   const installCmd = (token: string) =>
-    `curl -sSL ${api.hubUrl}/install.sh | HUB_URL=${api.hubUrl} TOKEN=${token} bash`;
+    `curl -fsSLk ${base}/install.sh | HUB_URL=${base} TOKEN=${token} bash`;
+  const mask = (t: string) => (t.length > 8 ? `****${t.slice(-8)}` : "****");
+  const copy = (text: string, what: string) => {
+    navigator.clipboard?.writeText(text);
+    toast("ok", what);
+  };
 
   return (
     <div>
@@ -135,29 +147,48 @@ export function TokensPage() {
         {tokens?.length === 0 && <div style={{ padding: 32 }} className="muted tiny">No tokens yet.</div>}
       </motion.div>
 
-      <Modal open={!!created} onClose={() => setCreated(null)} title="Token generated" width={620}>
+      <Modal open={!!created} onClose={() => setCreated(null)} title="Token generated" width={640}>
         {created && (
           <div>
             <p className="muted tiny" style={{ marginBottom: 12 }}>
               Copy this now — the plaintext token is shown only once.
             </p>
-            <div className="codeblock" style={{ color: "var(--ember-soft)", userSelect: "all" }}>
-              {created.token}
-            </div>
-            <div className="eyebrow" style={{ margin: "18px 0 6px" }}>
-              one-line install
-            </div>
-            <div className="codeblock" style={{ userSelect: "all" }}>{installCmd(created.token)}</div>
-            <div className="row" style={{ justifyContent: "flex-end", marginTop: 18 }}>
-              <button
-                className="btn"
-                onClick={() => {
-                  navigator.clipboard?.writeText(created.token);
-                  toast("ok", "token copied");
-                }}
+
+            <label className="lbl">Token</label>
+            <div className="row" style={{ gap: 8, alignItems: "stretch", marginBottom: 18 }}>
+              <div
+                className="codeblock grow"
+                style={{ userSelect: "all", padding: "9px 12px", color: reveal ? "var(--ember-soft)" : "var(--dim)" }}
               >
-                Copy token
+                {reveal ? created.token : mask(created.token)}
+              </div>
+              <button className="btn btn--sm" onClick={() => setReveal((v) => !v)}>
+                {reveal ? "hide" : "reveal"}
               </button>
+              <button className="btn btn--sm" onClick={() => copy(created.token, "token copied")}>
+                copy
+              </button>
+            </div>
+
+            <label className="lbl">One-line install</label>
+            <div className="row" style={{ gap: 8, alignItems: "stretch" }}>
+              <div className="codeblock grow" style={{ userSelect: "all", padding: "9px 12px" }}>
+                {installCmd(revealCmd ? created.token : mask(created.token))}
+              </div>
+              <button className="btn btn--sm" onClick={() => setRevealCmd((v) => !v)}>
+                {revealCmd ? "hide" : "reveal"}
+              </button>
+              <button className="btn btn--sm" onClick={() => copy(installCmd(created.token), "command copied")}>
+                copy
+              </button>
+            </div>
+            <div className="muted tiny" style={{ marginTop: 10, lineHeight: 1.6 }}>
+              <code style={{ color: "var(--ember-soft)" }}>-k</code> skips the cert check to fetch
+              the script; the installer then trust-on-first-use installs the hub CA, so the worker's
+              own connection stays verified.
+            </div>
+
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 18 }}>
               <button className="btn btn--primary" onClick={() => setCreated(null)}>
                 Done
               </button>
