@@ -13,6 +13,7 @@ class SettingsOut(BaseModel):
     target_worker_version: str
     target_release_repo: str
     allowed_release_domains: list[str]
+    auto_update_enabled: bool
     updated_at: datetime
 
     # SSO / OIDC
@@ -44,6 +45,7 @@ class SettingsUpdate(BaseModel):
     target_worker_version: str | None = Field(default=None, max_length=64)
     target_release_repo: str | None = Field(default=None, max_length=255)
     allowed_release_domains: list[str] | None = None
+    auto_update_enabled: bool | None = None
 
     # SSO / OIDC
     oidc_enabled: bool | None = None

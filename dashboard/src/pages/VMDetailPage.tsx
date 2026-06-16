@@ -184,11 +184,24 @@ export function VMDetailPage() {
               <Field label="enrolled">{fmtTime(vm.enrolled_at)}</Field>
               <Field label="approved">{fmtTime(vm.approved_at)}</Field>
             </div>
-            {canActOn && stale && (
+            {canActOn && (
               <div style={{ marginTop: 18 }}>
-                <button className="btn btn--sm" onClick={doUpdate} disabled={triggerUpdate.isPending}>
-                  ⟳ Update worker → {settings?.target_worker_version}
+                <button
+                  className={stale ? "btn btn--sm btn--primary" : "btn btn--sm"}
+                  onClick={doUpdate}
+                  disabled={triggerUpdate.isPending}
+                >
+                  {triggerUpdate.isPending ? (
+                    <span className="spin" />
+                  ) : (
+                    <>⟳ Update worker{stale ? ` → ${settings?.target_worker_version}` : ""}</>
+                  )}
                 </button>
+                {!stale && (
+                  <span className="muted tiny" style={{ marginLeft: 10 }}>
+                    re-pushes the target build
+                  </span>
+                )}
               </div>
             )}
           </motion.div>

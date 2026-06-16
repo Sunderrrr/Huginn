@@ -18,6 +18,7 @@ export function SettingsPage() {
   const [version, setVersion] = useState("");
   const [repo, setRepo] = useState("");
   const [domains, setDomains] = useState("");
+  const [autoUpdate, setAutoUpdate] = useState(false);
 
   // SSO / OIDC
   const [oidcEnabled, setOidcEnabled] = useState(false);
@@ -50,6 +51,7 @@ export function SettingsPage() {
       setVersion(settings.target_worker_version);
       setRepo(settings.target_release_repo);
       setDomains(settings.allowed_release_domains.join(", "));
+      setAutoUpdate(!!settings.auto_update_enabled);
     }
   }, [settings]);
 
@@ -93,6 +95,7 @@ export function SettingsPage() {
         target_worker_version: version,
         target_release_repo: repo,
         allowed_release_domains: domains.split(",").map((d) => d.trim()).filter(Boolean),
+        auto_update_enabled: autoUpdate,
         oidc_enabled: oidcEnabled,
         oidc_issuer: oidcIssuer,
         oidc_client_id: oidcClientId,
@@ -144,6 +147,18 @@ export function SettingsPage() {
               <input className="field" value={domains} onChange={(e) => setDomains(e.target.value)} disabled={!isAdmin} />
               <Hint>Comma-separated hostnames or IPs.</Hint>
             </Field>
+            <div>
+              <label className="row" style={{ gap: 8, cursor: isAdmin ? "pointer" : "default" }}>
+                <input
+                  type="checkbox"
+                  checked={autoUpdate}
+                  onChange={(e) => setAutoUpdate(e.target.checked)}
+                  disabled={!isAdmin}
+                />
+                <span style={{ fontSize: 13 }}>Auto-update workers</span>
+              </label>
+              <Hint>When on, the hub queues an update for any worker whose version differs from the target — no manual click needed.</Hint>
+            </div>
           </div>
         </motion.div>
 

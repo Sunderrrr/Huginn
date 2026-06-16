@@ -20,6 +20,9 @@ class Setting(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=SETTINGS_SINGLETON_ID)
     target_worker_version: Mapped[str] = mapped_column(String(64), nullable=False)
     target_release_repo: Mapped[str] = mapped_column(String(255), nullable=False)
+    # When true, the hub auto-queues an update task for any worker that heartbeats
+    # with a version different from target_worker_version.
+    auto_update_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Stored as a JSON list for cross-dialect portability.
     allowed_release_domains: Mapped[list[str]] = mapped_column(
         JSONType, default=list, nullable=False

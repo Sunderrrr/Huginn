@@ -101,6 +101,7 @@ export interface Settings {
   target_worker_version: string;
   target_release_repo: string;
   allowed_release_domains: string[];
+  auto_update_enabled: boolean;
   updated_at: string;
   // SSO / OIDC / LDAP / notifications fields are admin-only and optional here.
   notifications_enabled?: boolean;

@@ -71,6 +71,61 @@ async def test_long_poll_picks_up_queued_task(
     assert poll.json()["id"] == task_id
 
 
+async def test_auto_update_queues_task_on_version_mismatch(
+    client, admin_headers, enrolled_worker
+) -> None:
+    w = await enrolled_worker()
+
+    # Enable auto-update and set a target the worker won't match.
+    await client.put(
+        "/api/settings",
+        json={"target_worker_version": "v9.9.9", "auto_update_enabled": True},
+        headers=admin_headers,
+    )
+
+    # Worker heartbeats reporting an older version → hub queues an update.
+    hb = await client.post(
+        "/api/worker/heartbeat",
+        json={"worker_version": "v0.1.0"},
+        headers=w["headers"],
+    )
+    assert hb.status_code == 200
+    assert hb.json()["target_worker_version"] == "v9.9.9"
+
+    # The worker now finds an update task waiting.
+    poll = await client.get("/api/worker/tasks/next", headers=w["headers"])
+    handed = poll.json()
+    assert handed is not None
+    assert handed["type"] == "update"
+
+    # A second heartbeat must NOT queue a duplicate while one is in flight.
+    await client.post(
+        "/api/worker/heartbeat",
+        json={"worker_version": "v0.1.0"},
+        headers=w["headers"],
+    )
+    poll2 = await client.get("/api/worker/tasks/next", headers=w["headers"])
+    assert poll2.json() is None
+
+
+async def test_auto_update_disabled_queues_nothing(
+    client, admin_headers, enrolled_worker
+) -> None:
+    w = await enrolled_worker()
+    await client.put(
+        "/api/settings",
+        json={"target_worker_version": "v9.9.9", "auto_update_enabled": False},
+        headers=admin_headers,
+    )
+    await client.post(
+        "/api/worker/heartbeat",
+        json={"worker_version": "v0.1.0"},
+        headers=w["headers"],
+    )
+    poll = await client.get("/api/worker/tasks/next", headers=w["headers"])
+    assert poll.json() is None
+
+
 async def test_unknown_action_rejected(client, admin_headers, enrolled_worker) -> None:
     w = await enrolled_worker()
     resp = await client.post(

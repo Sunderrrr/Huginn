@@ -5,6 +5,7 @@ all other worker endpoints (added later) use the per-worker secret.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -28,6 +29,8 @@ from app.services import enrollment as enrollment_service
 from app.services import notifications as notifications_service
 from app.services import settings_service
 from app.services import tasks as tasks_service
+
+logger = logging.getLogger("huginn.hub.worker")
 
 router = APIRouter(prefix="/api/worker", tags=["worker"])
 
@@ -100,6 +103,28 @@ async def heartbeat(
     row = await settings_service.get_settings_row(session)
     target = row.target_worker_version if row else get_settings().target_worker_version
     allowed_domains = list(row.allowed_release_domains) if row else []
+
+    # Auto-update: if enabled and the worker is on a different version, queue an
+    # update task (unless one is already in flight). Best-effort — never blocks
+    # or fails the heartbeat.
+    if (
+        row is not None
+        and row.auto_update_enabled
+        and body.worker_version
+        and body.worker_version != target
+    ):
+        try:
+            if not await tasks_service.has_inflight_update(session, vm.id):
+                await tasks_service.create_update_task(
+                    session,
+                    vm=vm,
+                    target_version=target,
+                    repo=row.target_release_repo,
+                    allowed_domains=allowed_domains,
+                    created_by="auto-update",
+                )
+        except Exception as exc:  # noqa: BLE001 - auto-update must not break heartbeat
+            logger.warning("auto-update for vm %s failed: %s", vm.id, exc)
 
     if recovered:
         await session.commit()

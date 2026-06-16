@@ -194,6 +194,18 @@ async def get_task(session: AsyncSession, task_id: uuid.UUID) -> Task | None:
     return await session.get(Task, task_id)
 
 
+async def has_inflight_update(session: AsyncSession, vm_id: uuid.UUID) -> bool:
+    """True if an update task for this VM is still pending or dispatched."""
+    result = await session.execute(
+        select(Task.id).where(
+            Task.vm_id == vm_id,
+            Task.type == TaskType.update,
+            Task.status.in_([TaskStatus.pending, TaskStatus.dispatched, TaskStatus.running]),
+        ).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def claim_next_task(session: AsyncSession, vm: VM) -> Task | None:
     """Atomically hand the oldest pending task for this VM to the worker."""
     stmt = (

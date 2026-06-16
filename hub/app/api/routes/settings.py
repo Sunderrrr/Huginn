@@ -34,6 +34,7 @@ async def get_settings_endpoint(
         "target_worker_version",
         "target_release_repo",
         "allowed_release_domains",
+        "auto_update_enabled",
         "updated_at",
     }
     return {k: v for k, v in full.items() if k in public_keys}
