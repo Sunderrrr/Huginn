@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.config import get_settings
 from app.core.jwt import create_access_token, decode_access_token
 from app.models.enums import UserRole
@@ -127,3 +129,45 @@ async def test_oidc_links_existing_username(session, make_user) -> None:
         session, subject="authentik-sub-123", username="admin", email="a@x.io"
     )
     assert again.id == existing.id
+
+
+def _make_oidc(monkeypatch_obj=None):
+    """Build an OIDCClient with a dummy settings object."""
+    from app.core.oidc import OIDCClient
+
+    class _S:
+        oidc_enabled = True
+        oidc_issuer = "https://idp.example.com"
+        oidc_client_id = "huginn"
+        oidc_client_secret = "secret"
+        oidc_redirect_url = "https://hub/cb"
+
+    return OIDCClient(_S())
+
+
+def test_oidc_nonce_mismatch_rejected() -> None:
+    """A verified id_token whose nonce differs from the expected one is rejected."""
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from app.core.oidc import OIDCError
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub = key.public_key()
+    token = jwt.encode(
+        {"sub": "abc", "aud": "huginn", "iss": "https://idp.example.com", "nonce": "real-nonce"},
+        key,
+        algorithm="RS256",
+        headers={"kid": "k1"},
+    )
+    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(pub, as_dict=True)
+    jwk.update({"kid": "k1", "use": "sig", "alg": "RS256"})
+    jwks = {"keys": [jwk]}
+
+    client = _make_oidc()
+    # Correct nonce verifies.
+    claims = client._verify_id_token(token, jwks, "https://idp.example.com", nonce="real-nonce")
+    assert claims.subject == "abc"
+    # Wrong nonce is rejected.
+    with pytest.raises(OIDCError, match="nonce"):
+        client._verify_id_token(token, jwks, "https://idp.example.com", nonce="attacker-nonce")

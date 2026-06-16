@@ -61,6 +61,7 @@ async def client(engine, session_factory) -> AsyncIterator[AsyncClient]:
     from app.main import create_app
 
     auth_routes._login_limiter._buckets.clear()
+    auth_routes._oidc_limiter._buckets.clear()
 
     app = create_app()
 

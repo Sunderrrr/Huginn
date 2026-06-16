@@ -30,9 +30,12 @@ logger = logging.getLogger("huginn.hub.auth")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _OIDC_STATE_COOKIE = "huginn_oidc_state"
+_OIDC_NONCE_COOKIE = "huginn_oidc_nonce"
 
 # Per-IP brute-force guard on login (5 attempts/minute).
 _login_limiter = RateLimiter(5)
+# Per-IP guard on the OIDC start/callback endpoints (10 attempts/minute).
+_oidc_limiter = RateLimiter(10)
 
 
 @router.get("/config")
@@ -144,26 +147,30 @@ async def _oidc_source(session: AsyncSession, settings: Settings) -> Any:
     return row if (row and row.oidc_enabled) else settings
 
 
+def _oidc_cookie_kwargs(settings: Settings) -> dict:
+    return {"httponly": True, "secure": settings.is_prod, "samesite": "lax", "max_age": 600}
+
+
 @router.get("/oidc/login", response_model=OIDCStartResponse)
 async def oidc_login(
+    request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> OIDCStartResponse:
+    ip = client_ip(request) or "unknown"
+    if not _oidc_limiter.allow(f"oidc:{ip}"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many OIDC attempts; slow down")
     client = OIDCClient(await _oidc_source(session, settings))
     if not client.enabled:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "OIDC is not enabled")
     state = client.new_state()
-    url = await client.authorization_url(state)
-    # Bind the state to the browser via an httponly cookie (CSRF protection).
-    response.set_cookie(
-        _OIDC_STATE_COOKIE,
-        state,
-        httponly=True,
-        secure=settings.is_prod,
-        samesite="lax",
-        max_age=600,
-    )
+    nonce = client.new_nonce()
+    url = await client.authorization_url(state, nonce)
+    # Bind state (CSRF) and nonce (id_token replay protection) to the browser
+    # via httponly cookies, checked on the callback.
+    response.set_cookie(_OIDC_STATE_COOKIE, state, **_oidc_cookie_kwargs(settings))
+    response.set_cookie(_OIDC_NONCE_COOKIE, nonce, **_oidc_cookie_kwargs(settings))
     return OIDCStartResponse(authorization_url=url, state=state)
 
 
@@ -176,14 +183,18 @@ async def oidc_callback(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> Response | TokenResponse:
+    ip = client_ip(request) or "unknown"
+    if not _oidc_limiter.allow(f"oidc:{ip}"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many OIDC attempts; slow down")
     cookie_state = request.cookies.get(_OIDC_STATE_COOKIE)
     if not cookie_state or not security.constant_time_equals(cookie_state, state):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid OIDC state")
+    nonce = request.cookies.get(_OIDC_NONCE_COOKIE)
 
     source = await _oidc_source(session, settings)
     client = OIDCClient(source)
     try:
-        claims = await client.exchange_code(code)
+        claims = await client.exchange_code(code, nonce=nonce)
     except OIDCError as exc:
         logger.warning("OIDC callback failed: %s", exc)
         raise HTTPException(
@@ -202,6 +213,7 @@ async def oidc_callback(
         source_ip=client_ip(request),
     )
     response.delete_cookie(_OIDC_STATE_COOKIE)
+    response.delete_cookie(_OIDC_NONCE_COOKIE)
     token = users_service.issue_token(user)
     # If a SPA dashboard URL is configured, hand the token back via the URL
     # fragment (never logged by servers/proxies) and redirect the browser there.
@@ -212,5 +224,6 @@ async def oidc_callback(
             status_code=status.HTTP_303_SEE_OTHER,
         )
         redirect.delete_cookie(_OIDC_STATE_COOKIE)
+        redirect.delete_cookie(_OIDC_NONCE_COOKIE)
         return redirect
     return TokenResponse(access_token=token, expires_in=settings.access_token_ttl_minutes * 60)

@@ -57,7 +57,11 @@ class OIDCClient:
     def new_state() -> str:
         return secrets.token_urlsafe(24)
 
-    async def authorization_url(self, state: str) -> str:
+    @staticmethod
+    def new_nonce() -> str:
+        return secrets.token_urlsafe(24)
+
+    async def authorization_url(self, state: str, nonce: str) -> str:
         self._require_enabled()
         discovery = await self._get_discovery()
         params = {
@@ -66,10 +70,11 @@ class OIDCClient:
             "redirect_uri": self._settings.oidc_redirect_url,
             "scope": "openid profile email",
             "state": state,
+            "nonce": nonce,
         }
         return f"{discovery['authorization_endpoint']}?{urlencode(params)}"
 
-    async def exchange_code(self, code: str) -> OIDCClaims:
+    async def exchange_code(self, code: str, nonce: str | None = None) -> OIDCClaims:
         self._require_enabled()
         discovery = await self._get_discovery()
         token_endpoint = discovery["token_endpoint"]
@@ -101,9 +106,11 @@ class OIDCClient:
                 raise OIDCError(f"jwks endpoint returned {jwks_resp.status_code}")
             jwks = jwks_resp.json()
 
-        return self._verify_id_token(id_token, jwks, issuer)
+        return self._verify_id_token(id_token, jwks, issuer, nonce)
 
-    def _verify_id_token(self, id_token: str, jwks: dict, issuer: str) -> OIDCClaims:
+    def _verify_id_token(
+        self, id_token: str, jwks: dict, issuer: str, nonce: str | None = None
+    ) -> OIDCClaims:
         try:
             jwk_set = jwt.PyJWKSet.from_dict(jwks)
             kid = jwt.get_unverified_header(id_token).get("kid")
@@ -121,6 +128,11 @@ class OIDCClient:
             )
         except jwt.PyJWTError as exc:
             raise OIDCError(f"id_token verification failed: {exc}") from exc
+
+        # Bind the id_token to this login attempt: the nonce we sent on the
+        # authorization request must come back in the token (replay protection).
+        if nonce is not None and claims.get("nonce") != nonce:
+            raise OIDCError("id_token nonce mismatch")
 
         subject = claims.get("sub")
         if not subject:
