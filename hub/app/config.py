@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # TLS policy for hub<->worker
     require_tls: bool = True
 
+    # Trust X-Forwarded-For for the client IP (enable only when behind a trusted
+    # reverse proxy such as the bundled Caddy; otherwise clients could spoof it).
+    trust_forwarded_for: bool = True
+
     # CORS: allowed dashboard origins (comma-separated). Empty disables CORS.
     # Stored as a raw string: pydantic-settings JSON-decodes list-typed env vars
     # before validators run, which would reject a plain CSV value.

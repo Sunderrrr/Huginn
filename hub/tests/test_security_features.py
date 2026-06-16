@@ -7,6 +7,31 @@ import pytest
 from app.models.enums import WorkerArch
 from app.services import versioning
 
+# --- client_ip behind a reverse proxy -----------------------------------------
+
+def _fake_request(headers: dict, peer: str | None = "172.19.0.3"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        headers={k.lower(): v for k, v in headers.items()},
+        client=SimpleNamespace(host=peer) if peer else None,
+    )
+
+
+def test_client_ip_uses_forwarded_for() -> None:
+    from app.api.deps import client_ip
+
+    req = _fake_request({"X-Forwarded-For": "203.0.113.7, 172.19.0.3"})
+    assert client_ip(req) == "203.0.113.7"  # type: ignore[arg-type]
+
+
+def test_client_ip_falls_back_to_peer_without_header() -> None:
+    from app.api.deps import client_ip
+
+    req = _fake_request({})
+    assert client_ip(req) == "172.19.0.3"  # type: ignore[arg-type]
+
+
 # --- SSRF: private/LAN IPs allowed, loopback/link-local rejected ---------------
 
 def test_release_domain_allows_lan_ip() -> None:

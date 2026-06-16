@@ -29,6 +29,19 @@ _exec_limiter = RateLimiter(get_settings().rate_limit_exec_per_minute)
 
 
 def client_ip(request: Request) -> str | None:
+    """Best-effort real client IP.
+
+    Behind the bundled Caddy reverse proxy ``request.client.host`` is Caddy's
+    container IP, so when ``trust_forwarded_for`` is set we take the first hop in
+    ``X-Forwarded-For`` (the original client). The header is only honoured when
+    explicitly trusted, since clients could otherwise spoof it.
+    """
+    if get_settings().trust_forwarded_for:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
     return request.client.host if request.client else None
 
 
