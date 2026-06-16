@@ -84,18 +84,31 @@ class OIDCClient:
                     "client_secret": self._settings.oidc_client_secret,
                 },
             )
-        if resp.status_code != httpx.codes.OK:
-            raise OIDCError(f"token endpoint returned {resp.status_code}")
-        id_token = resp.json().get("id_token")
-        if not id_token:
-            raise OIDCError("no id_token in token response")
+            if resp.status_code != httpx.codes.OK:
+                raise OIDCError(f"token endpoint returned {resp.status_code}")
+            id_token = resp.json().get("id_token")
+            if not id_token:
+                raise OIDCError("no id_token in token response")
 
-        return self._verify_id_token(id_token, jwks_uri, issuer)
+            # Fetch the JWKS ourselves with httpx rather than letting PyJWKClient
+            # use urllib: some reverse proxies / WAFs in front of the IdP reject
+            # the default Python-urllib User-Agent with a 403.
+            jwks_resp = await client.get(jwks_uri)
+            if jwks_resp.status_code != httpx.codes.OK:
+                raise OIDCError(f"jwks endpoint returned {jwks_resp.status_code}")
+            jwks = jwks_resp.json()
 
-    def _verify_id_token(self, id_token: str, jwks_uri: str, issuer: str) -> OIDCClaims:
+        return self._verify_id_token(id_token, jwks, issuer)
+
+    def _verify_id_token(self, id_token: str, jwks: dict, issuer: str) -> OIDCClaims:
         try:
-            jwk_client = jwt.PyJWKClient(jwks_uri)
-            signing_key = jwk_client.get_signing_key_from_jwt(id_token)
+            jwk_set = jwt.PyJWKSet.from_dict(jwks)
+            kid = jwt.get_unverified_header(id_token).get("kid")
+            signing_key = next(
+                (k for k in jwk_set.keys if kid is None or k.key_id == kid), None
+            )
+            if signing_key is None:
+                raise OIDCError("no matching JWKS key for id_token")
             claims = jwt.decode(
                 id_token,
                 signing_key.key,

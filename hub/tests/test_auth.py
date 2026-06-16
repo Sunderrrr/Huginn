@@ -109,3 +109,21 @@ async def test_auth_config_reflects_enabled_oidc(client, admin_headers) -> None:
     body = (await client.get("/api/auth/config")).json()
     assert body["oidc_enabled"] is True
     assert body["oidc_provider_name"] == "Authentik"
+
+
+async def test_oidc_links_existing_username(session, make_user) -> None:
+    """OIDC login for an existing local username adopts that account (no dup)."""
+    from app.services import users as users_service
+
+    existing, _ = await make_user(username="admin", password="local-pass-1234")
+    linked = await users_service.upsert_oidc_user(
+        session, subject="authentik-sub-123", username="admin", email="a@x.io"
+    )
+    assert linked.id == existing.id
+    assert linked.oidc_subject == "authentik-sub-123"
+
+    # A second login resolves by subject to the same user.
+    again = await users_service.upsert_oidc_user(
+        session, subject="authentik-sub-123", username="admin", email="a@x.io"
+    )
+    assert again.id == existing.id
