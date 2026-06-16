@@ -22,6 +22,7 @@ export function SettingsPage() {
 
   // SSO / OIDC
   const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [oidcProviderName, setOidcProviderName] = useState("SSO");
   const [oidcIssuer, setOidcIssuer] = useState("");
   const [oidcClientId, setOidcClientId] = useState("");
   const [oidcClientSecret, setOidcClientSecret] = useState("");
@@ -63,6 +64,7 @@ export function SettingsPage() {
       .then((s) => {
         if (s.oidc_enabled !== undefined) {
           setOidcEnabled(!!s.oidc_enabled);
+          setOidcProviderName((s.oidc_provider_name as string) || "SSO");
           setOidcIssuer((s.oidc_issuer as string) || "");
           setOidcClientId((s.oidc_client_id as string) || "");
           setOidcRedirectUrl((s.oidc_redirect_url as string) || "");
@@ -97,6 +99,7 @@ export function SettingsPage() {
         allowed_release_domains: domains.split(",").map((d) => d.trim()).filter(Boolean),
         auto_update_enabled: autoUpdate,
         oidc_enabled: oidcEnabled,
+        oidc_provider_name: oidcProviderName,
         oidc_issuer: oidcIssuer,
         oidc_client_id: oidcClientId,
         oidc_client_secret: oidcClientSecret || undefined,
@@ -174,6 +177,10 @@ export function SettingsPage() {
             )}
           </div>
           <div className="stack" style={{ gap: 18 }}>
+            <Field label="Provider name (login button)">
+              <input className="field" value={oidcProviderName} onChange={(e) => setOidcProviderName(e.target.value)} disabled={!isAdmin} placeholder="Authentik" />
+              <Hint>Shown on the login page as “Continue with {oidcProviderName || "…"}”.</Hint>
+            </Field>
             <Field label="Issuer URL">
               <input className="field" value={oidcIssuer} onChange={(e) => setOidcIssuer(e.target.value)} disabled={!isAdmin} placeholder="https://auth.example.com/application/o/huginn" />
               <Hint>Authentik or any OIDC-compliant provider.</Hint>

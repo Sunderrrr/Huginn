@@ -197,3 +197,29 @@ async def revoke_vm(
         source_ip=client_ip(request),
     )
     return VMOut.model_validate(vm)
+
+
+@router.delete("/{vm_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_vm(
+    vm_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Permanently delete a revoked VM. The VM must be revoked first."""
+    vm = await _load_vm(session, vm_id)
+    name = vm.name
+    try:
+        await vms_service.delete(session, vm)
+    except vms_service.VMError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    # Record after the VM row is gone — the audit log keeps its own copy of the id.
+    await audit.record(
+        session,
+        actor_type=principal.actor_type,
+        actor_id=principal.actor_id,
+        event_type="vm_deleted",
+        vm_id=vm_id,
+        detail={"name": name},
+        source_ip=client_ip(request),
+    )

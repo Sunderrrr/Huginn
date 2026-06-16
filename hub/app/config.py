@@ -55,6 +55,8 @@ class Settings(BaseSettings):
 
     # OIDC / Authentik
     oidc_enabled: bool = False
+    # Label shown on the login button ("Continue with <name>").
+    oidc_provider_name: str = "SSO"
     oidc_issuer: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = ""

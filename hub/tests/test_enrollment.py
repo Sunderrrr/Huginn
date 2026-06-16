@@ -141,3 +141,31 @@ async def test_revoke_vm_clears_secret(client, admin_headers, session) -> None:
     vm = await session.get(VM, _uuid.UUID(vm_id))
     await session.refresh(vm)
     assert vm.worker_secret_hash is None
+
+
+async def test_delete_revoked_vm(client, admin_headers) -> None:
+    token = await _create_token(client, admin_headers)
+    enroll = await client.post(
+        "/api/worker/enroll", json={"token": token, "name": "vm-del", "arch": "amd64"}
+    )
+    vm_id = enroll.json()["worker_id"]
+    await client.post(f"/api/vms/{vm_id}/approve", headers=admin_headers)
+    await client.post(f"/api/vms/{vm_id}/revoke", headers=admin_headers)
+
+    resp = await client.delete(f"/api/vms/{vm_id}", headers=admin_headers)
+    assert resp.status_code == 204
+    # The VM is gone for good.
+    assert (await client.get(f"/api/vms/{vm_id}", headers=admin_headers)).status_code == 404
+
+
+async def test_cannot_delete_active_vm(client, admin_headers) -> None:
+    token = await _create_token(client, admin_headers)
+    enroll = await client.post(
+        "/api/worker/enroll", json={"token": token, "name": "vm-live", "arch": "amd64"}
+    )
+    vm_id = enroll.json()["worker_id"]
+    await client.post(f"/api/vms/{vm_id}/approve", headers=admin_headers)
+
+    resp = await client.delete(f"/api/vms/{vm_id}", headers=admin_headers)
+    assert resp.status_code == 409  # must be revoked first
+    assert (await client.get(f"/api/vms/{vm_id}", headers=admin_headers)).status_code == 200

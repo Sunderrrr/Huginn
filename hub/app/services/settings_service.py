@@ -31,6 +31,7 @@ async def ensure_settings(session: AsyncSession, app_settings: AppSettings) -> S
             mcp_client_token=app_settings.mcp_client_token or secrets.token_hex(32),
             # SSO / OIDC
             oidc_enabled=app_settings.oidc_enabled,
+            oidc_provider_name=app_settings.oidc_provider_name,
             oidc_issuer=app_settings.oidc_issuer,
             oidc_client_id=app_settings.oidc_client_id,
             oidc_client_secret=app_settings.oidc_client_secret or None,

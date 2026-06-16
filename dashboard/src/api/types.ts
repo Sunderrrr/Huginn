@@ -156,12 +156,18 @@ export interface Settings {
   auto_update_enabled: boolean;
   updated_at: string;
   // SSO / OIDC / LDAP / notifications fields are admin-only and optional here.
+  oidc_provider_name?: string;
   notifications_enabled?: boolean;
   discord_webhook_url?: string | null;
   generic_webhook_url?: string | null;
   notify_vm_offline?: boolean;
   notify_vm_recovered?: boolean;
   notify_task_failure?: boolean;
+}
+
+export interface AuthConfig {
+  oidc_enabled: boolean;
+  oidc_provider_name: string;
 }
 
 export interface McpTokenResponse {

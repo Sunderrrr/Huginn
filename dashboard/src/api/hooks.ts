@@ -6,6 +6,7 @@ import {
 import { api } from "./client";
 import type {
   AuditEntry,
+  AuthConfig,
   EnrollmentToken,
   EnrollmentTokenCreated,
   ExecMode,
@@ -23,6 +24,15 @@ import type {
   UserUpdate,
   VM,
 } from "./types";
+
+export function useAuthConfig() {
+  return useQuery({
+    queryKey: ["auth-config"],
+    queryFn: () => api.get<AuthConfig>("/api/auth/config"),
+    staleTime: 300_000,
+    retry: false,
+  });
+}
 
 export function useMe() {
   return useQuery({
@@ -109,6 +119,14 @@ export function useRevokeVm() {
   return useMutation({
     mutationFn: (vars: { id: string; uninstall?: boolean }) =>
       api.post<VM>(`/api/vms/${vars.id}/revoke`, { uninstall: vars.uninstall ?? false }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteVm() {
+  const invalidate = useInvalidate(["vms", "vm", "audit"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/vms/${id}`),
     onSuccess: invalidate,
   });
 }

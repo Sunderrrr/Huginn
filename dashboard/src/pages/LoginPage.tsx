@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
+import { useAuthConfig } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 import { useToast } from "../components/Toast";
 
@@ -9,6 +10,7 @@ export function LoginPage() {
   const { login, oidcLogin } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
+  const { data: authConfig } = useAuthConfig();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -111,21 +113,25 @@ export function LoginPage() {
           </motion.button>
         </form>
 
-        <motion.div {...stagger(5)} className="row" style={{ margin: "22px 0 18px" }}>
-          <div style={{ flex: 1, height: 1, background: "var(--line)" }} />
-          <span className="eyebrow">or</span>
-          <div style={{ flex: 1, height: 1, background: "var(--line)" }} />
-        </motion.div>
+        {authConfig?.oidc_enabled && (
+          <>
+            <motion.div {...stagger(5)} className="row" style={{ margin: "22px 0 18px" }}>
+              <div style={{ flex: 1, height: 1, background: "var(--line)" }} />
+              <span className="eyebrow">or</span>
+              <div style={{ flex: 1, height: 1, background: "var(--line)" }} />
+            </motion.div>
 
-        <motion.button
-          {...stagger(6)}
-          type="button"
-          className="btn"
-          style={{ width: "100%", justifyContent: "center" }}
-          onClick={oidc}
-        >
-          Continue with Authentik
-        </motion.button>
+            <motion.button
+              {...stagger(6)}
+              type="button"
+              className="btn"
+              style={{ width: "100%", justifyContent: "center" }}
+              onClick={oidc}
+            >
+              Continue with {authConfig.oidc_provider_name || "SSO"}
+            </motion.button>
+          </>
+        )}
       </motion.div>
     </div>
   );

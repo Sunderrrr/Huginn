@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import ExecMode, VMState
 from app.models.mixins import utcnow
+from app.models.scheduled_command import ScheduledCommand
+from app.models.tag import VMTag
+from app.models.task import Task
+from app.models.user_vm_access import UserVMAccess
 from app.models.vm import VM
 
 
@@ -70,3 +75,25 @@ async def revoke(session: AsyncSession, vm: VM) -> VM:
     # Invalidate the worker's credential so it can no longer authenticate.
     vm.worker_secret_hash = None
     return vm
+
+
+async def delete(session: AsyncSession, vm: VM) -> None:
+    """Permanently remove a revoked VM and everything that references it.
+
+    Only revoked VMs can be deleted — this is the final step after the worker's
+    credential has already been invalidated. The audit log is intentionally left
+    untouched: it is an immutable, tamper-evident record, so the VM's history
+    survives the deletion even though the VM row itself is gone.
+    """
+    if vm.state is not VMState.revoked:
+        raise VMError("only revoked VMs can be deleted")
+    # Clear dependent rows explicitly so the delete works on any dialect
+    # (SQLite doesn't enforce ON DELETE CASCADE by default) and so tasks /
+    # schedules — which carry no FK to vms — don't dangle.
+    await session.execute(sa_delete(Task).where(Task.vm_id == vm.id))
+    await session.execute(sa_delete(VMTag).where(VMTag.vm_id == vm.id))
+    await session.execute(sa_delete(UserVMAccess).where(UserVMAccess.vm_id == vm.id))
+    await session.execute(
+        sa_delete(ScheduledCommand).where(ScheduledCommand.target_vm_id == vm.id)
+    )
+    await session.delete(vm)

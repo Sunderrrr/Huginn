@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
@@ -32,6 +33,19 @@ _OIDC_STATE_COOKIE = "huginn_oidc_state"
 
 # Per-IP brute-force guard on login (5 attempts/minute).
 _login_limiter = RateLimiter(5)
+
+
+@router.get("/config")
+async def auth_config(session: AsyncSession = Depends(get_session)) -> dict:
+    """Public, unauthenticated: what the login page needs to render itself.
+
+    Tells the SPA whether the SSO button should appear and what to label it.
+    No secrets here — just the enabled flag and the display name.
+    """
+    row = await settings_service.get_settings_row(session)
+    enabled = bool(row and row.oidc_enabled and row.oidc_issuer and row.oidc_client_id)
+    name = (row.oidc_provider_name if row else "") or "SSO"
+    return {"oidc_enabled": enabled, "oidc_provider_name": name}
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -120,12 +134,23 @@ async def logout(
     )
 
 
+async def _oidc_source(session: AsyncSession, settings: Settings) -> Any:
+    """Prefer the admin-configured DB settings row; fall back to env config.
+
+    The DB row and the env Settings expose the same OIDC attribute names, so
+    OIDCClient works structurally with either.
+    """
+    row = await settings_service.get_settings_row(session)
+    return row if (row and row.oidc_enabled) else settings
+
+
 @router.get("/oidc/login", response_model=OIDCStartResponse)
 async def oidc_login(
     response: Response,
+    session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> OIDCStartResponse:
-    client = OIDCClient(settings)
+    client = OIDCClient(await _oidc_source(session, settings))
     if not client.enabled:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "OIDC is not enabled")
     state = client.new_state()
@@ -155,7 +180,8 @@ async def oidc_callback(
     if not cookie_state or not security.constant_time_equals(cookie_state, state):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid OIDC state")
 
-    client = OIDCClient(settings)
+    source = await _oidc_source(session, settings)
+    client = OIDCClient(source)
     try:
         claims = await client.exchange_code(code)
     except OIDCError as exc:
@@ -179,9 +205,10 @@ async def oidc_callback(
     token = users_service.issue_token(user)
     # If a SPA dashboard URL is configured, hand the token back via the URL
     # fragment (never logged by servers/proxies) and redirect the browser there.
-    if settings.oidc_post_login_redirect:
+    post_login_redirect = source.oidc_post_login_redirect or settings.oidc_post_login_redirect
+    if post_login_redirect:
         redirect = RedirectResponse(
-            url=f"{settings.oidc_post_login_redirect}#access_token={token}",
+            url=f"{post_login_redirect}#access_token={token}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
         redirect.delete_cookie(_OIDC_STATE_COOKIE)

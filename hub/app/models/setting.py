@@ -31,6 +31,10 @@ class Setting(Base):
 
     # SSO / OIDC settings (admin-configurable from dashboard)
     oidc_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Display name for the SSO button on the login page ("Continue with <name>").
+    oidc_provider_name: Mapped[str] = mapped_column(
+        String(64), default="SSO", nullable=False
+    )
     oidc_issuer: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     oidc_client_id: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     oidc_client_secret: Mapped[str | None] = mapped_column(String(512), nullable=True)

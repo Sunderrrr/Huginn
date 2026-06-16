@@ -84,3 +84,28 @@ def test_jwt_roundtrip_carries_role() -> None:
     claims = decode_access_token(token)
     assert claims["sub"] == str(uid)
     assert claims["role"] == "admin"
+
+
+async def test_auth_config_default_sso_disabled(client) -> None:
+    """Public config endpoint: no auth required, OIDC off by default."""
+    resp = await client.get("/api/auth/config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["oidc_enabled"] is False
+    assert body["oidc_provider_name"]  # always a non-empty label
+
+
+async def test_auth_config_reflects_enabled_oidc(client, admin_headers) -> None:
+    await client.put(
+        "/api/settings",
+        json={
+            "oidc_enabled": True,
+            "oidc_provider_name": "Authentik",
+            "oidc_issuer": "https://idp.example.com",
+            "oidc_client_id": "huginn",
+        },
+        headers=admin_headers,
+    )
+    body = (await client.get("/api/auth/config")).json()
+    assert body["oidc_enabled"] is True
+    assert body["oidc_provider_name"] == "Authentik"

@@ -18,6 +18,7 @@ class SettingsOut(BaseModel):
 
     # SSO / OIDC
     oidc_enabled: bool
+    oidc_provider_name: str
     oidc_issuer: str
     oidc_client_id: str
     oidc_redirect_url: str
@@ -49,6 +50,7 @@ class SettingsUpdate(BaseModel):
 
     # SSO / OIDC
     oidc_enabled: bool | None = None
+    oidc_provider_name: str | None = Field(default=None, max_length=64)
     oidc_issuer: str | None = Field(default=None, max_length=512)
     oidc_client_id: str | None = Field(default=None, max_length=255)
     oidc_client_secret: str | None = Field(default=None, max_length=512)

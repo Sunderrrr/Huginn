@@ -1,8 +1,9 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   useAudit,
+  useDeleteVm,
   useRevokeVm,
   useRunAction,
   useRunCommand,
@@ -63,6 +64,8 @@ export function VMDetailPage() {
   const setMode = useSetExecMode();
   const triggerUpdate = useTriggerUpdate();
   const revoke = useRevokeVm();
+  const del = useDeleteVm();
+  const navigate = useNavigate();
   const { data: allTags } = useTags();
   const setVmTags = useSetVmTags();
 
@@ -73,6 +76,7 @@ export function VMDetailPage() {
   const [confirmMode, setConfirmMode] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [uninstallBeforeRevoke, setUninstallBeforeRevoke] = useState(true);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   if (isLoading || !vm) {
     return (
@@ -138,6 +142,17 @@ export function VMDetailPage() {
     }
   }
 
+  async function doDelete() {
+    setConfirmDelete(false);
+    try {
+      await del.mutateAsync(id);
+      toast("ok", "VM deleted");
+      navigate("/fleet");
+    } catch (e: any) {
+      toast("err", e?.message ?? "delete failed");
+    }
+  }
+
   return (
     <div>
       <Link to="/fleet" className="eyebrow" style={{ display: "inline-block", marginBottom: 14 }}>
@@ -155,6 +170,11 @@ export function VMDetailPage() {
         {isAdmin && vm.state !== "revoked" && (
           <button className="btn btn--danger btn--sm" onClick={() => setConfirmRevoke(true)}>
             Revoke node
+          </button>
+        )}
+        {isAdmin && vm.state === "revoked" && (
+          <button className="btn btn--danger btn--sm" onClick={() => setConfirmDelete(true)}>
+            Delete permanently
           </button>
         )}
       </div>
@@ -417,6 +437,24 @@ export function VMDetailPage() {
             </button>
             <button className="btn btn--danger" onClick={doRevoke} disabled={revoke.isPending}>
               {revoke.isPending ? <span className="spin" /> : "Revoke node"}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Confirm: permanent delete */}
+      <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete node permanently">
+        <div className="stack" style={{ gap: 16 }}>
+          <p>
+            Permanently delete <strong>{vm.name}</strong> and all of its tasks, tags and access
+            grants. The audit history is kept. This cannot be undone.
+          </p>
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <button className="btn btn--ghost" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </button>
+            <button className="btn btn--danger" onClick={doDelete} disabled={del.isPending}>
+              {del.isPending ? <span className="spin" /> : "Delete permanently"}
             </button>
           </div>
         </div>
