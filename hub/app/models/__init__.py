@@ -11,9 +11,12 @@ from app.models.enums import (
     VMState,
     WorkerArch,
 )
+from app.models.scheduled_command import ScheduledCommand
 from app.models.setting import Setting
+from app.models.tag import Tag, VMTag
 from app.models.task import Task
 from app.models.user import User
+from app.models.user_vm_access import UserVMAccess
 from app.models.vm import VM
 
 __all__ = [
@@ -21,13 +24,17 @@ __all__ = [
     "AuditLog",
     "EnrollmentToken",
     "ExecMode",
+    "ScheduledCommand",
     "Setting",
+    "Tag",
     "Task",
     "TaskStatus",
     "TaskType",
     "User",
     "UserRole",
+    "UserVMAccess",
     "VM",
     "VMState",
+    "VMTag",
     "WorkerArch",
 ]

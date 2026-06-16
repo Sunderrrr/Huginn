@@ -24,10 +24,12 @@ async def list_vms(
     session: AsyncSession,
     state: VMState | None = None,
     allowed_vm_ids: list[uuid.UUID] | None = None,
+    tag_ids: list[uuid.UUID] | None = None,
 ) -> list[VM]:
     """List VMs. When ``allowed_vm_ids`` is provided, restrict to those ids.
 
     ``None`` means unrestricted (admin/agent). An empty list returns nothing.
+    ``tag_ids`` further restricts to VMs carrying at least one of those tags.
     """
     stmt = select(VM).order_by(VM.created_at.desc())
     if state is not None:
@@ -36,6 +38,12 @@ async def list_vms(
         if not allowed_vm_ids:
             return []
         stmt = stmt.where(VM.id.in_(allowed_vm_ids))
+    if tag_ids:
+        from app.models.tag import VMTag
+
+        stmt = stmt.where(
+            VM.id.in_(select(VMTag.vm_id).where(VMTag.tag_id.in_(tag_ids)))
+        )
     result = await session.execute(stmt)
     return list(result.scalars().all())
 

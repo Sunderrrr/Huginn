@@ -10,6 +10,9 @@ import { AuditPage } from "./pages/AuditPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { UsersPage } from "./pages/UsersPage";
 import { AccessTokensPage } from "./pages/AccessTokensPage";
+import { TagsPage } from "./pages/TagsPage";
+import { SchedulesPage } from "./pages/SchedulesPage";
+import { HomePage } from "./pages/HomePage";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -36,16 +39,18 @@ export function App() {
           </Protected>
         }
       >
-        <Route path="/" element={<Navigate to="/fleet" replace />} />
+        <Route path="/" element={<HomePage />} />
         <Route path="/fleet" element={<FleetPage />} />
         <Route path="/vm/:id" element={<VMDetailPage />} />
         <Route path="/tokens" element={<TokensPage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/users" element={<UsersPage />} />
+        <Route path="/tags" element={<TagsPage />} />
+        <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/access-tokens" element={<AccessTokensPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/fleet" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

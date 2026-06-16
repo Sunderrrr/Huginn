@@ -55,7 +55,12 @@ async def session(session_factory) -> AsyncIterator[AsyncSession]:
 
 @pytest_asyncio.fixture
 async def client(engine, session_factory) -> AsyncIterator[AsyncClient]:
+    # Reset the per-IP login rate limiter so failed-login tests don't bleed into
+    # later tests that share the ASGITransport client IP.
+    from app.api.routes import auth as auth_routes
     from app.main import create_app
+
+    auth_routes._login_limiter._buckets.clear()
 
     app = create_app()
 

@@ -7,6 +7,7 @@ import logging
 
 from app.db import SessionFactory
 from app.services import notifications as notifications_service
+from app.services import scheduled_commands as schedules_service
 from app.services import settings_service
 from app.services import tasks as tasks_service
 
@@ -22,12 +23,14 @@ async def run_sweeper(stop: asyncio.Event) -> None:
             async with SessionFactory() as session:
                 timed_out = await tasks_service.sweep_timeouts(session)
                 gone_offline = await tasks_service.sweep_offline_vms(session)
+                scheduled = await schedules_service.run_due(session)
                 await session.commit()
-                if timed_out or gone_offline:
+                if timed_out or gone_offline or scheduled:
                     logger.info(
-                        "sweeper: %d task(s) swept, %d VM(s) offline",
+                        "sweeper: %d task(s) swept, %d VM(s) offline, %d scheduled task(s)",
                         timed_out,
                         len(gone_offline),
+                        scheduled,
                     )
                 # Fire offline notifications (best-effort, outside the txn).
                 if gone_offline:

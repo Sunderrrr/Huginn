@@ -1,4 +1,4 @@
-import type { ExecMode, TaskStatus, UserRole, VMState } from "../api/types";
+import type { ExecMode, Tag, TaskStatus, UserRole, VMState } from "../api/types";
 
 const STATE_CLASS: Record<VMState, string> = {
   active: "badge--active",
@@ -52,6 +52,43 @@ export function RoleBadge({ role }: { role: UserRole }) {
   return (
     <span className="badge" style={{ color: ROLE_COLOR[role], borderColor: ROLE_COLOR[role] }}>
       {role}
+    </span>
+  );
+}
+
+export function TagBadge({ tag, onRemove }: { tag: Tag; onRemove?: () => void }) {
+  return (
+    <span
+      className="badge"
+      style={{
+        color: tag.color,
+        borderColor: tag.color,
+        backgroundColor: `${tag.color}1a`,
+      }}
+    >
+      <span className="dot" style={{ background: tag.color }} />
+      {tag.name}
+      {onRemove && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          style={{
+            marginLeft: 4,
+            background: "none",
+            border: "none",
+            color: "inherit",
+            cursor: "pointer",
+            fontSize: 13,
+            lineHeight: 1,
+            padding: 0,
+          }}
+          aria-label={`remove ${tag.name}`}
+        >
+          ×
+        </button>
+      )}
     </span>
   );
 }

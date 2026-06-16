@@ -1,9 +1,9 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useApproveVm, useBulkRunAction, useSettings, useVms } from "../api/hooks";
+import { useApproveVm, useBulkRunAction, useSettings, useTags, useVms } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
-import { ModeBadge, StateBadge } from "../components/badges";
+import { ModeBadge, StateBadge, TagBadge } from "../components/badges";
 import { useToast } from "../components/Toast";
 import { timeAgo, shortId } from "../lib/format";
 import { ACTION_CATALOG, type VM } from "../api/types";
@@ -20,8 +20,9 @@ function VersionCell({ vm, target }: { vm: VM; target?: string }) {
 }
 
 export function FleetPage() {
-  const { data: vms, isLoading } = useVms();
+  const { data: allVms, isLoading } = useVms();
   const { data: settings } = useSettings();
+  const { data: tags } = useTags();
   const { user } = useAuth();
   const approve = useApproveVm();
   const bulkRun = useBulkRunAction();
@@ -34,10 +35,16 @@ export function FleetPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState("status");
   const [bulkParam, setBulkParam] = useState("");
+  const [filterTags, setFilterTags] = useState<Set<string>>(new Set());
+
+  // Apply the tag filter client-side.
+  const vms = (allVms ?? []).filter(
+    (v) => filterTags.size === 0 || v.tags.some((t) => filterTags.has(t.id))
+  );
 
   const spec = ACTION_CATALOG.find((a) => a.name === bulkAction);
   // Only VMs that can actually run actions are selectable.
-  const selectableVms = (vms ?? []).filter(
+  const selectableVms = vms.filter(
     (v) => v.state === "active" || v.state === "offline"
   );
   const allSelected = selectableVms.length > 0 && selectableVms.every((v) => selected.has(v.id));
@@ -91,6 +98,40 @@ export function FleetPage() {
         </div>
         <div className="muted tiny">target worker · {settings?.target_worker_version ?? "…"}</div>
       </div>
+
+      {/* Tag filter */}
+      {tags && tags.length > 0 && (
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
+          <span className="eyebrow">filter</span>
+          {tags.map((t) => {
+            const on = filterTags.has(t.id);
+            return (
+              <button
+                key={t.id}
+                onClick={() =>
+                  setFilterTags((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(t.id)) next.delete(t.id);
+                    else next.add(t.id);
+                    return next;
+                  })
+                }
+                style={{
+                  background: "none", border: "none", padding: 0, cursor: "pointer",
+                  opacity: filterTags.size === 0 || on ? 1 : 0.4,
+                }}
+              >
+                <TagBadge tag={t} />
+              </button>
+            );
+          })}
+          {filterTags.size > 0 && (
+            <button className="btn btn--ghost btn--sm" onClick={() => setFilterTags(new Set())}>
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Bulk action bar */}
       {canExecute && selected.size > 0 && (
@@ -151,13 +192,14 @@ export function FleetPage() {
               <th>Node</th>
               <th>State</th>
               <th>Mode</th>
+              <th>Tags</th>
               <th>Worker</th>
               <th>Heartbeat</th>
               <th style={{ textAlign: "right" }}>—</th>
             </tr>
           </thead>
           <tbody>
-            {vms?.map((vm, i) => {
+            {vms.map((vm, i) => {
               const selectable = vm.state === "active" || vm.state === "offline";
               return (
                 <motion.tr
@@ -193,6 +235,15 @@ export function FleetPage() {
                     <ModeBadge mode={vm.exec_mode} />
                   </td>
                   <td>
+                    {vm.tags.length > 0 ? (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {vm.tags.map((t) => <TagBadge key={t.id} tag={t} />)}
+                      </div>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td>
                     <VersionCell vm={vm} target={settings?.target_worker_version} />
                   </td>
                   <td className="muted">{timeAgo(vm.last_heartbeat_at)}</td>
@@ -216,7 +267,7 @@ export function FleetPage() {
             <span className="spin" />
           </div>
         )}
-        {!isLoading && vms?.length === 0 && (
+        {!isLoading && vms.length === 0 && (
           <div style={{ padding: 48, textAlign: "center" }} className="muted">
             <div className="display" style={{ fontSize: 18, marginBottom: 6 }}>
               No nodes enrolled
