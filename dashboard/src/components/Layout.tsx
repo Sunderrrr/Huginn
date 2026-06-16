@@ -50,6 +50,7 @@ function Telemetry() {
 }
 
 const NAV = [
+  { to: "/", label: "Home" },
   { to: "/fleet", label: "Fleet" },
   { to: "/tokens", label: "VM Tokens" },
   { to: "/access-tokens", label: "MCP Token" },
@@ -59,6 +60,8 @@ const NAV = [
 
 const ADMIN_NAV = [
   { to: "/users", label: "Users" },
+  { to: "/tags", label: "Tags" },
+  { to: "/schedules", label: "Schedules" },
 ];
 
 function roleColor(role: string | undefined): string {
@@ -126,6 +129,7 @@ export function Layout() {
               <NavLink
                 key={n.to}
                 to={n.to}
+                end={n.to === "/"}
                 className="display"
                 style={({ isActive }) => ({
                   fontSize: 13,

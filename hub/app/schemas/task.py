@@ -20,7 +20,9 @@ class ActionRequest(BaseModel):
 
 
 class BulkActionRequest(BaseModel):
-    vm_ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+    # Target by explicit VM ids and/or by tag (union of both, deduplicated).
+    vm_ids: list[uuid.UUID] = Field(default_factory=list, max_length=500)
+    tag_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
     action: str = Field(max_length=64)
     params: dict[str, str] = Field(default_factory=dict)
 

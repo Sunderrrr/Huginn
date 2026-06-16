@@ -7,13 +7,15 @@ import {
   useRunAction,
   useRunCommand,
   useSetExecMode,
+  useSetVmTags,
   useSettings,
+  useTags,
   useTriggerUpdate,
   useVm,
 } from "../api/hooks";
 import { ACTION_CATALOG, type Task } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
-import { ModeBadge, StateBadge, TaskStatusTag } from "../components/badges";
+import { ModeBadge, StateBadge, TagBadge, TaskStatusTag } from "../components/badges";
 import { Modal } from "../components/Dialog";
 import { useToast } from "../components/Toast";
 import { fmtTime, timeAgo } from "../lib/format";
@@ -61,6 +63,8 @@ export function VMDetailPage() {
   const setMode = useSetExecMode();
   const triggerUpdate = useTriggerUpdate();
   const revoke = useRevokeVm();
+  const { data: allTags } = useTags();
+  const setVmTags = useSetVmTags();
 
   const [action, setAction] = useState("status");
   const [serviceParam, setServiceParam] = useState("");
@@ -204,6 +208,49 @@ export function VMDetailPage() {
                 )}
               </div>
             )}
+
+            {/* Tags */}
+            <div style={{ marginTop: 18, paddingTop: 18, borderTop: "1px solid var(--line)" }}>
+              <div className="eyebrow" style={{ marginBottom: 8 }}>tags</div>
+              <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                {vm.tags.length === 0 && <span className="muted tiny">no tags</span>}
+                {vm.tags.map((t) => (
+                  <TagBadge
+                    key={t.id}
+                    tag={t}
+                    onRemove={
+                      isAdmin
+                        ? () => {
+                            const next = vm.tags.filter((x) => x.id !== t.id).map((x) => x.id);
+                            setVmTags.mutate({ id: vm.id, tag_ids: next });
+                          }
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
+              {isAdmin && allTags && allTags.some((t) => !vm.tags.find((x) => x.id === t.id)) && (
+                <select
+                  className="field"
+                  style={{ maxWidth: 220, marginTop: 10 }}
+                  value=""
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    setVmTags.mutate({
+                      id: vm.id,
+                      tag_ids: [...vm.tags.map((x) => x.id), e.target.value],
+                    });
+                  }}
+                >
+                  <option value="">+ add tag…</option>
+                  {allTags
+                    .filter((t) => !vm.tags.find((x) => x.id === t.id))
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                </select>
+              )}
+            </div>
           </motion.div>
 
           {/* Actions */}

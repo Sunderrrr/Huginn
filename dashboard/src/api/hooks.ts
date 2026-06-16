@@ -11,7 +11,12 @@ import type {
   ExecMode,
   McpTokenResponse,
   PasswordChange,
+  Schedule,
+  ScheduleCreate,
   Settings,
+  Tag,
+  TagCreate,
+  TagUpdate,
   Task,
   User,
   UserCreate,
@@ -140,9 +145,15 @@ export interface BulkActionResult {
 export function useBulkRunAction() {
   const invalidate = useInvalidate(["audit"]);
   return useMutation({
-    mutationFn: (vars: { vm_ids: string[]; action: string; params?: Record<string, string> }) =>
+    mutationFn: (vars: {
+      vm_ids?: string[];
+      tag_ids?: string[];
+      action: string;
+      params?: Record<string, string>;
+    }) =>
       api.post<BulkActionResult[]>(`/api/vms/bulk/actions`, {
-        vm_ids: vars.vm_ids,
+        vm_ids: vars.vm_ids ?? [],
+        tag_ids: vars.tag_ids ?? [],
         action: vars.action,
         params: vars.params ?? {},
       }),
@@ -244,6 +255,88 @@ export function useRegenerateMcpToken() {
   const invalidate = useInvalidate(["mcp-token"]);
   return useMutation({
     mutationFn: () => api.put<McpTokenResponse>("/api/settings/mcp-token"),
+    onSuccess: invalidate,
+  });
+}
+
+// --- Tags ---
+
+export function useTags() {
+  return useQuery({
+    queryKey: ["tags"],
+    queryFn: () => api.get<Tag[]>("/api/tags"),
+  });
+}
+
+export function useCreateTag() {
+  const invalidate = useInvalidate(["tags"]);
+  return useMutation({
+    mutationFn: (vars: TagCreate) => api.post<Tag>("/api/tags", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateTag() {
+  const invalidate = useInvalidate(["tags", "vms"]);
+  return useMutation({
+    mutationFn: (vars: { id: string } & TagUpdate) =>
+      api.put<Tag>(`/api/tags/${vars.id}`, { name: vars.name, color: vars.color }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteTag() {
+  const invalidate = useInvalidate(["tags", "vms"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/tags/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetVmTags() {
+  const invalidate = useInvalidate(["vms", "vm"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; tag_ids: string[] }) =>
+      api.put<VM>(`/api/vms/${vars.id}/tags`, { tag_ids: vars.tag_ids }),
+    onSuccess: invalidate,
+  });
+}
+
+// --- Scheduled commands ---
+
+export function useSchedules(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["schedules"],
+    queryFn: () => api.get<Schedule[]>("/api/schedules"),
+    enabled: opts?.enabled ?? true,
+  });
+}
+
+export function useCreateSchedule() {
+  const invalidate = useInvalidate(["schedules"]);
+  return useMutation({
+    mutationFn: (vars: ScheduleCreate) => api.post<Schedule>("/api/schedules", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateSchedule() {
+  const invalidate = useInvalidate(["schedules"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; name?: string; enabled?: boolean; cron_expression?: string }) =>
+      api.put<Schedule>(`/api/schedules/${vars.id}`, {
+        name: vars.name,
+        enabled: vars.enabled,
+        cron_expression: vars.cron_expression,
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteSchedule() {
+  const invalidate = useInvalidate(["schedules"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/schedules/${id}`),
     onSuccess: invalidate,
   });
 }

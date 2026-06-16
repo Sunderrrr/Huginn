@@ -97,6 +97,8 @@ def create_app() -> FastAPI:
         auth,
         enrollment,
         execution,
+        schedules,
+        tags,
         tasks,
         users,
         vms,
@@ -109,6 +111,8 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(enrollment.router)
     app.include_router(users.router)
+    app.include_router(tags.router)
+    app.include_router(schedules.router)
     app.include_router(vms.router)
     app.include_router(execution.router)
     app.include_router(tasks.router)

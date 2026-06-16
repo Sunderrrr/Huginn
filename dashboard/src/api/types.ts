@@ -39,6 +39,56 @@ export interface PasswordChange {
   new_password: string;
 }
 
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
+export interface TagCreate {
+  name: string;
+  color: string;
+}
+
+export interface TagUpdate {
+  name?: string;
+  color?: string;
+}
+
+export type ScheduleTargetKind = "vm" | "tag" | "all_active";
+export type ScheduleTaskKind = "action" | "command";
+
+export interface Schedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  target_kind: ScheduleTargetKind;
+  target_vm_id: string | null;
+  target_tag_id: string | null;
+  task_kind: ScheduleTaskKind;
+  action_name: string | null;
+  params: Record<string, string>;
+  command: string | null;
+  cron_expression: string;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  created_at: string;
+}
+
+export interface ScheduleCreate {
+  name: string;
+  enabled?: boolean;
+  target_kind: ScheduleTargetKind;
+  target_vm_id?: string | null;
+  target_tag_id?: string | null;
+  task_kind: ScheduleTaskKind;
+  action_name?: string | null;
+  params?: Record<string, string>;
+  command?: string | null;
+  cron_expression: string;
+}
+
 export interface VM {
   id: string;
   name: string;
@@ -52,6 +102,7 @@ export interface VM {
   enrolled_at: string | null;
   approved_at: string | null;
   created_at: string;
+  tags: Tag[];
 }
 
 export interface Task {

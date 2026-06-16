@@ -8,6 +8,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.models.enums import ExecMode, VMState, WorkerArch
+from app.schemas.tag import TagOut
 
 
 class VMOut(BaseModel):
@@ -25,6 +26,7 @@ class VMOut(BaseModel):
     enrolled_at: datetime | None
     approved_at: datetime | None
     created_at: datetime
+    tags: list[TagOut] = []
 
 
 class ExecModeUpdate(BaseModel):

@@ -34,6 +34,7 @@ from app.schemas.task import (
     TaskOut,
 )
 from app.services import settings_service
+from app.services import tags as tags_service
 from app.services import tasks as tasks_service
 from app.services import vms as vms_service
 from app.services.versioning import SSRFError
@@ -86,13 +87,25 @@ async def run_bulk_action(
 ) -> list[BulkActionResult]:
     """Queue the same whitelisted action on multiple VMs (async, no wait).
 
+    Targets are the union of ``vm_ids`` and the VMs carrying any of ``tag_ids``.
     VMs the caller cannot access are silently skipped (access filtered).
     """
     allowed = await accessible_vm_ids(session, principal)
     allowed_set = set(allowed) if allowed is not None else None
 
+    # Resolve tag targets and merge with explicit VM ids (preserve order, dedup).
+    target_ids = list(body.vm_ids)
+    if body.tag_ids:
+        target_ids += await tags_service.vm_ids_for_tags(session, body.tag_ids)
+    seen: set[uuid.UUID] = set()
+    ordered_ids: list[uuid.UUID] = []
+    for i in target_ids:
+        if i not in seen:
+            seen.add(i)
+            ordered_ids.append(i)
+
     results: list[BulkActionResult] = []
-    for vm_id in body.vm_ids:
+    for vm_id in ordered_ids:
         if allowed_set is not None and vm_id not in allowed_set:
             results.append(BulkActionResult(vm_id=vm_id, status="error", error="access denied"))
             continue

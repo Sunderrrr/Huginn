@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +20,9 @@ from app.core import audit
 from app.core.principal import Principal
 from app.db import get_session
 from app.models.enums import ExecMode, VMState
+from app.schemas.tag import TagOut, VMTagsUpdate
 from app.schemas.vm import ExecModeUpdate, VMOut
+from app.services import tags as tags_service
 from app.services import tasks as tasks_service
 from app.services import vms as vms_service
 
@@ -34,6 +36,11 @@ async def _load_vm(session: AsyncSession, vm_id: uuid.UUID):  # type: ignore[no-
     return vm
 
 
+def _vm_out(vm, tags) -> VMOut:  # type: ignore[no-untyped-def]
+    out = VMOut.model_validate(vm)
+    return out.model_copy(update={"tags": [TagOut.model_validate(t) for t in tags]})
+
+
 class RevokeRequest(BaseModel):
     uninstall: bool = False
 
@@ -41,12 +48,16 @@ class RevokeRequest(BaseModel):
 @router.get("", response_model=list[VMOut])
 async def list_vms(
     state: VMState | None = None,
+    tag_id: list[uuid.UUID] = Query(default=[]),
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> list[VMOut]:
     allowed = await accessible_vm_ids(session, principal)
-    vms = await vms_service.list_vms(session, state, allowed_vm_ids=allowed)
-    return [VMOut.model_validate(v) for v in vms]
+    vms = await vms_service.list_vms(
+        session, state, allowed_vm_ids=allowed, tag_ids=tag_id or None
+    )
+    tag_map = await tags_service.load_tags_for_vms(session, [v.id for v in vms])
+    return [_vm_out(v, tag_map.get(v.id, [])) for v in vms]
 
 
 @router.get("/{vm_id}", response_model=VMOut)
@@ -58,7 +69,32 @@ async def get_vm(
     if not await principal_can_access_vm(session, principal, vm_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "access to this VM denied")
     vm = await _load_vm(session, vm_id)
-    return VMOut.model_validate(vm)
+    tag_map = await tags_service.load_tags_for_vms(session, [vm.id])
+    return _vm_out(vm, tag_map.get(vm.id, []))
+
+
+@router.put("/{vm_id}/tags", response_model=VMOut)
+async def set_vm_tags(
+    vm_id: uuid.UUID,
+    body: VMTagsUpdate,
+    request: Request,
+    principal: Principal = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> VMOut:
+    vm = await _load_vm(session, vm_id)
+    await tags_service.set_vm_tags(session, vm.id, body.tag_ids)
+    await audit.record(
+        session,
+        actor_type=principal.actor_type,
+        actor_id=principal.actor_id,
+        event_type="vm_tags_set",
+        vm_id=vm.id,
+        detail={"tag_count": len(body.tag_ids)},
+        source_ip=client_ip(request),
+    )
+    await session.commit()
+    tag_map = await tags_service.load_tags_for_vms(session, [vm.id])
+    return _vm_out(vm, tag_map.get(vm.id, []))
 
 
 @router.post("/{vm_id}/approve", response_model=VMOut)
