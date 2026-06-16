@@ -11,6 +11,7 @@ from app.api.deps import client_ip, get_principal, require_admin
 from app.core import audit
 from app.core.principal import Principal
 from app.db import get_session
+from app.models.enums import ActorType
 from app.schemas.setting import SettingsOut, SettingsUpdate
 from app.services import settings_service
 from app.services.versioning import SSRFError, validate_release_domain
@@ -79,10 +80,17 @@ async def update_settings_endpoint(
 
 @router.get("/mcp-token")
 async def get_mcp_token(
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, str]:
-    """Return the current MCP client token (masked)."""
+    """Return the current MCP client token (full value).
+
+    Allowed for admins (dashboard "MCP Token" page) and for the MCP agent itself,
+    which authenticates with the service token and needs the client token to
+    validate incoming agent requests. Read-only/operator users are rejected.
+    """
+    if not (principal.is_admin or principal.actor_type is ActorType.agent):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required")
     row = await settings_service.get_settings_row(session)
     if row is None or not row.mcp_client_token:
         return {"token": "", "masked": "(not set)"}

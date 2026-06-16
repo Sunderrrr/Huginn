@@ -93,3 +93,14 @@ def test_validate_for_prod_accepts_strong_secrets() -> None:
 
 def test_validate_for_prod_noop_in_dev() -> None:
     Settings(env="dev").validate_for_prod()  # placeholders allowed in dev
+
+
+async def test_agent_can_fetch_mcp_token(client) -> None:
+    resp = await client.get("/api/settings/mcp-token", headers=_agent_headers())
+    assert resp.status_code == 200
+    assert resp.json()["token"]  # full token returned to the agent
+
+
+async def test_readonly_cannot_fetch_mcp_token(client, readonly_headers) -> None:
+    resp = await client.get("/api/settings/mcp-token", headers=readonly_headers)
+    assert resp.status_code == 403
