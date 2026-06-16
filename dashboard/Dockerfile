@@ -5,7 +5,9 @@ COPY package.json package-lock.json* ./
 RUN npm install
 COPY . .
 # The hub base URL is baked in at build time.
-ARG VITE_HUB_URL=http://localhost:8000
+# Empty default = same-origin (relative /api calls), which the prod reverse
+# proxy expects; override only if the hub lives on a different origin.
+ARG VITE_HUB_URL=""
 ENV VITE_HUB_URL=$VITE_HUB_URL
 RUN npm run build
 

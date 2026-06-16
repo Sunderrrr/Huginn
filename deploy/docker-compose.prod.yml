@@ -86,8 +86,10 @@ services:
     build:
       context: ../dashboard
       args:
-        # Same origin as the dashboard — the browser calls /api on this host.
-        VITE_HUB_URL: https://${HUGINN_DOMAIN}
+        # Empty → the SPA calls /api relative to whatever origin it's served
+        # from. This is reverse-proxy/SSO-agnostic: works on the LAN IP and on a
+        # public domain (e.g. behind an Authentik forward-auth) without rebuild.
+        VITE_HUB_URL: ""
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

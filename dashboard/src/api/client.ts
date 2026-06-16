@@ -1,9 +1,14 @@
 // Minimal typed fetch wrapper around the hub REST API. The bearer token is held
 // in module state and injected on every request.
 
+// In production the SPA is served behind the same reverse proxy that routes
+// /api and /mcp, so default to same-origin (relative) requests — that works no
+// matter which hostname or upstream proxy (e.g. an SSO forward-auth) the
+// dashboard is reached through, and stays within the CSP `connect-src 'self'`.
+// Only fall back to the local hub in dev, where vite serves on another port.
+const RAW = (import.meta.env.VITE_HUB_URL as string | undefined)?.replace(/\/$/, "");
 const HUB_URL: string =
-  (import.meta.env.VITE_HUB_URL as string | undefined)?.replace(/\/$/, "") ??
-  "http://localhost:8000";
+  RAW !== undefined && RAW !== "" ? RAW : import.meta.env.DEV ? "http://localhost:8000" : "";
 
 const TOKEN_KEY = "huginn.token";
 
