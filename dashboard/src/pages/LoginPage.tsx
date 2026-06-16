@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { useAuthConfig } from "../api/hooks";
@@ -7,13 +7,19 @@ import { useAuth } from "../auth/AuthContext";
 import { useToast } from "../components/Toast";
 
 export function LoginPage() {
-  const { login, oidcLogin } = useAuth();
+  const { login, oidcLogin, user } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
   const { data: authConfig } = useAuthConfig();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // If a session already exists (e.g. the OIDC callback just dropped a token in
+  // the URL fragment, captured by the api client), leave the login screen.
+  useEffect(() => {
+    if (user) navigate("/", { replace: true });
+  }, [user, navigate]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

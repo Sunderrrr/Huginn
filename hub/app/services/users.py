@@ -57,14 +57,20 @@ async def upsert_oidc_user(
     """Find or create a user from OIDC claims."""
     user = await get_by_oidc_subject(session, subject)
     if user is None:
-        user = User(
-            username=username,
-            email=email,
-            oidc_subject=subject,
-            role=UserRole.readonly,
-            password_hash=None,
-        )
-        session.add(user)
+        # An existing local user with the same username adopts the OIDC subject,
+        # so SSO links to the existing account instead of colliding on username.
+        user = await get_by_username(session, username)
+        if user is None:
+            user = User(
+                username=username,
+                email=email,
+                oidc_subject=subject,
+                role=UserRole.readonly,
+                password_hash=None,
+            )
+            session.add(user)
+        else:
+            user.oidc_subject = subject
     user.last_login_at = utcnow()
     await session.flush()
     return user
