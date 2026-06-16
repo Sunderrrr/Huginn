@@ -40,7 +40,8 @@ external AI agent (e.g. "Hermes") without duplicating any business logic.
 - **MCP server** (`/mcp`) — a thin façade over the hub's REST API exposing tools
   for an external agent. No direct worker access, no duplicated logic.
 - **Dashboard** (`/dashboard`) — a React SPA (Vite + TypeScript) with a
-  distinctive "raven control-console" UI: local + OIDC login, fleet roster,
+  distinctive "raven control-console" UI: local + OIDC/SSO login (tested with
+  Authentik) + LDAP, fleet roster,
   per-node actions/updates/unrestricted shell, enrollment tokens, and the audit
   log with hash-chain verification.
 

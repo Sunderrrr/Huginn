@@ -1,7 +1,10 @@
-"""Minimal OIDC authorization-code flow for Authentik (or any compliant IdP).
+"""Minimal OIDC authorization-code flow.
 
 Discovery document and JWKS are fetched lazily and cached. The ID token is
 verified against the provider's JWKS before any claim is trusted.
+
+Built to the standard OIDC spec, so any compliant IdP should work — but this
+has only been tested end-to-end against Authentik.
 """
 
 from __future__ import annotations

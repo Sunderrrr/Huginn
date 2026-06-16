@@ -16,7 +16,10 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 ### Authentication & authorization
 - **Every** endpoint requires authentication. There is no unauthenticated
   execution path. (`hub/app/api/deps.py`)
-- Users authenticate via local Argon2id login or OIDC; JWTs carry the role.
+- Users authenticate via local Argon2id login, OIDC (SSO), or LDAP/LDAPS;
+  JWTs carry the role. The OIDC flow follows the standard authorization-code +
+  JWKS-verified id_token spec, but has only been **tested against Authentik** —
+  other compliant IdPs should work but are unverified.
 - RBAC has three capability tiers:
   - **read-only user** — list/inspect only; cannot execute.
   - **operator** (admin user *or* the automation agent) — run actions/commands,
