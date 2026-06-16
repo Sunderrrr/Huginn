@@ -54,14 +54,11 @@ const NAV = [
   { to: "/fleet", label: "Fleet" },
   { to: "/tokens", label: "VM Tokens" },
   { to: "/access-tokens", label: "MCP Token" },
+  { to: "/schedules", label: "Schedules", admin: true },
+  { to: "/tags", label: "Tags", admin: true },
   { to: "/audit", label: "Logs" },
+  { to: "/users", label: "Users", admin: true },
   { to: "/settings", label: "Settings" },
-];
-
-const ADMIN_NAV = [
-  { to: "/users", label: "Users" },
-  { to: "/tags", label: "Tags" },
-  { to: "/schedules", label: "Schedules" },
 ];
 
 function roleColor(role: string | undefined): string {
@@ -125,7 +122,7 @@ export function Layout() {
 
         <nav style={{ maxWidth: 1280, margin: "0 auto", padding: "0 24px" }}>
           <div className="row" style={{ gap: 4 }}>
-            {NAV.map((n) => (
+            {NAV.filter((n) => !n.admin || isAdmin).map((n) => (
               <NavLink
                 key={n.to}
                 to={n.to}
@@ -143,24 +140,6 @@ export function Layout() {
                 {n.label}
               </NavLink>
             ))}
-            {isAdmin &&
-              ADMIN_NAV.map((n) => (
-                <NavLink
-                  key={n.to}
-                  to={n.to}
-                  className="display"
-                  style={({ isActive }) => ({
-                    fontSize: 13,
-                    letterSpacing: "0.12em",
-                    padding: "11px 16px",
-                    color: isActive ? "var(--bone)" : "var(--faint)",
-                    borderBottom: `2px solid ${isActive ? "var(--ember)" : "transparent"}`,
-                    transition: "color 0.15s, border-color 0.15s",
-                  })}
-                >
-                  {n.label}
-                </NavLink>
-              ))}
           </div>
         </nav>
       </header>
