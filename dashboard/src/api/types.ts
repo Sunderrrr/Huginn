@@ -87,6 +87,7 @@ export interface AuditEntry {
   ts: string;
   actor_type: "user" | "agent" | "system";
   actor_id: string;
+  actor_label: string | null;
   event_type: string;
   vm_id: string | null;
   action_name: string | null;

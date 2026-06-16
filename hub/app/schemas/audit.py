@@ -18,6 +18,8 @@ class AuditEntryOut(BaseModel):
     ts: datetime
     actor_type: ActorType
     actor_id: str
+    # Human-friendly actor: username for users, "mcp" for the agent, else the raw id.
+    actor_label: str | None = None
     event_type: str
     vm_id: uuid.UUID | None
     action_name: str | None

@@ -300,7 +300,7 @@ export function VMDetailPage() {
                   <span className="muted tiny">{timeAgo(e.ts)}</span>
                 </div>
                 <div className="muted tiny" style={{ marginTop: 2 }}>
-                  {e.actor_type}:{e.actor_id.slice(0, 12)}
+                  {e.actor_type}:{e.actor_label ?? e.actor_id.slice(0, 12)}
                   {e.action_name ? ` · ${e.action_name}` : ""}
                   {e.command ? ` · ${e.command}` : ""}
                 </div>
