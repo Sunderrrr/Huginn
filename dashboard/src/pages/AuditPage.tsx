@@ -86,7 +86,7 @@ export function AuditPage() {
                 <td className="muted tiny">{fmtTime(e.ts)}</td>
                 <td>
                   <span style={{ color: ACTOR_COLOR[e.actor_type] ?? "var(--dim)" }}>{e.actor_type}</span>
-                  <span className="muted tiny"> · {e.actor_id.slice(0, 14)}</span>
+                  <span className="muted tiny"> · {e.actor_label ?? e.actor_id.slice(0, 14)}</span>
                 </td>
                 <td>
                   <span style={{ color: "var(--ember-soft)", letterSpacing: "0.04em" }}>{e.event_type}</span>
