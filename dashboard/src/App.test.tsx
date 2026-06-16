@@ -25,8 +25,23 @@ function renderAt(path: string) {
 describe("App routing", () => {
   beforeEach(() => {
     setToken(null);
-    // Any /api/auth/me probe returns 401 (unauthenticated).
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+    // /api/auth/config drives the (conditional) SSO button; everything else
+    // (e.g. /api/auth/me) returns 401 so the user is treated as unauthenticated.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/auth/config")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ oidc_enabled: true, oidc_provider_name: "Authentik" }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(new Response("", { status: 401 }));
+      }),
+    );
   });
   afterEach(() => vi.unstubAllGlobals());
 
@@ -36,8 +51,29 @@ describe("App routing", () => {
     expect(screen.getByText(/fleet control/i)).toBeInTheDocument();
   });
 
-  it("shows the OIDC option on the login screen", async () => {
+  it("shows the OIDC option on the login screen when enabled", async () => {
     renderAt("/login");
     expect(await screen.findByText(/continue with authentik/i)).toBeInTheDocument();
+  });
+
+  it("hides the OIDC option when SSO is disabled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/auth/config")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ oidc_enabled: false, oidc_provider_name: "SSO" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+        }
+        return Promise.resolve(new Response("", { status: 401 }));
+      }),
+    );
+    renderAt("/login");
+    expect(await screen.findByRole("button", { name: /authenticate/i })).toBeInTheDocument();
+    expect(screen.queryByText(/continue with/i)).not.toBeInTheDocument();
   });
 });
