@@ -18,6 +18,8 @@ export interface User {
   role: UserRole;
   is_active: boolean;
   vm_ids: string[];
+  totp_enabled?: boolean;
+  passkey_count?: number;
 }
 
 export interface UserCreate {
@@ -168,6 +170,28 @@ export interface Settings {
 export interface AuthConfig {
   oidc_enabled: boolean;
   oidc_provider_name: string;
+  password_login_enabled: boolean;
+  webauthn_enabled: boolean;
+}
+
+export interface LoginChallenge {
+  mfa_required?: boolean;
+  mfa_setup_required?: boolean;
+  challenge_token: string;
+  methods: string[];
+}
+
+export interface TotpEnrollBegin {
+  secret: string;
+  otpauth_uri: string;
+}
+
+export interface WebAuthnCredentialOut {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  transports: string[] | null;
 }
 
 export interface McpTokenResponse {

@@ -1,32 +1,52 @@
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError } from "../api/client";
+import QRCode from "qrcode";
+import { api, ApiError } from "../api/client";
 import { useAuthConfig } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 import { useToast } from "../components/Toast";
+import type { TotpEnrollBegin } from "../api/types";
+
+type Step = "credentials" | "mfa" | "setup";
 
 export function LoginPage() {
-  const { login, oidcLogin, user } = useAuth();
+  const { login, verifyMfa, passkeyLogin, oidcLogin, setupToken, finishSetup, user } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
-  const { data: authConfig } = useAuthConfig();
+  const { data: cfg } = useAuthConfig();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState<Step>("credentials");
 
-  // If a session already exists (e.g. the OIDC callback just dropped a token in
-  // the URL fragment, captured by the api client), leave the login screen.
+  // Second-factor input.
+  const [code, setCode] = useState("");
+  const [useBackup, setUseBackup] = useState(false);
+
+  // Forced TOTP setup (admin without a factor).
+  const [enroll, setEnroll] = useState<TotpEnrollBegin | null>(null);
+  const [qr, setQr] = useState<string>("");
+  const [setupCode, setSetupCode] = useState("");
+
   useEffect(() => {
     if (user) navigate("/", { replace: true });
   }, [user, navigate]);
+
+  useEffect(() => {
+    if (enroll) QRCode.toDataURL(enroll.otpauth_uri, { margin: 1, width: 180 }).then(setQr);
+  }, [enroll]);
+
+  const passwordEnabled = cfg?.password_login_enabled ?? true;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     try {
-      await login(username, password);
-      navigate("/fleet");
+      const res = await login(username, password);
+      if (res.kind === "ok") return navigate("/");
+      if (res.kind === "mfa") return setStep("mfa");
+      if (res.kind === "mfa_setup") return setStep("setup");
     } catch (err) {
       toast("err", err instanceof ApiError ? err.message : "login failed");
     } finally {
@@ -34,11 +54,65 @@ export function LoginPage() {
     }
   }
 
-  async function oidc() {
+  async function submitMfa(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
     try {
-      await oidcLogin();
+      await verifyMfa(useBackup ? { backup_code: code } : { code });
+      navigate("/");
     } catch (err) {
-      toast("err", err instanceof ApiError && err.status === 404 ? "OIDC is not enabled" : "OIDC error");
+      toast("err", err instanceof ApiError ? err.message : "verification failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function beginSetup() {
+    if (!setupToken) return;
+    setBusy(true);
+    try {
+      const data = await api.postWithToken<TotpEnrollBegin>(
+        "/api/auth/mfa/totp/enroll/begin",
+        {},
+        setupToken,
+      );
+      setEnroll(data);
+    } catch (err) {
+      toast("err", err instanceof ApiError ? err.message : "could not start setup");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function finishSetupSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!setupToken) return;
+    setBusy(true);
+    try {
+      const res = await api.postWithToken<{ backup_codes: string[]; access_token?: string }>(
+        "/api/auth/mfa/totp/enroll/finish",
+        { code: setupCode },
+        setupToken,
+      );
+      toast("ok", "2FA enabled — save your backup codes from the Account page");
+      if (res.access_token) await finishSetup(res.access_token);
+      navigate("/");
+    } catch (err) {
+      toast("err", err instanceof ApiError ? err.message : "invalid code");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function passkey() {
+    setBusy(true);
+    try {
+      await passkeyLogin(username || undefined);
+      navigate("/");
+    } catch (err) {
+      toast("err", err instanceof ApiError ? err.message : "passkey sign-in failed");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -49,8 +123,7 @@ export function LoginPage() {
   });
 
   return (
-    <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "1fr", placeItems: "center", padding: 24 }}>
-      {/* Oversized backdrop wordmark */}
+    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
       <div
         aria-hidden
         className="display"
@@ -85,58 +158,164 @@ export function LoginPage() {
           </div>
         </motion.div>
         <motion.div {...stagger(1)} className="eyebrow" style={{ marginBottom: 28 }}>
-          fleet control · authenticate to proceed
+          {step === "credentials" && "fleet control · authenticate to proceed"}
+          {step === "mfa" && "second factor required"}
+          {step === "setup" && "two-factor setup required"}
         </motion.div>
 
-        <form onSubmit={submit}>
-          <motion.div {...stagger(2)} style={{ marginBottom: 16 }}>
-            <label className="lbl">Operator</label>
-            <input
-              className="field"
-              autoFocus
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="admin"
-            />
-          </motion.div>
-          <motion.div {...stagger(3)} style={{ marginBottom: 24 }}>
-            <label className="lbl">Passphrase</label>
-            <input
-              className="field"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••••"
-            />
-          </motion.div>
-          <motion.button
-            {...stagger(4)}
-            className="btn btn--primary"
-            style={{ width: "100%", justifyContent: "center" }}
-            disabled={busy || !username || !password}
-          >
-            {busy ? <span className="spin" /> : "Authenticate ›"}
-          </motion.button>
-        </form>
-
-        {authConfig?.oidc_enabled && (
+        {/* Step 1 — credentials */}
+        {step === "credentials" && (
           <>
-            <motion.div {...stagger(5)} className="row" style={{ margin: "22px 0 18px" }}>
-              <div style={{ flex: 1, height: 1, background: "var(--line)" }} />
-              <span className="eyebrow">or</span>
-              <div style={{ flex: 1, height: 1, background: "var(--line)" }} />
-            </motion.div>
+            {passwordEnabled && (
+              <form onSubmit={submit}>
+                <motion.div {...stagger(2)} style={{ marginBottom: 16 }}>
+                  <label className="lbl">Operator</label>
+                  <input
+                    className="field"
+                    autoFocus
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="admin"
+                  />
+                </motion.div>
+                <motion.div {...stagger(3)} style={{ marginBottom: 24 }}>
+                  <label className="lbl">Passphrase</label>
+                  <input
+                    className="field"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                  />
+                </motion.div>
+                <motion.button
+                  {...stagger(4)}
+                  className="btn btn--primary"
+                  style={{ width: "100%", justifyContent: "center" }}
+                  disabled={busy || !username || !password}
+                >
+                  {busy ? <span className="spin" /> : "Authenticate ›"}
+                </motion.button>
+              </form>
+            )}
 
-            <motion.button
-              {...stagger(6)}
-              type="button"
-              className="btn"
-              style={{ width: "100%", justifyContent: "center" }}
-              onClick={oidc}
-            >
-              Continue with {authConfig.oidc_provider_name || "SSO"}
-            </motion.button>
+            {(cfg?.oidc_enabled || cfg?.webauthn_enabled) && (
+              <>
+                {passwordEnabled && (
+                  <motion.div {...stagger(5)} className="row" style={{ margin: "22px 0 18px" }}>
+                    <div style={{ flex: 1, height: 1, background: "var(--line)" }} />
+                    <span className="eyebrow">or</span>
+                    <div style={{ flex: 1, height: 1, background: "var(--line)" }} />
+                  </motion.div>
+                )}
+                <div className="stack" style={{ gap: 10, marginTop: passwordEnabled ? 0 : 8 }}>
+                  {cfg?.oidc_enabled && (
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ width: "100%", justifyContent: "center" }}
+                      onClick={() =>
+                        oidcLogin().catch(() => toast("err", "OIDC error"))
+                      }
+                    >
+                      Continue with {cfg.oidc_provider_name || "SSO"}
+                    </button>
+                  )}
+                  {cfg?.webauthn_enabled && (
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ width: "100%", justifyContent: "center" }}
+                      onClick={passkey}
+                      disabled={busy}
+                    >
+                      Sign in with a passkey
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </>
+        )}
+
+        {/* Step 2 — TOTP / backup code */}
+        {step === "mfa" && (
+          <form onSubmit={submitMfa}>
+            <div style={{ marginBottom: 16 }}>
+              <label className="lbl">{useBackup ? "Backup code" : "Authenticator code"}</label>
+              <input
+                className="field"
+                autoFocus
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder={useBackup ? "xxxxx-xxxxx" : "123456"}
+                inputMode={useBackup ? "text" : "numeric"}
+              />
+            </div>
+            <button
+              className="btn btn--primary"
+              style={{ width: "100%", justifyContent: "center" }}
+              disabled={busy || !code}
+            >
+              {busy ? <span className="spin" /> : "Verify ›"}
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              style={{ width: "100%", justifyContent: "center", marginTop: 12 }}
+              onClick={() => {
+                setUseBackup((v) => !v);
+                setCode("");
+              }}
+            >
+              {useBackup ? "Use authenticator app" : "Use a backup code"}
+            </button>
+          </form>
+        )}
+
+        {/* Step 3 — forced TOTP enrollment */}
+        {step === "setup" && (
+          <div className="stack" style={{ gap: 16 }}>
+            <p className="muted tiny" style={{ lineHeight: 1.6 }}>
+              This admin account must enable two-factor authentication before continuing.
+            </p>
+            {!enroll ? (
+              <button className="btn btn--primary" onClick={beginSetup} disabled={busy}>
+                {busy ? <span className="spin" /> : "Set up authenticator"}
+              </button>
+            ) : (
+              <form onSubmit={finishSetupSubmit} className="stack" style={{ gap: 14 }}>
+                {qr && (
+                  <img
+                    src={qr}
+                    alt="TOTP QR"
+                    style={{ alignSelf: "center", borderRadius: 4, background: "#fff", padding: 6 }}
+                  />
+                )}
+                <div className="codeblock" style={{ userSelect: "all", fontSize: 12 }}>
+                  {enroll.secret}
+                </div>
+                <div>
+                  <label className="lbl">Enter the 6-digit code</label>
+                  <input
+                    className="field"
+                    autoFocus
+                    value={setupCode}
+                    onChange={(e) => setSetupCode(e.target.value)}
+                    placeholder="123456"
+                    inputMode="numeric"
+                  />
+                </div>
+                <button
+                  className="btn btn--primary"
+                  style={{ justifyContent: "center" }}
+                  disabled={busy || !setupCode}
+                >
+                  {busy ? <span className="spin" /> : "Enable & continue ›"}
+                </button>
+              </form>
+            )}
+          </div>
         )}
       </motion.div>
     </div>
