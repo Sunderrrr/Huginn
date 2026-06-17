@@ -58,6 +58,7 @@ const NAV = [
   { to: "/tags", label: "Tags", admin: true },
   { to: "/audit", label: "Logs" },
   { to: "/users", label: "Users", admin: true },
+  { to: "/account", label: "Account" },
   { to: "/settings", label: "Settings" },
 ];
 

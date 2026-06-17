@@ -13,6 +13,7 @@ import { AccessTokensPage } from "./pages/AccessTokensPage";
 import { TagsPage } from "./pages/TagsPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
 import { HomePage } from "./pages/HomePage";
+import { AccountPage } from "./pages/AccountPage";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -49,6 +50,7 @@ export function App() {
         <Route path="/tags" element={<TagsPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/access-tokens" element={<AccessTokensPage />} />
+        <Route path="/account" element={<AccountPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

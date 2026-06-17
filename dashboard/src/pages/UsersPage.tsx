@@ -8,6 +8,7 @@ import {
   useDeactivateUser,
   useChangePassword,
   useSetUserVms,
+  useAdminResetMfa,
 } from "../api/hooks";
 import { RoleBadge } from "../components/badges";
 import { Modal } from "../components/Dialog";
@@ -51,6 +52,7 @@ export function UsersPage() {
                 <th>Email</th>
                 <th>Role</th>
                 <th>Active</th>
+                <th>2FA</th>
                 <th>VMs</th>
                 <th>Actions</th>
               </tr>
@@ -67,6 +69,10 @@ export function UsersPage() {
                     <span className="badge" style={{ color: u.is_active ? "var(--signal)" : "var(--blood)" }}>
                       {u.is_active ? "active" : "disabled"}
                     </span>
+                  </td>
+                  <td className="muted tiny">
+                    {u.totp_enabled ? "TOTP" : "—"}
+                    {(u.passkey_count ?? 0) > 0 ? ` · ${u.passkey_count} 🔑` : ""}
                   </td>
                   <td className="muted">{u.vm_ids.length}</td>
                   <td>
@@ -223,6 +229,7 @@ function EditUserModal({
   const deactivate = useDeactivateUser();
   const changePw = useChangePassword();
   const setVms = useSetUserVms();
+  const resetMfa = useAdminResetMfa();
 
   const [role, setRole] = useState<UserRole>(user.role);
   const [vmIds, setVmIds] = useState<string[]>(user.vm_ids);
@@ -368,6 +375,30 @@ function EditUserModal({
             </form>
           )}
         </div>
+
+        {/* Reset 2FA */}
+        {(user.totp_enabled || (user.passkey_count ?? 0) > 0) && (
+          <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+            <div className="muted tiny" style={{ marginBottom: 8 }}>
+              Clear this user's second factors (e.g. if they're locked out).
+            </div>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => {
+                if (!confirm(`Reset 2FA for "${user.username}"? This removes their TOTP and passkeys.`)) return;
+                resetMfa.mutate(
+                  { userId: user.id, includePasskeys: true },
+                  {
+                    onSuccess: () => { toast("ok", "2FA reset"); onClose(); },
+                    onError: (err: Error) => toast("err", err.message),
+                  },
+                );
+              }}
+            >
+              Reset 2FA
+            </button>
+          </div>
+        )}
 
         {/* Deactivate */}
         {user.is_active && (

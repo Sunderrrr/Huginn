@@ -34,7 +34,12 @@ describe("App routing", () => {
         if (url.includes("/api/auth/config")) {
           return Promise.resolve(
             new Response(
-              JSON.stringify({ oidc_enabled: true, oidc_provider_name: "Authentik" }),
+              JSON.stringify({
+                oidc_enabled: true,
+                oidc_provider_name: "Authentik",
+                password_login_enabled: true,
+                webauthn_enabled: false,
+              }),
               { status: 200, headers: { "Content-Type": "application/json" } },
             ),
           );
@@ -63,10 +68,15 @@ describe("App routing", () => {
         const url = String(input);
         if (url.includes("/api/auth/config")) {
           return Promise.resolve(
-            new Response(JSON.stringify({ oidc_enabled: false, oidc_provider_name: "SSO" }), {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            }),
+            new Response(
+              JSON.stringify({
+                oidc_enabled: false,
+                oidc_provider_name: "SSO",
+                password_login_enabled: true,
+                webauthn_enabled: false,
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
           );
         }
         return Promise.resolve(new Response("", { status: 401 }));

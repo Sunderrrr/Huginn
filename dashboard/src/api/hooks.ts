@@ -19,10 +19,12 @@ import type {
   TagCreate,
   TagUpdate,
   Task,
+  TotpEnrollBegin,
   User,
   UserCreate,
   UserUpdate,
   VM,
+  WebAuthnCredentialOut,
 } from "./types";
 
 export function useAuthConfig() {
@@ -355,6 +357,83 @@ export function useDeleteSchedule() {
   const invalidate = useInvalidate(["schedules"]);
   return useMutation({
     mutationFn: (id: string) => api.del<void>(`/api/schedules/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+// --- MFA: TOTP + passkeys ---
+
+export function useTotpEnrollBegin() {
+  return useMutation({
+    mutationFn: () => api.post<TotpEnrollBegin>("/api/auth/mfa/totp/enroll/begin"),
+  });
+}
+
+export function useTotpEnrollFinish() {
+  const invalidate = useInvalidate(["me"]);
+  return useMutation({
+    mutationFn: (vars: { code: string }) =>
+      api.post<{ backup_codes: string[] }>("/api/auth/mfa/totp/enroll/finish", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useTotpDisable() {
+  const invalidate = useInvalidate(["me"]);
+  return useMutation({
+    mutationFn: (vars: { password?: string; code?: string }) =>
+      api.post<void>("/api/auth/mfa/totp/disable", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRegenerateBackupCodes() {
+  return useMutation({
+    mutationFn: (vars: { code: string }) =>
+      api.post<{ backup_codes: string[] }>("/api/auth/mfa/totp/backup-codes/regenerate", vars),
+  });
+}
+
+export function usePasskeys() {
+  return useQuery({
+    queryKey: ["passkeys"],
+    queryFn: () => api.get<WebAuthnCredentialOut[]>("/api/auth/mfa/webauthn/credentials"),
+  });
+}
+
+export function useRegisterPasskey() {
+  const invalidate = useInvalidate(["passkeys", "me"]);
+  return useMutation({
+    mutationFn: async (vars: { name: string }) => {
+      const { startRegistration } = await import("@simplewebauthn/browser");
+      const options = await api.post<Record<string, unknown>>(
+        "/api/auth/mfa/webauthn/register/begin",
+      );
+      const attestation = await startRegistration({ optionsJSON: options as never });
+      return api.post<{ id: string; name: string }>("/api/auth/mfa/webauthn/register/finish", {
+        name: vars.name,
+        credential: attestation,
+      });
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeletePasskey() {
+  const invalidate = useInvalidate(["passkeys", "me"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/auth/mfa/webauthn/credentials/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useAdminResetMfa() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (vars: { userId: string; includePasskeys?: boolean }) =>
+      api.post<User>(
+        `/api/users/${vars.userId}/mfa/reset?include_passkeys=${vars.includePasskeys ? "true" : "false"}`,
+      ),
     onSuccess: invalidate,
   });
 }
