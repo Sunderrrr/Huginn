@@ -87,6 +87,10 @@ class WebAuthnRegisterFinishRequest(BaseModel):
     credential: dict
 
 
+class WebAuthnRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
 class WebAuthnLoginBeginRequest(BaseModel):
     username: str | None = Field(default=None, max_length=255)
 

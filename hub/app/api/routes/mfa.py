@@ -46,6 +46,7 @@ from app.schemas.auth import (
     WebAuthnLoginBeginRequest,
     WebAuthnLoginFinishRequest,
     WebAuthnRegisterFinishRequest,
+    WebAuthnRenameRequest,
 )
 from app.services import mfa as mfa_service
 from app.services import totp as totp_service
@@ -346,6 +347,24 @@ async def webauthn_register_finish(
     if is_setup:
         out["access_token"] = _token_response(user).access_token
     return out
+
+
+@router.put("/webauthn/credentials/{cred_id}", response_model=WebAuthnCredentialOut)
+async def rename_passkey(
+    cred_id: uuid.UUID,
+    body: WebAuthnRenameRequest,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> WebAuthnCredential:
+    user = principal.user
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no user for this principal")
+    cred = await session.get(WebAuthnCredential, cred_id)
+    if cred is None or cred.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "passkey not found")
+    cred.name = body.name
+    await session.flush()
+    return cred
 
 
 @router.get("/webauthn/credentials", response_model=list[WebAuthnCredentialOut])

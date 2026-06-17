@@ -404,17 +404,31 @@ export function usePasskeys() {
 export function useRegisterPasskey() {
   const invalidate = useInvalidate(["passkeys", "me"]);
   return useMutation({
-    mutationFn: async (vars: { name: string }) => {
+    // No name needed up front — the OS ceremony runs straight away and we apply a
+    // sensible default; the user can rename it inline afterwards.
+    mutationFn: async (vars?: { name?: string }) => {
       const { startRegistration } = await import("@simplewebauthn/browser");
       const options = await api.post<Record<string, unknown>>(
         "/api/auth/mfa/webauthn/register/begin",
       );
       const attestation = await startRegistration({ optionsJSON: options as never });
+      const name = vars?.name || `Passkey · ${new Date().toLocaleDateString()}`;
       return api.post<{ id: string; name: string }>("/api/auth/mfa/webauthn/register/finish", {
-        name: vars.name,
+        name,
         credential: attestation,
       });
     },
+    onSuccess: invalidate,
+  });
+}
+
+export function useRenamePasskey() {
+  const invalidate = useInvalidate(["passkeys"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; name: string }) =>
+      api.put<WebAuthnCredentialOut>(`/api/auth/mfa/webauthn/credentials/${vars.id}`, {
+        name: vars.name,
+      }),
     onSuccess: invalidate,
   });
 }

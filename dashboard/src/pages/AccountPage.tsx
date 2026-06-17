@@ -8,6 +8,7 @@ import {
   usePasskeys,
   useRegenerateBackupCodes,
   useRegisterPasskey,
+  useRenamePasskey,
   useTotpDisable,
   useTotpEnrollBegin,
   useTotpEnrollFinish,
@@ -59,7 +60,10 @@ export function AccountPage() {
   // --- passkeys ---
   const { data: passkeys } = usePasskeys();
   const registerPasskey = useRegisterPasskey();
+  const renamePasskey = useRenamePasskey();
   const deletePasskey = useDeletePasskey();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
 
   useEffect(() => {
     if (secret) QRCode.toDataURL(secret.otpauth_uri, { margin: 1, width: 180 }).then(setQr);
@@ -126,13 +130,24 @@ export function AccountPage() {
   }
 
   async function addPasskey() {
-    const name = window.prompt("Name this passkey (e.g. 'MacBook Touch ID')", "passkey");
-    if (name === null) return;
     try {
-      await registerPasskey.mutateAsync({ name: name || "passkey" });
-      toast("ok", "passkey added");
+      // Runs the OS passkey ceremony straight away — no custom prompt. It gets a
+      // default name you can rename inline below.
+      await registerPasskey.mutateAsync(undefined);
+      toast("ok", "passkey added — rename it below if you like");
     } catch (err) {
       toast("err", err instanceof Error ? err.message : "could not add passkey");
+    }
+  }
+
+  async function saveName(id: string) {
+    const name = editName.trim();
+    if (!name) return setEditingId(null);
+    try {
+      await renamePasskey.mutateAsync({ id, name });
+      setEditingId(null);
+    } catch (err) {
+      toast("err", err instanceof Error ? err.message : "rename failed");
     }
   }
 
@@ -231,9 +246,38 @@ export function AccountPage() {
             {(passkeys?.length ?? 0) === 0 && <div className="muted tiny">No passkeys registered.</div>}
             {passkeys?.map((p) => (
               <div key={p.id} className="spread">
-                <div>
-                  <div style={{ fontSize: 13 }}>{p.name}</div>
-                  <div className="muted tiny">added {fmtTime(p.created_at)} · last used {fmtTime(p.last_used_at)}</div>
+                <div className="grow" style={{ minWidth: 0 }}>
+                  {editingId === p.id ? (
+                    <form
+                      onSubmit={(e) => { e.preventDefault(); saveName(p.id); }}
+                      className="row"
+                      style={{ gap: 6 }}
+                    >
+                      <input
+                        className="field"
+                        style={{ height: 30, padding: "4px 8px" }}
+                        autoFocus
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                      />
+                      <button className="btn btn--sm btn--primary" type="submit">Save</button>
+                      <button className="btn btn--sm btn--ghost" type="button" onClick={() => setEditingId(null)}>Cancel</button>
+                    </form>
+                  ) : (
+                    <>
+                      <div className="row" style={{ gap: 8 }}>
+                        <span style={{ fontSize: 13 }}>{p.name}</span>
+                        <button
+                          className="btn btn--sm btn--ghost"
+                          style={{ padding: "2px 8px" }}
+                          onClick={() => { setEditingId(p.id); setEditName(p.name); }}
+                        >
+                          Rename
+                        </button>
+                      </div>
+                      <div className="muted tiny">added {fmtTime(p.created_at)} · last used {fmtTime(p.last_used_at)}</div>
+                    </>
+                  )}
                 </div>
                 <button
                   className="btn btn--sm btn--danger"
