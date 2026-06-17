@@ -361,6 +361,25 @@ label.lbl {
     transform: rotate(360deg);
   }
 }
+/* Dropdown menu items (profile menu). */
+.menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r);
+  padding: 9px 10px;
+  color: var(--bone);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.menu-item:hover {
+  background: rgba(255, 106, 26, 0.08);
+}
+
 .codeblock {
   font-family: var(--font-mono);
   font-size: 12px;

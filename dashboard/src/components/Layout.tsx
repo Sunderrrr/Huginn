@@ -1,7 +1,9 @@
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useVms } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
-import type { VM, VMState } from "../api/types";
+import type { User, VM, VMState } from "../api/types";
 
 function Sigil() {
   // A minimal geometric raven-eye mark.
@@ -73,6 +75,110 @@ function roleColor(role: string | undefined): string {
   }
 }
 
+function ProfileMenu({ user, onLogout }: { user: User | null; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const initial = (user?.username ?? "?").slice(0, 1).toUpperCase();
+  const go = (to: string) => {
+    setOpen(false);
+    navigate(to);
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Account menu"
+        className="row"
+        style={{
+          gap: 10,
+          background: "transparent",
+          border: "1px solid var(--line-bright)",
+          borderRadius: 999,
+          padding: "5px 10px 5px 6px",
+          cursor: "pointer",
+          color: "inherit",
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 26,
+            height: 26,
+            borderRadius: "50%",
+            border: `1px solid ${roleColor(user?.role)}`,
+            display: "grid",
+            placeItems: "center",
+            fontSize: 12,
+            fontFamily: "var(--font-display)",
+            color: roleColor(user?.role),
+          }}
+        >
+          {initial}
+        </span>
+        <div style={{ textAlign: "left" }}>
+          <div style={{ fontSize: 13, lineHeight: 1.1 }}>{user?.username ?? "—"}</div>
+          <div className="eyebrow" style={{ color: roleColor(user?.role) }}>{user?.role ?? ""}</div>
+        </div>
+        <span aria-hidden style={{ color: "var(--dim)", fontSize: 10, marginLeft: 2 }}>▾</span>
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            role="menu"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.14 }}
+            className="panel"
+            style={{
+              position: "absolute",
+              right: 0,
+              top: "calc(100% + 8px)",
+              width: 240,
+              padding: 8,
+              boxShadow: "var(--shadow)",
+              zIndex: 100,
+            }}
+          >
+            <div style={{ padding: "8px 10px 10px" }}>
+              <div style={{ fontSize: 13 }}>{user?.username}</div>
+              <div className="muted tiny" style={{ marginTop: 2, wordBreak: "break-all" }}>
+                {user?.email || "no email set"}
+              </div>
+            </div>
+            <div style={{ height: 1, background: "var(--line)", margin: "0 -8px 6px" }} />
+            <button type="button" role="menuitem" className="menu-item" onClick={() => go("/account")}>
+              Account &amp; security
+              <span className="muted tiny" style={{ display: "block", marginTop: 2 }}>
+                email · password · 2FA · passkeys
+              </span>
+            </button>
+            <button type="button" role="menuitem" className="menu-item" onClick={onLogout} style={{ color: "var(--blood)" }}>
+              Sign out
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export function Layout() {
   const { user, logout } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -105,41 +211,7 @@ export function Layout() {
 
           <Telemetry />
 
-          <div className="row" style={{ gap: 16 }}>
-            <Link
-              to="/account"
-              title="Edit profile — email, password, 2FA & passkeys"
-              style={{ textAlign: "right", textDecoration: "none", color: "inherit" }}
-            >
-              <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
-                <span
-                  aria-hidden
-                  style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: "50%",
-                    border: `1px solid ${roleColor(user?.role)}`,
-                    display: "grid",
-                    placeItems: "center",
-                    fontSize: 12,
-                    fontFamily: "var(--font-display)",
-                    color: roleColor(user?.role),
-                  }}
-                >
-                  {(user?.username ?? "?").slice(0, 1).toUpperCase()}
-                </span>
-                <div>
-                  <div style={{ fontSize: 13 }}>{user?.username ?? "—"}</div>
-                  <div className="eyebrow" style={{ color: roleColor(user?.role) }}>
-                    {user?.role ?? ""} · edit profile
-                  </div>
-                </div>
-              </div>
-            </Link>
-            <button className="btn btn--ghost btn--sm" onClick={logout}>
-              Sign out
-            </button>
-          </div>
+          <ProfileMenu user={user} onLogout={logout} />
         </div>
 
         <nav style={{ maxWidth: 1280, margin: "0 auto", padding: "0 24px" }}>
