@@ -104,6 +104,32 @@ export function LoginPage() {
     }
   }
 
+  async function setupPasskey() {
+    if (!setupToken) return;
+    setBusy(true);
+    try {
+      const { startRegistration } = await import("@simplewebauthn/browser");
+      const options = await api.postWithToken<Record<string, unknown>>(
+        "/api/auth/mfa/webauthn/register/begin",
+        {},
+        setupToken,
+      );
+      const attestation = await startRegistration({ optionsJSON: options as never });
+      const res = await api.postWithToken<{ access_token?: string }>(
+        "/api/auth/mfa/webauthn/register/finish",
+        { name: "passkey", credential: attestation },
+        setupToken,
+      );
+      toast("ok", "passkey registered");
+      if (res.access_token) await finishSetup(res.access_token);
+      navigate("/");
+    } catch (err) {
+      toast("err", err instanceof ApiError ? err.message : "passkey setup failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function passkey() {
     setBusy(true);
     try {
@@ -273,16 +299,24 @@ export function LoginPage() {
           </form>
         )}
 
-        {/* Step 3 — forced TOTP enrollment */}
+        {/* Step 3 — forced 2FA enrollment (choose TOTP or passkey) */}
         {step === "setup" && (
           <div className="stack" style={{ gap: 16 }}>
             <p className="muted tiny" style={{ lineHeight: 1.6 }}>
-              This admin account must enable two-factor authentication before continuing.
+              This admin account must enable a second factor before continuing.
+              Choose one:
             </p>
             {!enroll ? (
-              <button className="btn btn--primary" onClick={beginSetup} disabled={busy}>
-                {busy ? <span className="spin" /> : "Set up authenticator"}
-              </button>
+              <div className="stack" style={{ gap: 10 }}>
+                <button className="btn btn--primary" style={{ justifyContent: "center" }} onClick={beginSetup} disabled={busy}>
+                  {busy ? <span className="spin" /> : "Authenticator app (TOTP)"}
+                </button>
+                {cfg?.webauthn_enabled && (
+                  <button className="btn" style={{ justifyContent: "center" }} onClick={setupPasskey} disabled={busy}>
+                    {busy ? <span className="spin" /> : "Passkey / security key"}
+                  </button>
+                )}
+              </div>
             ) : (
               <form onSubmit={finishSetupSubmit} className="stack" style={{ gap: 14 }}>
                 {qr && (
