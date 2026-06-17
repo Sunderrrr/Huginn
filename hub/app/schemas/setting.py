@@ -16,6 +16,13 @@ class SettingsOut(BaseModel):
     auto_update_enabled: bool
     updated_at: datetime
 
+    # MFA / WebAuthn
+    require_admin_mfa: bool
+    allow_password_login: bool
+    webauthn_rp_id: str
+    webauthn_rp_name: str
+    webauthn_origin: str
+
     # SSO / OIDC
     oidc_enabled: bool
     oidc_provider_name: str
@@ -47,6 +54,13 @@ class SettingsUpdate(BaseModel):
     target_release_repo: str | None = Field(default=None, max_length=255)
     allowed_release_domains: list[str] | None = None
     auto_update_enabled: bool | None = None
+
+    # MFA / WebAuthn
+    require_admin_mfa: bool | None = None
+    allow_password_login: bool | None = None
+    webauthn_rp_id: str | None = Field(default=None, max_length=255)
+    webauthn_rp_name: str | None = Field(default=None, max_length=255)
+    webauthn_origin: str | None = Field(default=None, max_length=512)
 
     # SSO / OIDC
     oidc_enabled: bool | None = None

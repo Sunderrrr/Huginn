@@ -29,6 +29,12 @@ async def ensure_settings(session: AsyncSession, app_settings: AppSettings) -> S
             target_release_repo=app_settings.target_release_repo,
             allowed_release_domains=list(app_settings.allowed_release_domains),
             mcp_client_token=app_settings.mcp_client_token or secrets.token_hex(32),
+            # MFA / WebAuthn
+            require_admin_mfa=app_settings.require_admin_mfa,
+            allow_password_login=app_settings.allow_password_login,
+            webauthn_rp_id=app_settings.webauthn_rp_id,
+            webauthn_rp_name=app_settings.webauthn_rp_name,
+            webauthn_origin=app_settings.webauthn_origin,
             # SSO / OIDC
             oidc_enabled=app_settings.oidc_enabled,
             oidc_provider_name=app_settings.oidc_provider_name,

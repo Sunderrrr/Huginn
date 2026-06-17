@@ -86,9 +86,27 @@ def test_validate_for_prod_rejects_placeholder_secrets() -> None:
 def test_validate_for_prod_accepts_strong_secrets() -> None:
     strong = "a" * 48
     s = Settings(
-        env="prod", jwt_secret=strong, secret_hash_key=strong, mcp_service_token=strong
+        env="prod",
+        jwt_secret=strong,
+        secret_hash_key=strong,
+        mcp_service_token=strong,
+        mfa_encryption_key=strong,
     )
     s.validate_for_prod()  # must not raise
+
+
+def test_validate_for_prod_rejects_weak_mfa_key() -> None:
+    strong = "a" * 48
+    s = Settings(
+        env="prod",
+        jwt_secret=strong,
+        secret_hash_key=strong,
+        mcp_service_token=strong,
+        mfa_encryption_key="change-me-mfa-encryption-key-32b",
+    )
+    with pytest.raises(RuntimeError) as exc:
+        s.validate_for_prod()
+    assert "HUGINN_MFA_ENCRYPTION_KEY" in str(exc.value)
 
 
 def test_validate_for_prod_noop_in_dev() -> None:

@@ -32,6 +32,8 @@ class UserOut(BaseModel):
     role: UserRole
     is_active: bool
     vm_ids: list[uuid.UUID] = []
+    totp_enabled: bool = False
+    passkey_count: int = 0
 
 
 class PasswordChange(BaseModel):

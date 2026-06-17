@@ -11,6 +11,7 @@ from app.models.enums import (
     VMState,
     WorkerArch,
 )
+from app.models.mfa_backup_code import MfaBackupCode
 from app.models.scheduled_command import ScheduledCommand
 from app.models.setting import Setting
 from app.models.tag import Tag, VMTag
@@ -18,12 +19,15 @@ from app.models.task import Task
 from app.models.user import User
 from app.models.user_vm_access import UserVMAccess
 from app.models.vm import VM
+from app.models.webauthn_challenge import WebAuthnChallenge
+from app.models.webauthn_credential import WebAuthnCredential
 
 __all__ = [
     "ActorType",
     "AuditLog",
     "EnrollmentToken",
     "ExecMode",
+    "MfaBackupCode",
     "ScheduledCommand",
     "Setting",
     "Tag",
@@ -36,5 +40,7 @@ __all__ = [
     "VM",
     "VMState",
     "VMTag",
+    "WebAuthnChallenge",
+    "WebAuthnCredential",
     "WorkerArch",
 ]

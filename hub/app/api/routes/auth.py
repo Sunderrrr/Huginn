@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import client_ip, get_principal
 from app.config import Settings, get_settings
 from app.core import audit, security
+from app.core.jwt import MFA_SCOPE, MFA_SETUP_SCOPE, create_mfa_challenge_token
 from app.core.ldap import LDAPClient
 from app.core.oidc import OIDCClient, OIDCError
 from app.core.principal import Principal
@@ -21,7 +22,14 @@ from app.core.ratelimit import RateLimiter
 from app.db import get_session
 from app.models.enums import ActorType
 from app.models.user_vm_access import UserVMAccess
-from app.schemas.auth import LoginRequest, OIDCStartResponse, TokenResponse, UserOut
+from app.schemas.auth import (
+    LoginChallengeResponse,
+    LoginRequest,
+    OIDCStartResponse,
+    TokenResponse,
+    UserOut,
+)
+from app.services import mfa as mfa_service
 from app.services import settings_service
 from app.services import users as users_service
 
@@ -42,22 +50,37 @@ _oidc_limiter = RateLimiter(10)
 async def auth_config(session: AsyncSession = Depends(get_session)) -> dict:
     """Public, unauthenticated: what the login page needs to render itself.
 
-    Tells the SPA whether the SSO button should appear and what to label it.
-    No secrets here — just the enabled flag and the display name.
+    Tells the SPA which auth methods to show (SSO button + label, password form,
+    passkey button). No secrets here — only enable flags and the display name.
     """
     row = await settings_service.get_settings_row(session)
-    enabled = bool(row and row.oidc_enabled and row.oidc_issuer and row.oidc_client_id)
+    settings = get_settings()
+    oidc_enabled = bool(row and row.oidc_enabled and row.oidc_issuer and row.oidc_client_id)
     name = (row.oidc_provider_name if row else "") or "SSO"
-    return {"oidc_enabled": enabled, "oidc_provider_name": name}
+    # Env var force-enables (the documented "unsafe" escape hatch); the DB row
+    # can also enable it. Either source counts.
+    allow_pw = settings.allow_password_login or bool(row and row.allow_password_login)
+    password_login_enabled = (not oidc_enabled) or allow_pw
+    # Mirror webauthn.rp_config's DB→env fallback so the button shows whenever
+    # passkeys are actually usable (RP id + origin configured by either source).
+    rp_id = (row.webauthn_rp_id if row else "") or settings.webauthn_rp_id
+    rp_origin = (row.webauthn_origin if row else "") or settings.webauthn_origin
+    webauthn_enabled = bool(rp_id and rp_origin)
+    return {
+        "oidc_enabled": oidc_enabled,
+        "oidc_provider_name": name,
+        "password_login_enabled": password_login_enabled,
+        "webauthn_enabled": webauthn_enabled,
+    }
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login")
 async def login(
     body: LoginRequest,
     request: Request,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
-) -> TokenResponse:
+) -> TokenResponse | LoginChallengeResponse:
     ip = client_ip(request) or "unknown"
     # Block only when too many *failed* attempts have accumulated for this IP, so
     # legitimate logins are never throttled but brute force is.
@@ -65,23 +88,33 @@ async def login(
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, "too many failed login attempts; slow down"
         )
+    settings_row = await settings_service.get_settings_row(session)
+    oidc_enabled = bool(
+        settings_row and settings_row.oidc_enabled and settings_row.oidc_issuer
+    )
+    # SSO-first: when OIDC is active, the password form is disabled unless it's
+    # re-enabled — via the env "unsafe" flag OR the admin-set DB row. With OIDC
+    # off, password login is always available (no lockout).
+    allow_pw = settings.allow_password_login or bool(
+        settings_row and settings_row.allow_password_login
+    )
+    if oidc_enabled and not allow_pw:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "password login is disabled; use SSO"
+        )
     # Local password first — guarantees the bootstrap admin can always log in.
     user = await users_service.authenticate(session, body.username, body.password)
     # Fall back to LDAP if enabled and local auth did not match.
-    if user is None:
-        settings_row = await settings_service.get_settings_row(session)
-        if settings_row is not None and settings_row.ldap_enabled:
-            client = LDAPClient(settings_row)
-            claims = await run_in_threadpool(
-                client.authenticate, body.username, body.password
+    if user is None and settings_row is not None and settings_row.ldap_enabled:
+        client = LDAPClient(settings_row)
+        claims = await run_in_threadpool(client.authenticate, body.username, body.password)
+        if claims is not None:
+            user = await users_service.upsert_ldap_user(
+                session,
+                ldap_dn=claims.dn,
+                username=claims.username,
+                email=claims.email,
             )
-            if claims is not None:
-                user = await users_service.upsert_ldap_user(
-                    session,
-                    ldap_dn=claims.dn,
-                    username=claims.username,
-                    email=claims.email,
-                )
     if user is None:
         _login_limiter.allow(f"login:{ip}")  # count this failed attempt
         await audit.record(
@@ -92,6 +125,42 @@ async def login(
             source_ip=client_ip(request),
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+
+    # First factor OK — branch on the second factor.
+    require_admin_mfa = (
+        bool(settings_row.require_admin_mfa)
+        if settings_row
+        else settings.require_admin_mfa
+    )
+
+    if user.totp_enabled:
+        await audit.record(
+            session,
+            actor_type=ActorType.user,
+            actor_id=str(user.id),
+            event_type="login_password_ok_mfa_pending",
+            source_ip=client_ip(request),
+        )
+        return LoginChallengeResponse(
+            mfa_required=True,
+            challenge_token=create_mfa_challenge_token(user.id, MFA_SCOPE),
+            methods=["totp", "backup"],
+        )
+
+    if user.is_admin and require_admin_mfa and not await mfa_service.user_has_mfa(session, user):
+        # Admin without any factor must enrol before getting an access token.
+        await audit.record(
+            session,
+            actor_type=ActorType.user,
+            actor_id=str(user.id),
+            event_type="login_password_ok_mfa_setup_required",
+            source_ip=client_ip(request),
+        )
+        return LoginChallengeResponse(
+            mfa_setup_required=True,
+            challenge_token=create_mfa_challenge_token(user.id, MFA_SETUP_SCOPE),
+            methods=["totp", "webauthn"],
+        )
 
     await audit.record(
         session,
@@ -116,7 +185,10 @@ async def me(
         select(UserVMAccess.vm_id).where(UserVMAccess.user_id == principal.user.id)
     )
     vm_ids = [row[0] for row in result.all()]
-    return UserOut.model_validate(principal.user).model_copy(update={"vm_ids": vm_ids})
+    passkeys = await mfa_service.passkey_count(session, principal.user.id)
+    return UserOut.model_validate(principal.user).model_copy(
+        update={"vm_ids": vm_ids, "passkey_count": passkeys}
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

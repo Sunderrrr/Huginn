@@ -23,6 +23,7 @@ from app.schemas.user import (
     UserUpdate,
     UserVmAccessUpdate,
 )
+from app.services import mfa as mfa_service
 from app.services import users as users_service
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -66,7 +67,12 @@ async def list_users(
     out = []
     for u in users:
         vm_ids = await _load_user_vm_ids(session, u.id)
-        out.append(UserOut.model_validate(u).model_copy(update={"vm_ids": vm_ids}))
+        passkeys = await mfa_service.passkey_count(session, u.id)
+        out.append(
+            UserOut.model_validate(u).model_copy(
+                update={"vm_ids": vm_ids, "passkey_count": passkeys}
+            )
+        )
     return out
 
 
@@ -116,7 +122,10 @@ async def get_user(
 ) -> UserOut:
     user = await _get_user_or_404(user_id, session)
     vm_ids = await _load_user_vm_ids(session, user.id)
-    return UserOut.model_validate(user).model_copy(update={"vm_ids": vm_ids})
+    passkeys = await mfa_service.passkey_count(session, user.id)
+    return UserOut.model_validate(user).model_copy(
+        update={"vm_ids": vm_ids, "passkey_count": passkeys}
+    )
 
 
 @router.put("/{user_id}", response_model=UserOut)
@@ -208,6 +217,36 @@ async def change_password(
     )
     await session.commit()
     return {"status": "ok"}
+
+
+@router.post("/{user_id}/mfa/reset", response_model=UserOut)
+async def reset_user_mfa(
+    user_id: uuid.UUID,
+    request: Request,
+    include_passkeys: bool = False,
+    principal: Principal = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> UserOut:
+    """Admin: clear a locked-out user's TOTP (and optionally their passkeys).
+
+    Only ever removes factors, so it cannot brick an account.
+    """
+    user = await _get_user_or_404(user_id, session)
+    await mfa_service.reset_user_mfa(session, user, include_passkeys=include_passkeys)
+    await record(
+        session,
+        actor_type=ActorType.user,
+        actor_id=principal.actor_id,
+        event_type="admin_mfa_reset",
+        detail={"user_id": str(user_id), "include_passkeys": include_passkeys},
+        source_ip=client_ip(request),
+    )
+    await session.commit()
+    vm_ids = await _load_user_vm_ids(session, user.id)
+    passkeys = await mfa_service.passkey_count(session, user.id)
+    return UserOut.model_validate(user).model_copy(
+        update={"vm_ids": vm_ids, "passkey_count": passkeys}
+    )
 
 
 @router.put("/{user_id}/vms", response_model=UserOut)

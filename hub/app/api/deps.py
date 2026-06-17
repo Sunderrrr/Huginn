@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.core import security
-from app.core.jwt import TokenError, decode_access_token
+from app.core.jwt import MFA_SCOPES, TokenError, decode_access_token
 from app.core.principal import Principal
 from app.core.ratelimit import RateLimiter
 from app.db import get_session
@@ -70,6 +70,11 @@ async def get_principal(
         user_id = uuid.UUID(payload["sub"])
     except (TokenError, KeyError, ValueError) as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token") from exc
+
+    # Intermediate MFA challenge/setup tokens are NOT valid for the business API:
+    # they may only be presented to the dedicated /api/auth/mfa endpoints.
+    if payload.get("scope") in MFA_SCOPES:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token not valid for API access")
 
     user: User | None = await users_service.get_by_id(session, user_id)
     if user is None or not user.is_active:

@@ -15,6 +15,9 @@ from collections.abc import AsyncIterator
 os.environ.setdefault("HUGINN_JWT_SECRET", "test-jwt-secret-value-32-bytes-long!")
 os.environ.setdefault("HUGINN_SECRET_HASH_KEY", "test-hmac-key-value-32-bytes-long!!")
 os.environ.setdefault("HUGINN_MCP_SERVICE_TOKEN", "test-mcp-service-token")
+os.environ.setdefault("HUGINN_MFA_ENCRYPTION_KEY", "test-mfa-encryption-key-32-bytes!!")
+# Don't force admin MFA in the shared fixtures; enforcement is tested explicitly.
+os.environ.setdefault("HUGINN_REQUIRE_ADMIN_MFA", "false")
 os.environ.setdefault("HUGINN_REQUIRE_TLS", "false")
 os.environ.setdefault("HUGINN_ENV", "dev")
 
@@ -62,6 +65,11 @@ async def client(engine, session_factory) -> AsyncIterator[AsyncClient]:
 
     auth_routes._login_limiter._buckets.clear()
     auth_routes._oidc_limiter._buckets.clear()
+
+    from app.api.routes import mfa as mfa_routes
+
+    mfa_routes._verify_limiter._buckets.clear()
+    mfa_routes._webauthn_limiter._buckets.clear()
 
     app = create_app()
 

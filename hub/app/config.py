@@ -33,6 +33,25 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = 60
     secret_hash_key: str = "change-me-another-32-byte-secret"
     mcp_service_token: str = "change-me-mcp-service-token"
+    # Dedicated key for reversible encryption of TOTP secrets at rest. MUST be
+    # distinct from jwt_secret/secret_hash_key so a single key leak can't both
+    # forge tokens AND decrypt MFA seeds. A Fernet key is derived from this.
+    mfa_encryption_key: str = "change-me-mfa-encryption-key-32b"
+    # Short-lived intermediate token (post-password, pre-second-factor) TTL.
+    mfa_challenge_ttl_minutes: int = 5
+    # Require local admin accounts to enrol a second factor before they can use
+    # the dashboard.
+    require_admin_mfa: bool = True
+    # When OIDC is enabled, password login is disabled by default (SSO-first);
+    # set this true to also permit the local password form ("unsafe" opt-in).
+    # When OIDC is off, password login is always available (no lockout).
+    allow_password_login: bool = False
+
+    # WebAuthn / passkeys. RP ID must be a registrable domain (NOT a bare IP),
+    # so passkeys only work over the configured domain. Empty => passkeys off.
+    webauthn_rp_id: str = ""
+    webauthn_rp_name: str = "Huginn"
+    webauthn_origin: str = ""
 
     # TLS policy for hub<->worker
     require_tls: bool = True
@@ -98,6 +117,13 @@ class Settings(BaseSettings):
     def is_prod(self) -> bool:
         return self.env == "prod"
 
+    def password_login_enabled(self, *, oidc_enabled: bool) -> bool:
+        """Password login is on unless OIDC is active and it isn't re-enabled.
+
+        Never locks out: with OIDC off the password form is always available.
+        """
+        return (not oidc_enabled) or self.allow_password_login
+
     def validate_for_prod(self) -> None:
         """Fail closed if deployed to prod with placeholder/weak secrets.
 
@@ -112,6 +138,7 @@ class Settings(BaseSettings):
             "HUGINN_JWT_SECRET": self.jwt_secret,
             "HUGINN_SECRET_HASH_KEY": self.secret_hash_key,
             "HUGINN_MCP_SERVICE_TOKEN": self.mcp_service_token,
+            "HUGINN_MFA_ENCRYPTION_KEY": self.mfa_encryption_key,
         }
         for name, value in checks.items():
             if value.startswith("change-me") or len(value) < 32:

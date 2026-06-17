@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,8 +31,71 @@ class UserOut(BaseModel):
     role: UserRole
     is_active: bool
     vm_ids: list[uuid.UUID] = []
+    totp_enabled: bool = False
+    passkey_count: int = 0
 
 
 class OIDCStartResponse(BaseModel):
     authorization_url: str
     state: str
+
+
+# --- MFA two-step login ---
+
+
+class LoginChallengeResponse(BaseModel):
+    """Returned by /login when a second factor (or first-time setup) is needed."""
+
+    mfa_required: bool = False
+    mfa_setup_required: bool = False
+    challenge_token: str
+    methods: list[str] = []
+
+
+class MfaVerifyRequest(BaseModel):
+    code: str | None = Field(default=None, max_length=10)
+    backup_code: str | None = Field(default=None, max_length=16)
+
+
+class TotpEnrollBeginResponse(BaseModel):
+    secret: str
+    otpauth_uri: str
+
+
+class TotpEnrollFinishRequest(BaseModel):
+    code: str = Field(max_length=10)
+
+
+class BackupCodesResponse(BaseModel):
+    backup_codes: list[str]
+
+
+class TotpDisableRequest(BaseModel):
+    code: str | None = Field(default=None, max_length=10)
+    backup_code: str | None = Field(default=None, max_length=16)
+
+
+# --- WebAuthn / passkeys ---
+
+
+class WebAuthnRegisterFinishRequest(BaseModel):
+    name: str = Field(default="", max_length=255)
+    credential: dict
+
+
+class WebAuthnLoginBeginRequest(BaseModel):
+    username: str | None = Field(default=None, max_length=255)
+
+
+class WebAuthnLoginFinishRequest(BaseModel):
+    credential: dict
+
+
+class WebAuthnCredentialOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    last_used_at: datetime | None
+    transports: list[str] | None = None

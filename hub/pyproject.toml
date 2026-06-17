@@ -19,6 +19,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     "ldap3>=2.9",
     "croniter>=2.0",
+    "pyotp>=2.9",
+    "webauthn>=2.0",
 ]
 
 [project.optional-dependencies]

@@ -29,6 +29,15 @@ class Setting(Base):
     )
     mcp_client_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # MFA / WebAuthn (admin-configurable from dashboard)
+    require_admin_mfa: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # When OIDC is on, password login is off unless this is true ("unsafe" opt-in).
+    allow_password_login: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # WebAuthn relying-party config. rp_id must be a registrable domain (not an IP).
+    webauthn_rp_id: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    webauthn_rp_name: Mapped[str] = mapped_column(String(255), default="Huginn", nullable=False)
+    webauthn_origin: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+
     # SSO / OIDC settings (admin-configurable from dashboard)
     oidc_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Display name for the SSO button on the login page ("Continue with <name>").
