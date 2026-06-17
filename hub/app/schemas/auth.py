@@ -40,6 +40,10 @@ class OIDCStartResponse(BaseModel):
     state: str
 
 
+class UpdateProfileRequest(BaseModel):
+    email: str | None = Field(default=None, max_length=320)
+
+
 # --- MFA two-step login ---
 
 

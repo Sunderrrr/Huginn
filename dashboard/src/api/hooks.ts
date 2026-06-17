@@ -437,3 +437,11 @@ export function useAdminResetMfa() {
     onSuccess: invalidate,
   });
 }
+
+export function useUpdateProfile() {
+  const invalidate = useInvalidate(["me"]);
+  return useMutation({
+    mutationFn: (vars: { email: string | null }) => api.put<User>("/api/auth/me", vars),
+    onSuccess: invalidate,
+  });
+}

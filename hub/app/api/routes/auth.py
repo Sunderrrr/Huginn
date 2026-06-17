@@ -27,6 +27,7 @@ from app.schemas.auth import (
     LoginRequest,
     OIDCStartResponse,
     TokenResponse,
+    UpdateProfileRequest,
     UserOut,
 )
 from app.services import mfa as mfa_service
@@ -187,6 +188,38 @@ async def me(
     vm_ids = [row[0] for row in result.all()]
     passkeys = await mfa_service.passkey_count(session, principal.user.id)
     return UserOut.model_validate(principal.user).model_copy(
+        update={"vm_ids": vm_ids, "passkey_count": passkeys}
+    )
+
+
+@router.put("/me", response_model=UserOut)
+async def update_me(
+    body: UpdateProfileRequest,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> UserOut:
+    """Self-service profile update (currently just email)."""
+    if principal.user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no user for this principal")
+    user = principal.user
+    if body.email is not None:
+        user.email = body.email or None
+    await audit.record(
+        session,
+        actor_type=ActorType.user,
+        actor_id=str(user.id),
+        event_type="profile_updated",
+        detail={"fields": ["email"]},
+        source_ip=client_ip(request),
+    )
+    await session.commit()
+    result = await session.execute(
+        select(UserVMAccess.vm_id).where(UserVMAccess.user_id == user.id)
+    )
+    vm_ids = [row[0] for row in result.all()]
+    passkeys = await mfa_service.passkey_count(session, user.id)
+    return UserOut.model_validate(user).model_copy(
         update={"vm_ids": vm_ids, "passkey_count": passkeys}
     )
 

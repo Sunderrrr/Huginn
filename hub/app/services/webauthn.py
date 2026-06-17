@@ -42,6 +42,14 @@ class WebAuthnError(Exception):
     """Raised on any WebAuthn configuration or verification failure."""
 
 
+def _uv() -> UserVerificationRequirement:
+    raw = (get_settings().webauthn_user_verification or "preferred").lower()
+    try:
+        return UserVerificationRequirement(raw)
+    except ValueError:
+        return UserVerificationRequirement.PREFERRED
+
+
 def _is_registrable_domain(rp_id: str) -> bool:
     """rp_id must be a domain (with a dot), never a bare IP or 'localhost'.
 
@@ -151,9 +159,9 @@ async def begin_registration(session: AsyncSession, user: User) -> dict:
         ],
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.PREFERRED,
-            # Require a PIN/biometric so a passkey is a genuine two-factor
-            # (something you have + something you are/know), not mere possession.
-            user_verification=UserVerificationRequirement.REQUIRED,
+            # Configurable: "required" makes a passkey true MFA (PIN/biometric);
+            # "preferred" (default) also accepts e.g. a PIN-less security key.
+            user_verification=_uv(),
         ),
     )
     await _store_challenge(session, options.challenge, "register", user.id)
@@ -173,7 +181,7 @@ async def finish_registration(
             expected_challenge=base64url_to_bytes(row.challenge),
             expected_rp_id=rp_id,
             expected_origin=origin,
-            require_user_verification=True,
+            require_user_verification=_uv() == UserVerificationRequirement.REQUIRED,
         )
     except Exception as exc:  # py_webauthn raises various subclasses
         logger.warning("WebAuthn registration verification failed: %s", exc)
@@ -204,7 +212,7 @@ async def begin_login(session: AsyncSession, username: str | None) -> dict:
     options = webauthn.generate_authentication_options(
         rp_id=rp_id,
         challenge=challenge,
-        user_verification=UserVerificationRequirement.REQUIRED,
+        user_verification=_uv(),
     )
     await _store_challenge(session, options.challenge, "login", None)
     return json.loads(webauthn.options_to_json(options))
@@ -232,7 +240,7 @@ async def finish_login(session: AsyncSession, credential: dict) -> User:
             expected_origin=origin,
             credential_public_key=stored.public_key,
             credential_current_sign_count=stored.sign_count,
-            require_user_verification=True,
+            require_user_verification=_uv() == UserVerificationRequirement.REQUIRED,
         )
     except Exception as exc:
         logger.warning("WebAuthn authentication verification failed: %s", exc)

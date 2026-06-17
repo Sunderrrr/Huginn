@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { useVms } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 import type { VM, VMState } from "../api/types";
@@ -106,15 +106,36 @@ export function Layout() {
           <Telemetry />
 
           <div className="row" style={{ gap: 16 }}>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 13 }}>{user?.username ?? "—"}</div>
-              <div
-                className="eyebrow"
-                style={{ color: roleColor(user?.role) }}
-              >
-                {user?.role ?? ""}
+            <Link
+              to="/account"
+              title="Edit profile — email, password, 2FA & passkeys"
+              style={{ textAlign: "right", textDecoration: "none", color: "inherit" }}
+            >
+              <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+                <span
+                  aria-hidden
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: "50%",
+                    border: `1px solid ${roleColor(user?.role)}`,
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 12,
+                    fontFamily: "var(--font-display)",
+                    color: roleColor(user?.role),
+                  }}
+                >
+                  {(user?.username ?? "?").slice(0, 1).toUpperCase()}
+                </span>
+                <div>
+                  <div style={{ fontSize: 13 }}>{user?.username ?? "—"}</div>
+                  <div className="eyebrow" style={{ color: roleColor(user?.role) }}>
+                    {user?.role ?? ""} · edit profile
+                  </div>
+                </div>
               </div>
-            </div>
+            </Link>
             <button className="btn btn--ghost btn--sm" onClick={logout}>
               Sign out
             </button>

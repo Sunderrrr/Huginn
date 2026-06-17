@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     webauthn_rp_id: str = ""
     webauthn_rp_name: str = "Huginn"
     webauthn_origin: str = ""
+    # "preferred" works with the widest range of authenticators (incl. a YubiKey
+    # with no PIN); "required" enforces a PIN/biometric for true passwordless MFA.
+    webauthn_user_verification: str = "preferred"
 
     # TLS policy for hub<->worker
     require_tls: bool = True

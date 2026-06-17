@@ -51,8 +51,10 @@ POST /api/auth/mfa/webauthn/login/finish  → { access_token }
 
 ## Managing your factors
 
-The dashboard **Account › Security** page (any role) lets a user:
+The dashboard **Account › Security** page (any role — reachable from the profile
+button in the top-right header) lets a user:
 
+- update their email,
 - change their password,
 - enable/disable **TOTP** (QR + manual key; backup codes shown once),
 - regenerate backup codes,
@@ -82,8 +84,10 @@ available — you can never be locked out by this flag. The SPA reads
 - `HUGINN_WEBAUTHN_RP_ID` **must be a registrable domain, not a bare IP** — the
   hub fails closed otherwise. So passkeys only work over the configured domain
   (e.g. `huginn.example.com`), not the LAN IP. TOTP works everywhere.
-- User verification is **required** (PIN/biometric), so a passkey is a genuine
-  multi-factor, not mere possession.
+- User verification is configurable via `HUGINN_WEBAUTHN_USER_VERIFICATION`:
+  `preferred` (default — works with the widest range of authenticators, e.g. a
+  YubiKey with no PIN) or `required` (enforces a PIN/biometric, making the
+  passkey a genuine multi-factor rather than mere possession).
 - Challenges are server-generated, single-use, and expiring; the signature
   counter is persisted to detect cloned authenticators.
 
@@ -107,6 +111,7 @@ available — you can never be locked out by this flag. The SPA reads
 | `HUGINN_WEBAUTHN_RP_ID` | `HUGINN_DOMAIN` | Passkey relying-party id (registrable domain). |
 | `HUGINN_WEBAUTHN_RP_NAME` | `Huginn` | Display name shown by the authenticator. |
 | `HUGINN_WEBAUTHN_ORIGIN` | `https://<domain>` | Expected origin for passkey ceremonies. |
+| `HUGINN_WEBAUTHN_USER_VERIFICATION` | `preferred` | `preferred` (widest compatibility) or `required` (enforce PIN/biometric). |
 
 OIDC and LDAP have their own settings (admin-editable in **Settings**); see
 [security.md](security.md).

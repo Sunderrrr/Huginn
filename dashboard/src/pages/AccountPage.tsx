@@ -11,6 +11,7 @@ import {
   useTotpDisable,
   useTotpEnrollBegin,
   useTotpEnrollFinish,
+  useUpdateProfile,
 } from "../api/hooks";
 import { Modal } from "../components/Dialog";
 import { useToast } from "../components/Toast";
@@ -36,8 +37,10 @@ export function AccountPage() {
   const { data: me } = useMe();
   const toast = useToast();
 
-  // --- password ---
+  // --- profile / password ---
+  const updateProfile = useUpdateProfile();
   const changePw = useChangePassword();
+  const [email, setEmail] = useState("");
   const [oldPw, setOldPw] = useState("");
   const [newPw, setNewPw] = useState("");
 
@@ -61,6 +64,20 @@ export function AccountPage() {
   useEffect(() => {
     if (secret) QRCode.toDataURL(secret.otpauth_uri, { margin: 1, width: 180 }).then(setQr);
   }, [secret]);
+
+  useEffect(() => {
+    if (me) setEmail(me.email ?? "");
+  }, [me]);
+
+  async function saveEmail(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await updateProfile.mutateAsync({ email: email.trim() || null });
+      toast("ok", "email updated");
+    } catch (err) {
+      toast("err", err instanceof Error ? err.message : "failed");
+    }
+  }
 
   async function doChangePw(e: React.FormEvent) {
     e.preventDefault();
@@ -129,6 +146,33 @@ export function AccountPage() {
       </h1>
 
       <div className="stack" style={{ gap: 24 }}>
+        {/* Profile */}
+        <Section title="Profile">
+          <form onSubmit={saveEmail} className="stack" style={{ gap: 14 }}>
+            <div>
+              <label className="lbl">Username</label>
+              <input className="field" value={me?.username ?? ""} disabled />
+            </div>
+            <div>
+              <label className="lbl">Email</label>
+              <input
+                className="field"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+              />
+            </div>
+            <button
+              className="btn btn--primary"
+              style={{ alignSelf: "flex-start" }}
+              disabled={updateProfile.isPending || email === (me?.email ?? "")}
+            >
+              {updateProfile.isPending ? <span className="spin" /> : "Save email"}
+            </button>
+          </form>
+        </Section>
+
         {/* Password */}
         <Section title="Password">
           <form onSubmit={doChangePw} className="stack" style={{ gap: 14 }}>
