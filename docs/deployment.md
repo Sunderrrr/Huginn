@@ -56,11 +56,17 @@ Certificates are controlled by `HUGINN_TLS_INTERNAL`:
 Other notes:
 
 - `HUGINN_ENV=prod` is set, so the hub refuses to boot with placeholder/weak
-  secrets — generate them with `openssl rand -hex 32`.
+  secrets — generate `HUGINN_JWT_SECRET`, `HUGINN_SECRET_HASH_KEY`,
+  `HUGINN_MCP_SERVICE_TOKEN`, and `HUGINN_MFA_ENCRYPTION_KEY` with
+  `openssl rand -hex 32`.
 - The hub sees `X-Forwarded-Proto: https` from Caddy, satisfying `HUGINN_REQUIRE_TLS`.
 - Workers enroll against `https://<HUGINN_DOMAIN>`; the dashboard is at the same URL.
-- The dashboard's hub URL is baked at build time from `HUGINN_DOMAIN`, so re-run
-  with `--build` after changing the host.
+- The dashboard calls the API **same-origin** (relative `/api`), so it works on
+  whatever host/proxy serves it — no hub URL is baked into the build and no CORS
+  is needed behind Caddy.
+- **MFA / passkeys**: set `HUGINN_WEBAUTHN_RP_ID`/`HUGINN_WEBAUTHN_ORIGIN` (they
+  default to `HUGINN_DOMAIN`). Passkeys require a real domain — they won't work
+  over a bare IP. TOTP works regardless. See [auth.md](auth.md).
 
 Upgrades: `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
 (the hub re-applies migrations on start).
@@ -119,10 +125,11 @@ kubectl -n huginn apply -f deploy/k8s/ingress.example.yaml
 Notes:
 - The hub Deployment overrides the image entrypoint with the plain `uvicorn`
   command, so replicas do **not** run migrations — the `huginn-migrate` Job owns that.
-- The **dashboard** is a static SPA; its hub URL is baked at image build time
-  (`VITE_HUB_URL`). Build it with your public hub URL (e.g. `https://huginn.example.com`),
-  since the browser calls the hub directly. Set `HUGINN_CORS_ORIGINS` on the hub
-  to that same origin.
+- The **dashboard** is a static SPA that calls the API **same-origin** by default
+  (empty `VITE_HUB_URL` → relative `/api`). Route `/api` (and `/mcp`) to the hub
+  on the same host the dashboard is served from (ingress path rules) and no CORS
+  is needed. Only set `VITE_HUB_URL` (and matching `HUGINN_CORS_ORIGINS`) if you
+  deliberately serve the dashboard on a *different* origin than the hub.
 - The **MCP** server reads `HUGINN_MCP_SERVICE_TOKEN` from `huginn-secrets` and
   talks to the hub over the in-cluster `huginn-hub` Service.
 

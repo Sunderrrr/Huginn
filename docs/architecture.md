@@ -24,7 +24,8 @@ Huginn is a hub-and-spoke system for managing a fleet of Linux VMs.
 FastAPI + PostgreSQL (async SQLAlchemy 2, Alembic). The single source of truth:
 - **Inventory & lifecycle** — VMs, their state (PENDING/ACTIVE/OFFLINE/REVOKED), and exec mode.
 - **Enrollment** — limited-use, revocable tokens; manual approval.
-- **AuthN/Z** — local (Argon2id) + OIDC users with admin/read-only RBAC; per-worker secrets.
+- **AuthN/Z** — local (Argon2id), LDAP, and OIDC/SSO users with admin/operator/
+  read-only RBAC; optional 2FA (TOTP + WebAuthn passkeys); per-worker secrets.
 - **Task queue** — a DB-backed queue routes actions, commands, and updates to workers.
 - **Audit** — append-only, hash-chained log of every sensitive operation.
 - **Versioning** — the target worker version and the SSRF allowlist for releases.
@@ -41,7 +42,8 @@ A thin FastMCP façade over the hub's REST API, exposing tools for an external A
 agent. It holds no business logic and never contacts workers directly.
 
 ### Dashboard (`/dashboard`)
-React SPA *(iteration 2)*.
+React SPA (Vite + TypeScript). Calls the hub **same-origin** (relative `/api`),
+so it works behind any reverse proxy without a baked-in hub URL or CORS.
 
 ## Communication model
 
@@ -66,6 +68,8 @@ pending ──poll──▶ dispatched ──result──▶ succeeded | failed 
 
 ## Data model
 
-See [the schema in the README](../README.md) and `hub/app/models/`. Key tables:
-`users`, `enrollment_tokens`, `vms`, `tasks`, `audit_log` (append-only,
-hash-chained), and a single-row `settings`.
+See `hub/app/models/`. Key tables: `users` (with TOTP columns),
+`enrollment_tokens`, `vms`, `tasks`, `audit_log` (append-only, hash-chained), a
+single-row `settings`, `user_vm_access`, `tags` + `vm_tags`,
+`scheduled_commands`, `mfa_backup_codes`, and `webauthn_credentials` /
+`webauthn_challenges`.

@@ -26,6 +26,11 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
     trigger updates, read the audit log.
   - **admin** (human admin user only) — control-plane operations: approve/revoke
     VMs, toggle unrestricted mode, manage enrollment tokens, change settings.
+- **Two-factor authentication** for local accounts: TOTP (with single-use backup
+  codes) and WebAuthn **passkeys** (phishing-resistant, passwordless). The
+  intermediate post-password "challenge token" is scope-restricted and rejected
+  by every business endpoint. Admin 2FA can be enforced. Full details and the
+  threat properties are in [auth.md](auth.md).
 - The MCP façade authenticates with a service token and acts as an **operator,
   not an admin**: a leaked service token cannot approve VMs, enable unrestricted
   mode, or change the release allowlist.
@@ -34,13 +39,18 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 
 ### Fail-closed configuration
 - In production (`HUGINN_ENV=prod`) the hub **refuses to start** if any of
-  `HUGINN_JWT_SECRET`, `HUGINN_SECRET_HASH_KEY`, or `HUGINN_MCP_SERVICE_TOKEN` is
-  still a placeholder or shorter than 32 bytes. (`config.validate_for_prod`)
+  `HUGINN_JWT_SECRET`, `HUGINN_SECRET_HASH_KEY`, `HUGINN_MCP_SERVICE_TOKEN`, or
+  `HUGINN_MFA_ENCRYPTION_KEY` is still a placeholder or shorter than 32 bytes.
+  (`config.validate_for_prod`)
 
 ### Secrets
 - Passwords are hashed with **Argon2id**. High-entropy secrets (enrollment
-  tokens, per-worker secrets) are stored as a **keyed HMAC-SHA256**, never in
-  plaintext. (`hub/app/core/security.py`)
+  tokens, per-worker secrets, TOTP backup codes) are stored as a **keyed
+  HMAC-SHA256**, never in plaintext. (`hub/app/core/security.py`)
+- TOTP secrets need to be reversible, so they are **encrypted at rest** with
+  Fernet under a dedicated `HUGINN_MFA_ENCRYPTION_KEY` — kept separate from the
+  JWT and HMAC keys so one key's compromise can't both forge tokens and decrypt
+  MFA seeds.
 - All secret/token comparisons are **timing-safe**: `hmac.compare_digest`
   (Python) and `crypto/subtle.ConstantTimeCompare` (Go).
 - The worker writes its credentials file with `0600` permissions.
@@ -82,9 +92,13 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 
 ## Operational guidance
 - Generate real secrets: `openssl rand -hex 32` for `HUGINN_JWT_SECRET`,
-  `HUGINN_SECRET_HASH_KEY`, and `HUGINN_MCP_SERVICE_TOKEN`.
-- Rotate the bootstrap admin password immediately.
+  `HUGINN_SECRET_HASH_KEY`, `HUGINN_MCP_SERVICE_TOKEN`, and
+  `HUGINN_MFA_ENCRYPTION_KEY`.
+- Rotate the bootstrap admin password immediately, and enrol a second factor
+  (TOTP or a passkey) — keep `HUGINN_REQUIRE_ADMIN_MFA=true`.
 - Keep `HUGINN_REQUIRE_TLS=true` in production and terminate TLS in front of the hub.
 - Enable unrestricted mode only when necessary, and review the audit log.
+- Rotating `HUGINN_MFA_ENCRYPTION_KEY` invalidates existing TOTP secrets (users
+  re-enrol); it does not affect passkeys.
 
 Report vulnerabilities per [SECURITY.md](../SECURITY.md).

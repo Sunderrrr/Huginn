@@ -40,14 +40,27 @@ external AI agent (e.g. "Hermes") without duplicating any business logic.
 - **MCP server** (`/mcp`) — a thin façade over the hub's REST API exposing tools
   for an external agent. No direct worker access, no duplicated logic.
 - **Dashboard** (`/dashboard`) — a React SPA (Vite + TypeScript) with a
-  distinctive "raven control-console" UI: local + OIDC/SSO login (tested with
-  Authentik) + LDAP, fleet roster,
-  per-node actions/updates/unrestricted shell, enrollment tokens, and the audit
-  log with hash-chain verification.
+  distinctive "raven control-console" UI: a home overview, fleet roster, per-node
+  actions/updates/unrestricted shell, custom tags/groups, scheduled commands,
+  enrollment + MCP tokens, user management, and the audit log with hash-chain
+  verification. Served same-origin behind the reverse proxy (no baked hub URL).
 
 By default the worker **pulls** work from the hub over a single outbound HTTPS
 connection, so it works behind NAT. A push listener can be enabled per-VM when the
 machine is directly routable.
+
+## Authentication
+
+Multiple sign-in methods, all feeding the same admin / operator / read-only RBAC:
+
+- **Local** password (Argon2id), **LDAP/LDAPS**, and **OIDC/SSO** (tested with
+  Authentik).
+- **Two-factor**: TOTP authenticator apps (with single-use backup codes) and
+  **WebAuthn passkeys** for phishing-resistant passwordless login. 2FA can be
+  required for admins.
+- **SSO-first**: when OIDC is enabled the password form is hidden by default and
+  re-enabled only via an explicit "unsafe" flag — never locking you out when OIDC
+  is off. See [docs/auth.md](docs/auth.md).
 
 ## Quickstart (local)
 
@@ -78,8 +91,9 @@ HTTPS) or **Kubernetes** — both are first-class; you don't need k8s. See
 [docs/deployment.md](docs/deployment.md).
 
 See [docs/](docs/) for [architecture](docs/architecture.md),
-[enrollment](docs/enrollment.md), [security](docs/security.md),
-[deployment](docs/deployment.md), and [MCP integration](docs/mcp.md).
+[authentication & 2FA](docs/auth.md), [enrollment](docs/enrollment.md),
+[security](docs/security.md), [deployment](docs/deployment.md), and
+[MCP integration](docs/mcp.md).
 
 ## Repository layout
 
@@ -95,12 +109,13 @@ See [docs/](docs/) for [architecture](docs/architecture.md),
 
 ## Security
 
-Auth on every endpoint, timing-safe secret comparison, TLS enforced for
-hub↔worker in prod, secrets hashed at rest, no shell construction on the worker
-(separated argv, never `sh -c`), opt-in + audited unrestricted mode, rate limits
-and body caps on execution, SSRF allowlist on update sources, and an append-only
-hash-chained audit log. Details in [docs/security.md](docs/security.md). Report
-vulnerabilities per [SECURITY.md](SECURITY.md).
+Auth on every endpoint, optional 2FA (TOTP + WebAuthn passkeys) with TOTP secrets
+encrypted at rest, timing-safe secret comparison, TLS enforced for hub↔worker in
+prod, secrets hashed at rest, no shell construction on the worker (separated argv,
+never `sh -c`), opt-in + audited unrestricted mode, rate limits and body caps on
+execution, SSRF allowlist on update sources, and an append-only hash-chained audit
+log. Details in [docs/security.md](docs/security.md). Report vulnerabilities per
+[SECURITY.md](SECURITY.md).
 
 ## Contributing
 
