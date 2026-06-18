@@ -65,7 +65,7 @@ Multiple sign-in methods, all feeding the same admin / operator / read-only RBAC
 ## Quickstart (local)
 
 ```bash
-git clone https://github.com/Internal-website/Huginn.git
+git clone https://github.com/Sunderrrr/Huginn.git
 cd Huginn
 cp .env.example .env          # then edit secrets
 cd deploy && docker compose up --build

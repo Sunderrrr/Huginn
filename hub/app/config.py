@@ -97,8 +97,8 @@ class Settings(BaseSettings):
     heartbeat_offline_seconds: int = 120
 
     # Worker update / release source. CSV string for the same reason as CORS.
-    target_worker_version: str = "v0.1.0"
-    target_release_repo: str = "Internal-website/Huginn"
+    target_worker_version: str = "v1.0.0"
+    target_release_repo: str = "Sunderrrr/Huginn"
     allowed_release_domains_csv: str = Field(
         default="github.com,objects.githubusercontent.com",
         validation_alias="HUGINN_ALLOWED_RELEASE_DOMAINS",

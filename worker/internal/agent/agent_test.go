@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Internal-website/Huginn/worker/internal/config"
-	wexec "github.com/Internal-website/Huginn/worker/internal/exec"
-	"github.com/Internal-website/Huginn/worker/internal/hubclient"
+	"github.com/Sunderrrr/Huginn/worker/internal/config"
+	wexec "github.com/Sunderrrr/Huginn/worker/internal/exec"
+	"github.com/Sunderrrr/Huginn/worker/internal/hubclient"
 )
 
 // fakeRunner records the argv it was asked to run and returns a canned result.

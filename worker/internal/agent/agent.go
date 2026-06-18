@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Internal-website/Huginn/worker/internal/config"
-	wexec "github.com/Internal-website/Huginn/worker/internal/exec"
-	"github.com/Internal-website/Huginn/worker/internal/hubclient"
-	"github.com/Internal-website/Huginn/worker/internal/update"
-	"github.com/Internal-website/Huginn/worker/internal/whitelist"
+	"github.com/Sunderrrr/Huginn/worker/internal/config"
+	wexec "github.com/Sunderrrr/Huginn/worker/internal/exec"
+	"github.com/Sunderrrr/Huginn/worker/internal/hubclient"
+	"github.com/Sunderrrr/Huginn/worker/internal/update"
+	"github.com/Sunderrrr/Huginn/worker/internal/whitelist"
 )
 
 // Agent owns the worker run loop and its dependencies (injectable for tests).

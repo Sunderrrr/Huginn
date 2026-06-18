@@ -32,7 +32,7 @@ publishes ports (80/443).
 ```bash
 cd deploy
 cp .env.prod.example .env.prod        # set HUGINN_DOMAIN + real secrets
-./build-artifacts.sh v0.1.0           # build worker binaries the hub will serve
+./build-artifacts.sh v1.0.0           # build worker binaries the hub will serve
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 

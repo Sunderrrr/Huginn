@@ -16,10 +16,10 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/Internal-website/Huginn/worker/internal/agent"
-	"github.com/Internal-website/Huginn/worker/internal/config"
-	"github.com/Internal-website/Huginn/worker/internal/hubclient"
-	"github.com/Internal-website/Huginn/worker/internal/systemd"
+	"github.com/Sunderrrr/Huginn/worker/internal/agent"
+	"github.com/Sunderrrr/Huginn/worker/internal/config"
+	"github.com/Sunderrrr/Huginn/worker/internal/hubclient"
+	"github.com/Sunderrrr/Huginn/worker/internal/systemd"
 )
 
 func main() {

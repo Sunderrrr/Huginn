@@ -4,7 +4,7 @@ import { useMcpToken, useRegenerateMcpToken } from "../api/hooks";
 import { Modal } from "../components/Dialog";
 import { useToast } from "../components/Toast";
 
-const DOCS_URL = "https://github.com/Internal-website/Huginn/blob/main/docs/mcp-agents.md";
+const DOCS_URL = "https://github.com/Sunderrrr/Huginn/blob/main/docs/mcp-agents.md";
 
 type ClientId = "claude-code" | "claude-desktop" | "cursor" | "continue" | "raw";
 

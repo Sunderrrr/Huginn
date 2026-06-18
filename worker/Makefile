@@ -1,5 +1,5 @@
 BINARY := huginn-worker
-PKG := github.com/Internal-website/Huginn/worker
+PKG := github.com/Sunderrrr/Huginn/worker
 VERSION ?= dev
 LDFLAGS := -s -w -X $(PKG)/internal/config.Version=$(VERSION)
 PLATFORMS := linux/amd64 linux/arm64

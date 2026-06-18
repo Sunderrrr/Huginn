@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-06-18
 
 ### Added
 - **Two-factor authentication**: TOTP authenticator support (with single-use
@@ -63,4 +63,4 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Audit-log appends are serialized to keep the hash chain consistent under
   concurrency.
 
-[Unreleased]: https://github.com/Internal-website/Huginn/commits/main
+[1.0.0]: https://github.com/Sunderrrr/Huginn/releases/tag/v1.0.0

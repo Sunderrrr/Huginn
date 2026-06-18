@@ -65,7 +65,7 @@ def build_release_urls(
     """Construct and validate the binary + checksums URLs for a release.
 
     Supports two modes:
-    - GitHub releases: ``repo`` is ``owner/repo`` (e.g. ``Internal-website/Huginn``)
+    - GitHub releases: ``repo`` is ``owner/repo`` (e.g. ``Sunderrrr/Huginn``)
     - Self-hosted: ``repo`` is a base URL (e.g. ``https://hub.example.com/dist``)
     """
     if not _VERSION_RE.match(version):

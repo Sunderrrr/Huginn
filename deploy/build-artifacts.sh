@@ -9,7 +9,7 @@
 #
 set -euo pipefail
 
-VERSION="${1:-v0.1.0}"
+VERSION="${1:-v1.0.0}"
 here="$(cd "$(dirname "$0")" && pwd)"
 worker_dir="$(cd "${here}/../worker" && pwd)"
 out="${here}/artifacts"

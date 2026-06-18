@@ -6,7 +6,7 @@ Huginn executes commands on remote machines, so we take security seriously. If y
 discover a vulnerability, **please report it privately** rather than opening a
 public issue.
 
-- Use [GitHub private vulnerability reporting](https://github.com/Internal-website/Huginn/security/advisories/new), or
+- Use [GitHub private vulnerability reporting](https://github.com/Sunderrrr/Huginn/security/advisories/new), or
 - Email the maintainers (see repository contacts).
 
 Please include reproduction steps and impact. We aim to acknowledge within a few
