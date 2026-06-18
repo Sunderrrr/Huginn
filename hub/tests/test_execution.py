@@ -235,3 +235,43 @@ async def test_execute_action_requires_auth(client, enrolled_worker) -> None:
     w = await enrolled_worker()
     resp = await client.post(f"/api/vms/{w['vm_id']}/actions", json={"action": "status"})
     assert resp.status_code == 401
+
+async def test_result_large_output_is_truncated_not_rejected(
+    client, admin_headers, enrolled_worker
+) -> None:
+    """Output above the 1 MB cap is stored truncated (graceful), not rejected."""
+    w = await enrolled_worker()
+    task_id = (
+        await client.post(
+            f"/api/vms/{w['vm_id']}/actions", json={"action": "status"}, headers=admin_headers
+        )
+    ).json()["id"]
+    big = "A" * 1_500_000  # 1.5 MB: over the 1 MB cap, under the 2 MiB schema bound
+    result = await client.post(
+        f"/api/worker/tasks/{task_id}/result",
+        json={"status": "succeeded", "exit_code": 0, "stdout": big},
+        headers=w["headers"],
+    )
+    assert result.status_code == 204, result.text
+    stored = (await client.get(f"/api/tasks/{task_id}", headers=admin_headers)).json()["stdout"]
+    assert len(stored) < len(big)
+    assert stored.endswith("[...truncated...]")
+
+
+async def test_result_oversized_field_rejected(
+    client, admin_headers, enrolled_worker
+) -> None:
+    """A single result field beyond the schema bound is rejected at validation."""
+    w = await enrolled_worker()
+    task_id = (
+        await client.post(
+            f"/api/vms/{w['vm_id']}/actions", json={"action": "status"}, headers=admin_headers
+        )
+    ).json()["id"]
+    abusive = "A" * (2_097_152 + 1)  # one over max_length, still under the body cap
+    result = await client.post(
+        f"/api/worker/tasks/{task_id}/result",
+        json={"status": "succeeded", "exit_code": 0, "stdout": abusive},
+        headers=w["headers"],
+    )
+    assert result.status_code == 422

@@ -93,6 +93,9 @@ class WorkerTask(BaseModel):
 class TaskResultSubmit(BaseModel):
     status: TaskStatus
     exit_code: int | None = None
-    stdout: str | None = None
-    stderr: str | None = None
-    error: str | None = None
+    # Bounded generously (2x the per-field truncation cap) so an abusive single
+    # field is rejected early, while normal large output is still truncated
+    # gracefully in submit_result rather than rejected.
+    stdout: str | None = Field(default=None, max_length=2_097_152)
+    stderr: str | None = Field(default=None, max_length=2_097_152)
+    error: str | None = Field(default=None, max_length=2_097_152)
