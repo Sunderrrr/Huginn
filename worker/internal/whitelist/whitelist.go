@@ -60,3 +60,18 @@ func Known(action string) bool {
 	_, ok := actions[action]
 	return ok
 }
+
+// idempotent marks read-only actions that are safe to retry on a transient
+// failure — re-running them changes no state. Mutating actions (apt_upgrade,
+// restart_service) and free commands are deliberately excluded: retrying them
+// could double-apply a side effect.
+var idempotent = map[string]bool{
+	"status":                   true,
+	"metrics":                  true,
+	"list_upgradable_packages": true,
+}
+
+// Idempotent reports whether an action is safe to retry automatically.
+func Idempotent(action string) bool {
+	return idempotent[action]
+}

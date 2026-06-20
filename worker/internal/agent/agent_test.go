@@ -30,9 +30,72 @@ func (f *fakeRunner) Run(_ context.Context, argv []string, _ time.Duration, _ in
 
 func newTestAgent(runner wexec.Runner) *Agent {
 	return &Agent{
-		Runner: runner,
-		State:  &config.State{},
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Runner:           runner,
+		State:            &config.State{},
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RetryBackoffBase: time.Millisecond, // keep retry tests fast
+	}
+}
+
+// seqRunner returns a queued result per call (the last one repeats) and counts
+// invocations — used to exercise the retry loop.
+type seqRunner struct {
+	results []wexec.Result
+	calls   int
+}
+
+func (s *seqRunner) Run(_ context.Context, _ []string, _ time.Duration, _ int) (wexec.Result, error) {
+	i := s.calls
+	s.calls++
+	if i >= len(s.results) {
+		i = len(s.results) - 1
+	}
+	return s.results[i], nil
+}
+
+func TestIdempotentActionRetriesThenSucceeds(t *testing.T) {
+	runner := &seqRunner{results: []wexec.Result{
+		{ExitCode: 1, Stderr: "mirror down"}, // attempt 1: transient failure
+		{ExitCode: 0, Stdout: "ok"},          // attempt 2: success
+	}}
+	a := newTestAgent(runner)
+	task := &hubclient.Task{ID: "t", Type: "action", ActionName: "list_upgradable_packages", Payload: map[string]any{}}
+
+	res := a.runAction(context.Background(), task)
+	if res.Status != "succeeded" {
+		t.Fatalf("status = %q, want succeeded after retry", res.Status)
+	}
+	if runner.calls != 2 {
+		t.Fatalf("calls = %d, want 2 (one retry)", runner.calls)
+	}
+}
+
+func TestIdempotentActionGivesUpAfterMaxAttempts(t *testing.T) {
+	runner := &seqRunner{results: []wexec.Result{{ExitCode: 1, Stderr: "still down"}}}
+	a := newTestAgent(runner)
+	task := &hubclient.Task{ID: "t", Type: "action", ActionName: "status", Payload: map[string]any{}}
+
+	res := a.runAction(context.Background(), task)
+	if res.Status != "failed" {
+		t.Fatalf("status = %q, want failed", res.Status)
+	}
+	if runner.calls != maxActionAttempts {
+		t.Fatalf("calls = %d, want %d", runner.calls, maxActionAttempts)
+	}
+}
+
+func TestNonIdempotentActionNotRetried(t *testing.T) {
+	runner := &seqRunner{results: []wexec.Result{{ExitCode: 1, Stderr: "boom"}}}
+	a := newTestAgent(runner)
+	// apt_upgrade is mutating → must run exactly once even on failure.
+	task := &hubclient.Task{ID: "t", Type: "action", ActionName: "apt_upgrade", Payload: map[string]any{}}
+
+	res := a.runAction(context.Background(), task)
+	if res.Status != "failed" {
+		t.Fatalf("status = %q, want failed", res.Status)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("calls = %d, want 1 (no retry for mutating action)", runner.calls)
 	}
 }
 

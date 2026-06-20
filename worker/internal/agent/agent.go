@@ -38,6 +38,10 @@ type Agent struct {
 	// "<binary> healthcheck"). Injectable for tests.
 	HealthCommand func(ctx context.Context, binaryPath string) error
 
+	// RetryBackoffBase is the first delay between retries of an idempotent action
+	// (doubled each attempt, capped at 8s). Defaults to 1s; small in tests.
+	RetryBackoffBase time.Duration
+
 	// mu guards execMode, which the heartbeat goroutine writes and the poll loop
 	// reads concurrently.
 	mu sync.Mutex
@@ -70,6 +74,7 @@ func New(client *hubclient.Client, state *config.State, logger *slog.Logger) *Ag
 		LongPollSeconds:   25,
 		Logger:            logger,
 		HealthCommand:     defaultHealthCommand,
+		RetryBackoffBase:  time.Second,
 	}
 }
 
@@ -215,16 +220,53 @@ func (a *Agent) dispatch(ctx context.Context, task *hubclient.Task) (hubclient.T
 	}
 }
 
+// maxActionAttempts bounds how many times an idempotent action is tried before
+// its last result is reported. Non-idempotent actions are always tried once.
+const maxActionAttempts = 3
+
 func (a *Agent) runAction(ctx context.Context, task *hubclient.Task) hubclient.TaskResult {
 	argv, err := whitelist.BuildArgv(task.ActionName, stringParams(task.Payload["params"]))
 	if err != nil {
 		return failure(err.Error())
 	}
-	res, err := a.Runner.Run(ctx, argv, taskTimeout(task.Payload), 0)
-	if err != nil {
-		return failure(err.Error())
+	timeout := taskTimeout(task.Payload)
+	attempts := 1
+	if whitelist.Idempotent(task.ActionName) {
+		attempts = maxActionAttempts
 	}
-	return fromExecResult(res)
+
+	var result hubclient.TaskResult
+	for attempt := 1; ; attempt++ {
+		if res, err := a.Runner.Run(ctx, argv, timeout, 0); err != nil {
+			result = failure(err.Error())
+		} else {
+			result = fromExecResult(res)
+		}
+		if result.Status == "succeeded" || attempt >= attempts {
+			return result
+		}
+		// Transient failure on an idempotent action (e.g. an apt mirror briefly
+		// down): back off and retry. Re-running is side-effect-free here.
+		a.Logger.Warn("idempotent action failed; retrying",
+			"id", task.ID, "action", task.ActionName,
+			"attempt", attempt, "status", result.Status)
+		if !a.sleep(ctx, a.retryBackoff(attempt)) {
+			return result // context cancelled — report what we have
+		}
+	}
+}
+
+// retryBackoff returns an exponential delay (base, 2×base, 4×base…) capped at 8s.
+func (a *Agent) retryBackoff(attempt int) time.Duration {
+	base := a.RetryBackoffBase
+	if base <= 0 {
+		base = time.Second
+	}
+	d := base << (attempt - 1)
+	if d > 8*time.Second {
+		d = 8 * time.Second
+	}
+	return d
 }
 
 func (a *Agent) runCommand(ctx context.Context, task *hubclient.Task) hubclient.TaskResult {
@@ -299,12 +341,16 @@ func (a *Agent) runUninstall(ctx context.Context, task *hubclient.Task) hubclien
 	}
 }
 
-func (a *Agent) sleep(ctx context.Context, d time.Duration) {
+// sleep waits for d or until ctx is cancelled. It returns true if the full
+// duration elapsed, false if ctx was cancelled first.
+func (a *Agent) sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-ctx.Done():
+		return false
 	case <-t.C:
+		return true
 	}
 }
 
