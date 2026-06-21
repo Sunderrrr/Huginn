@@ -1,13 +1,14 @@
 """Admin-defined custom commands: CRUD + per-VM authorization.
 
-A custom action is a fixed argv (no shell, no parameters) that a VM in
-``custom``/``unrestricted`` mode may run if it carries one of the action's
-allowed tags. Argv is validated here so a definition can never carry a shell or
-malformed element.
+A custom action is an ordered list of fixed argv vectors (one per command line),
+each run with no shell, that a VM in ``custom``/``unrestricted`` mode may run if it
+carries one of the action's allowed tags. Lines are parsed/validated here so a
+definition can never carry a shell or malformed element.
 """
 
 from __future__ import annotations
 
+import shlex
 import uuid
 from collections.abc import Sequence
 
@@ -17,24 +18,48 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.custom_action import CustomAction, CustomActionTag
 from app.models.tag import VMTag
 
+_MAX_COMMANDS = 32
 _MAX_ARGV = 64
 _MAX_ELEM = 1024
 
 
-def validate_argv(argv: object) -> list[str]:
-    """Validate a fixed argv: a non-empty list of non-empty, null-free strings."""
-    if not isinstance(argv, list) or not argv:
-        raise ValueError("argv must be a non-empty list of strings")
-    if len(argv) > _MAX_ARGV:
-        raise ValueError(f"argv has too many elements (max {_MAX_ARGV})")
-    out: list[str] = []
-    for elem in argv:
-        if not isinstance(elem, str) or elem == "":
-            raise ValueError("each argv element must be a non-empty string")
-        if "\x00" in elem or len(elem) > _MAX_ELEM:
-            raise ValueError("argv element contains a null byte or is too long")
-        out.append(elem)
-    return out
+def parse_command_lines(lines: object) -> list[list[str]]:
+    """Parse command lines into argv vectors (shlex tokenization, no shell).
+
+    Each non-blank line becomes one argv vector. Quoting is honoured (``echo "a
+    b"`` → two tokens) but nothing is ever executed through a shell. Raises
+    ValueError on a malformed line or an empty result.
+    """
+    if not isinstance(lines, list):
+        raise ValueError("commands must be a list of command lines")
+    commands: list[list[str]] = []
+    for raw in lines:
+        if not isinstance(raw, str):
+            raise ValueError("each command must be a string")
+        if not raw.strip():
+            continue  # skip blank lines
+        try:
+            argv = shlex.split(raw)
+        except ValueError as exc:
+            raise ValueError(f"could not parse command {raw!r}: {exc}") from exc
+        if not argv:
+            continue
+        if len(argv) > _MAX_ARGV:
+            raise ValueError(f"command has too many tokens (max {_MAX_ARGV})")
+        for elem in argv:
+            if "\x00" in elem or len(elem) > _MAX_ELEM:
+                raise ValueError("command token contains a null byte or is too long")
+        commands.append(argv)
+    if not commands:
+        raise ValueError("at least one command is required")
+    if len(commands) > _MAX_COMMANDS:
+        raise ValueError(f"too many commands (max {_MAX_COMMANDS})")
+    return commands
+
+
+def lines_of(commands: list[list[str]]) -> list[str]:
+    """Render stored argv vectors back to canonical command lines (for display)."""
+    return [shlex.join(argv) for argv in commands]
 
 
 async def list_all(session: AsyncSession) -> list[CustomAction]:
@@ -73,14 +98,14 @@ async def create(
     *,
     name: str,
     description: str,
-    argv: list[str],
+    lines: list[str],
     tag_ids: Sequence[uuid.UUID],
     created_by: str | None,
 ) -> CustomAction:
     action = CustomAction(
         name=name,
         description=description,
-        argv=validate_argv(argv),
+        commands=parse_command_lines(lines),
         created_by=created_by,
     )
     session.add(action)
@@ -95,7 +120,7 @@ async def update(
     action_id: uuid.UUID,
     *,
     description: str | None = None,
-    argv: list[str] | None = None,
+    lines: list[str] | None = None,
     enabled: bool | None = None,
     tag_ids: Sequence[uuid.UUID] | None = None,
 ) -> CustomAction | None:
@@ -104,8 +129,8 @@ async def update(
         return None
     if description is not None:
         action.description = description
-    if argv is not None:
-        action.argv = validate_argv(argv)
+    if lines is not None:
+        action.commands = parse_command_lines(lines)
     if enabled is not None:
         action.enabled = enabled
     if tag_ids is not None:

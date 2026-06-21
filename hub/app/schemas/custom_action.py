@@ -24,7 +24,7 @@ def _check_name(value: str) -> str:
 class CustomActionCreate(BaseModel):
     name: str
     description: str = Field(default="", max_length=255)
-    argv: list[str] = Field(min_length=1)
+    commands: list[str] = Field(min_length=1)  # one full command line per entry
     tag_ids: list[uuid.UUID] = Field(min_length=1)  # explicit scope: runs nowhere if empty
 
     _v_name = field_validator("name")(_check_name)
@@ -32,7 +32,7 @@ class CustomActionCreate(BaseModel):
 
 class CustomActionUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=255)
-    argv: list[str] | None = Field(default=None, min_length=1)
+    commands: list[str] | None = Field(default=None, min_length=1)
     enabled: bool | None = None
     tag_ids: list[uuid.UUID] | None = Field(default=None, min_length=1)
 
@@ -41,7 +41,8 @@ class CustomActionOut(BaseModel):
     id: uuid.UUID
     name: str
     description: str
-    argv: list[str]
+    commands: list[str]  # canonical command lines
+    argv: list[list[str]]  # parsed argv vectors (what actually runs)
     enabled: bool
     tag_ids: list[uuid.UUID]
     created_at: datetime

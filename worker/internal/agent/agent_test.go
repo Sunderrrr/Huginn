@@ -84,28 +84,54 @@ func TestIdempotentActionGivesUpAfterMaxAttempts(t *testing.T) {
 	}
 }
 
-func TestCustomCommandRunsArgvInCustomMode(t *testing.T) {
-	runner := &fakeRunner{result: wexec.Result{ExitCode: 0, Stdout: "ok"}}
+func customTask(commands ...[]string) *hubclient.Task {
+	cmds := make([]any, len(commands))
+	for i, c := range commands {
+		argv := make([]any, len(c))
+		for j, s := range c {
+			argv[j] = s
+		}
+		cmds[i] = argv
+	}
+	return &hubclient.Task{ID: "t", Type: "action", ActionName: "custom-x",
+		Payload: map[string]any{"commands": cmds}}
+}
+
+func TestCustomCommandRunsSequenceInCustomMode(t *testing.T) {
+	runner := &seqRunner{results: []wexec.Result{{ExitCode: 0}, {ExitCode: 0}}}
 	a := newTestAgent(runner)
 	a.setExecMode("custom")
-	task := &hubclient.Task{ID: "t", Type: "action", ActionName: "restart-nginx",
-		Payload: map[string]any{"argv": []any{"systemctl", "restart", "nginx"}}}
+	task := customTask([]string{"systemctl", "restart", "nginx"}, []string{"echo", "done"})
 
 	res := a.runAction(context.Background(), task)
 	if res.Status != "succeeded" {
 		t.Fatalf("status = %q, want succeeded", res.Status)
 	}
-	want := []string{"systemctl", "restart", "nginx"}
-	if strings.Join(runner.gotArgv, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("argv = %v, want %v (and never a shell)", runner.gotArgv, want)
+	if runner.calls != 2 {
+		t.Fatalf("calls = %d, want 2 (both commands ran)", runner.calls)
+	}
+}
+
+func TestCustomCommandStopsAtFirstFailure(t *testing.T) {
+	// First command fails → the second must NOT run.
+	runner := &seqRunner{results: []wexec.Result{{ExitCode: 3, Stderr: "boom"}, {ExitCode: 0}}}
+	a := newTestAgent(runner)
+	a.setExecMode("custom")
+	task := customTask([]string{"false"}, []string{"echo", "never"})
+
+	res := a.runAction(context.Background(), task)
+	if res.Status != "failed" {
+		t.Fatalf("status = %q, want failed", res.Status)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("calls = %d, want 1 (stop at first failure)", runner.calls)
 	}
 }
 
 func TestCustomCommandRefusedOutsideCustomMode(t *testing.T) {
 	runner := &fakeRunner{}
 	a := newTestAgent(runner) // execMode defaults to "" (whitelist)
-	task := &hubclient.Task{ID: "t", Type: "action", ActionName: "restart-nginx",
-		Payload: map[string]any{"argv": []any{"systemctl", "restart", "nginx"}}}
+	task := customTask([]string{"systemctl", "restart", "nginx"})
 
 	res := a.runAction(context.Background(), task)
 	if res.Status != "failed" {

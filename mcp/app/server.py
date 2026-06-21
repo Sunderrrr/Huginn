@@ -233,7 +233,11 @@ async def get_vm_status(vm_id: str) -> Any:
 
 
 def _brief_action(a: dict) -> dict:
-    return {"name": a.get("name"), "description": a.get("description"), "argv": a.get("argv")}
+    return {
+        "name": a.get("name"),
+        "description": a.get("description"),
+        "commands": a.get("commands"),  # human-readable command lines
+    }
 
 
 @mcp.tool()

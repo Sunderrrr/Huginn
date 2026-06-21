@@ -7,14 +7,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- **Custom commands (admin-defined)**: admins can define fixed-argv commands in
-  the dashboard (Commands page) that VMs run **without a shell**. A new third exec
-  mode, `custom`, sits between `whitelist` (built-ins only) and `unrestricted`
-  (free shell). A custom command runs on a VM only if it's **double-gated**: the
-  VM is in `custom`/`unrestricted` mode AND carries one of the command's tags.
-  Argv ships to the worker in the task payload and is executed as a fixed argv
-  (no injection surface); the worker independently refuses it outside custom mode.
-  Admin-only CRUD, fully audited. Requires worker ≥ v1.2.0. Custom commands run
+- **Custom commands (admin-defined)**: admins can define commands in the
+  dashboard (Commands page) that VMs run **without a shell** — **one full command
+  per line**; the commands run in order and **stop at the first failure**. Lines
+  are tokenized respecting quotes (`echo "a b"` → two tokens) but never executed
+  through a shell. A new third exec mode, `custom`, sits between `whitelist`
+  (built-ins only) and `unrestricted` (free shell). A custom command runs on a VM
+  only if it's **double-gated**: the VM is in `custom`/`unrestricted` mode AND
+  carries one of the command's tags. The fixed-argv commands ship to the worker
+  in the task payload; the worker independently refuses them outside custom mode.
+  Admin-only CRUD, fully audited. Requires worker ≥ v1.3.0. Custom commands run
   via MCP `execute_action` by name like built-ins; the new `list_actions(vm_id?)`
   MCP tool discovers them (optionally only those runnable on a given VM).
 - **MCP tools accept a VM name or id**: `get_vm_status`, `execute_action`,

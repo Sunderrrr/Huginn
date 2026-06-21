@@ -5,7 +5,8 @@ export interface CustomAction {
   id: string;
   name: string;
   description: string;
-  argv: string[];
+  commands: string[]; // canonical command lines (one per command)
+  argv: string[][]; // parsed argv vectors (what actually runs)
   enabled: boolean;
   tag_ids: string[];
   created_at: string;

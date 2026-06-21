@@ -127,7 +127,8 @@ async def _create_custom_action_task(
 ) -> Task:
     """Queue an admin-defined custom command, gated on the VM's mode AND tags.
 
-    The fixed argv ships in the task payload; the worker runs it without a shell.
+    The fixed-argv commands ship in the task payload; the worker runs them in
+    order without a shell.
     """
     action = await custom_actions_service.get_by_name(session, action_name)
     if action is None or not action.enabled:
@@ -143,7 +144,7 @@ async def _create_custom_action_task(
         action_name=action_name,
         payload={
             "action": action_name,
-            "argv": list(action.argv),
+            "commands": [list(argv) for argv in action.commands],
             "timeout": settings.default_task_timeout_seconds,
         },
         status=TaskStatus.pending,

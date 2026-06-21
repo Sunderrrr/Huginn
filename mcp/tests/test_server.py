@@ -47,10 +47,10 @@ class FakeHub:
     async def list_actions(self):
         self.calls.append(("list_actions",))
         return [
-            {"name": "restart-nginx", "description": "", "argv": ["systemctl", "restart", "nginx"],
-             "enabled": True, "tag_ids": ["tag-web"]},
-            {"name": "disabled-one", "description": "", "argv": ["true"],
-             "enabled": False, "tag_ids": ["tag-web"]},
+            {"name": "restart-nginx", "description": "", "commands": ["systemctl restart nginx"],
+             "argv": [["systemctl", "restart", "nginx"]], "enabled": True, "tag_ids": ["tag-web"]},
+            {"name": "disabled-one", "description": "", "commands": ["true"],
+             "argv": [["true"]], "enabled": False, "tag_ids": ["tag-web"]},
         ]
 
 
@@ -104,7 +104,7 @@ async def test_list_actions_excludes_disabled(monkeypatch) -> None:
     monkeypatch.setattr(server, "hub", FakeHub())
     result = await server.list_actions()
     assert [a["name"] for a in result] == ["restart-nginx"]
-    assert result[0]["argv"] == ["systemctl", "restart", "nginx"]
+    assert result[0]["commands"] == ["systemctl restart nginx"]
 
 
 @pytest.mark.asyncio

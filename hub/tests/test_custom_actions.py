@@ -15,7 +15,7 @@ async def _make_action(client, admin_headers, tag_id, name="restart-nginx") -> d
     r = await client.post(
         "/api/actions",
         json={"name": name, "description": "restart nginx",
-              "argv": ["systemctl", "restart", "nginx"], "tag_ids": [tag_id]},
+              "commands": ["systemctl restart nginx"], "tag_ids": [tag_id]},
         headers=admin_headers,
     )
     assert r.status_code == 201, r.text
@@ -25,7 +25,8 @@ async def _make_action(client, admin_headers, tag_id, name="restart-nginx") -> d
 async def test_admin_crud_and_operator_read(client, admin_headers, readonly_headers) -> None:
     tag = await _tag(client, admin_headers)
     action = await _make_action(client, admin_headers, tag)
-    assert action["argv"] == ["systemctl", "restart", "nginx"]
+    assert action["argv"] == [["systemctl", "restart", "nginx"]]
+    assert action["commands"] == ["systemctl restart nginx"]
     assert action["tag_ids"] == [tag]
 
     listing = await client.get("/api/actions", headers=admin_headers)
@@ -35,26 +36,51 @@ async def test_admin_crud_and_operator_read(client, admin_headers, readonly_head
     assert (await client.get("/api/actions", headers=readonly_headers)).status_code == 200
     bad = await client.post(
         "/api/actions",
-        json={"name": "x-cmd", "argv": ["echo", "hi"], "tag_ids": [tag]},
+        json={"name": "x-cmd", "commands": ["echo hi"], "tag_ids": [tag]},
         headers=readonly_headers,
     )
     assert bad.status_code == 403
+
+
+async def test_multiple_commands_and_quoting(client, admin_headers) -> None:
+    tag = await _tag(client, admin_headers)
+    r = await client.post(
+        "/api/actions",
+        json={"name": "multi", "commands": ["systemctl restart nginx", 'echo "hello world"'],
+              "tag_ids": [tag]},
+        headers=admin_headers,
+    )
+    assert r.status_code == 201, r.text
+    # Each line → one argv vector; quoting is honoured (no shell).
+    assert r.json()["argv"] == [["systemctl", "restart", "nginx"], ["echo", "hello world"]]
+
+
+async def test_malformed_command_line_rejected(client, admin_headers) -> None:
+    tag = await _tag(client, admin_headers)
+    r = await client.post(
+        "/api/actions",
+        json={"name": "bad", "commands": ['echo "unbalanced'], "tag_ids": [tag]},
+        headers=admin_headers,
+    )
+    assert r.status_code == 400  # shlex parse error
 
 
 async def test_name_cannot_shadow_builtin(client, admin_headers) -> None:
     tag = await _tag(client, admin_headers)
     r = await client.post(
         "/api/actions",
-        json={"name": "status", "argv": ["echo", "x"], "tag_ids": [tag]},
+        json={"name": "status", "commands": ["echo x"], "tag_ids": [tag]},
         headers=admin_headers,
     )
     assert r.status_code == 422  # rejected by the schema validator
 
 
-async def test_empty_argv_rejected(client, admin_headers) -> None:
+async def test_empty_commands_rejected(client, admin_headers) -> None:
     tag = await _tag(client, admin_headers)
     r = await client.post(
-        "/api/actions", json={"name": "noop", "argv": [], "tag_ids": [tag]}, headers=admin_headers
+        "/api/actions",
+        json={"name": "noop", "commands": [], "tag_ids": [tag]},
+        headers=admin_headers,
     )
     assert r.status_code == 422
 
@@ -85,7 +111,7 @@ async def test_custom_action_requires_custom_mode(client, admin_headers, enrolle
     )
     assert r2.status_code == 202, r2.text
     handed = (await client.get("/api/worker/tasks/next", headers=w["headers"])).json()
-    assert handed["payload"]["argv"] == ["systemctl", "restart", "nginx"]
+    assert handed["payload"]["commands"] == [["systemctl", "restart", "nginx"]]
 
 
 async def test_custom_action_requires_matching_tag(client, admin_headers, enrolled_worker) -> None:

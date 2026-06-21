@@ -7,6 +7,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -295,23 +296,49 @@ func (a *Agent) runCommand(ctx context.Context, task *hubclient.Task) hubclient.
 	return fromExecResult(res)
 }
 
-// runCustom runs an admin-defined custom command: a fixed argv supplied by the
-// hub in the task payload, executed WITHOUT a shell. Like free commands, the
-// worker independently gates it on having observed 'custom' (or 'unrestricted')
-// exec mode via heartbeat — the hub alone cannot make it run.
+// runCustom runs an admin-defined custom command: an ordered list of fixed argv
+// vectors supplied by the hub in the task payload, each executed WITHOUT a shell.
+// Commands run in sequence and stop at the first failure; the combined output is
+// reported. Like free commands, the worker independently gates this on having
+// observed 'custom' (or 'unrestricted') exec mode — the hub alone cannot run it.
 func (a *Agent) runCustom(ctx context.Context, task *hubclient.Task) hubclient.TaskResult {
 	if mode := a.getExecMode(); mode != "custom" && mode != "unrestricted" {
 		return failure("worker refused custom command: custom mode not enabled")
 	}
-	argv := stringSlice(task.Payload["argv"])
-	if len(argv) == 0 {
-		return failure("custom command has no argv")
+	commands := argvList(task.Payload["commands"])
+	if len(commands) == 0 {
+		return failure("custom command has no commands")
 	}
-	res, err := a.Runner.Run(ctx, argv, taskTimeout(task.Payload), 0)
-	if err != nil {
-		return failure(err.Error())
+	timeout := taskTimeout(task.Payload)
+	var stdout, stderr strings.Builder
+	for i, argv := range commands {
+		if len(argv) == 0 {
+			continue
+		}
+		res, err := a.Runner.Run(ctx, argv, timeout, 0)
+		if err != nil {
+			stderr.WriteString(err.Error())
+			return customResult("failed", nil, stdout.String(), stderr.String())
+		}
+		// Label each step so a multi-command result is readable.
+		fmt.Fprintf(&stdout, "$ %s\n", strings.Join(argv, " "))
+		stdout.WriteString(res.Stdout)
+		stderr.WriteString(res.Stderr)
+		if res.TimedOut {
+			return customResult("timeout", &res.ExitCode, stdout.String(), stderr.String())
+		}
+		if res.ExitCode != 0 {
+			// Stop at the first failing command (sequential, fail-fast).
+			fmt.Fprintf(&stderr, "command %d/%d failed (exit %d)\n", i+1, len(commands), res.ExitCode)
+			return customResult("failed", &res.ExitCode, stdout.String(), stderr.String())
+		}
 	}
-	return fromExecResult(res)
+	zero := 0
+	return customResult("succeeded", &zero, stdout.String(), stderr.String())
+}
+
+func customResult(status string, exit *int, stdout, stderr string) hubclient.TaskResult {
+	return hubclient.TaskResult{Status: status, ExitCode: exit, Stdout: stdout, Stderr: stderr}
 }
 
 func (a *Agent) runUpdate(ctx context.Context, task *hubclient.Task) (hubclient.TaskResult, bool) {
@@ -436,6 +463,20 @@ func stringSlice(v any) []string {
 		if s, ok := e.(string); ok {
 			out = append(out, s)
 		}
+	}
+	return out
+}
+
+// argvList extracts a [][]string (list of argv vectors) from a JSON
+// array-of-arrays payload field (e.g. a custom action's commands).
+func argvList(v any) [][]string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([][]string, 0, len(arr))
+	for _, e := range arr {
+		out = append(out, stringSlice(e))
 	}
 	return out
 }

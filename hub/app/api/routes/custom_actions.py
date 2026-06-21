@@ -23,11 +23,13 @@ router = APIRouter(prefix="/api/actions", tags=["custom-actions"])
 
 
 async def _to_out(session: AsyncSession, action: CustomAction) -> CustomActionOut:
+    commands = [list(argv) for argv in action.commands]
     return CustomActionOut(
         id=action.id,
         name=action.name,
         description=action.description,
-        argv=list(action.argv),
+        commands=svc.lines_of(commands),
+        argv=commands,
         enabled=action.enabled,
         tag_ids=await svc.tag_ids_for(session, action.id),
         created_at=action.created_at,
@@ -54,7 +56,7 @@ async def create_action(
             session,
             name=body.name,
             description=body.description,
-            argv=body.argv,
+            lines=body.commands,
             tag_ids=body.tag_ids,
             created_by=principal.actor_id,
         )
@@ -65,7 +67,7 @@ async def create_action(
         actor_type=principal.actor_type,
         actor_id=principal.actor_id,
         event_type="custom_action_created",
-        detail={"name": action.name, "argv": list(action.argv)},
+        detail={"name": action.name, "commands": [list(a) for a in action.commands]},
         source_ip=client_ip(request),
     )
     await session.commit()
@@ -85,7 +87,7 @@ async def update_action(
             session,
             action_id,
             description=body.description,
-            argv=body.argv,
+            lines=body.commands,
             enabled=body.enabled,
             tag_ids=body.tag_ids,
         )
@@ -98,7 +100,11 @@ async def update_action(
         actor_type=principal.actor_type,
         actor_id=principal.actor_id,
         event_type="custom_action_updated",
-        detail={"name": action.name, "argv": list(action.argv), "enabled": action.enabled},
+        detail={
+            "name": action.name,
+            "commands": [list(a) for a in action.commands],
+            "enabled": action.enabled,
+        },
         source_ip=client_ip(request),
     )
     await session.commit()

@@ -19,7 +19,7 @@ export function CustomActionsPage() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [argvText, setArgvText] = useState("");
+  const [commandsText, setCommandsText] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
 
   const tagName = (id: string) => tags?.find((t) => t.id === id)?.name ?? id;
@@ -29,16 +29,16 @@ export function CustomActionsPage() {
   }
 
   async function onCreate() {
-    const argv = argvText.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (!name.trim() || argv.length === 0 || tagIds.length === 0) {
-      toast("err", "name, at least one argv line, and one tag are required");
+    const commands = commandsText.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!name.trim() || commands.length === 0 || tagIds.length === 0) {
+      toast("err", "name, at least one command, and one tag are required");
       return;
     }
     try {
-      await create.mutateAsync({ name: name.trim(), description: description.trim(), argv, tag_ids: tagIds });
+      await create.mutateAsync({ name: name.trim(), description: description.trim(), commands, tag_ids: tagIds });
       setName("");
       setDescription("");
-      setArgvText("");
+      setCommandsText("");
       setTagIds([]);
       toast("ok", "command created");
     } catch (err) {
@@ -55,9 +55,10 @@ export function CustomActionsPage() {
         Custom Commands
       </h1>
       <p className="muted tiny" style={{ marginBottom: 22, maxWidth: 680, lineHeight: 1.6 }}>
-        Define fixed commands (no shell) that VMs in <b>custom</b> exec mode can run. A command
-        runs on a VM only if the VM is in custom mode <b>and</b> carries one of the command's tags.
-        Each argument is a separate token — nothing is passed through a shell.
+        Define commands (no shell) that VMs in <b>custom</b> exec mode can run. One command per
+        line — they run in order and stop at the first failure. A command runs on a VM only if the
+        VM is in custom mode <b>and</b> carries one of the command's tags. Quoting is honoured
+        (<code>echo "a b"</code> → two tokens); nothing is passed through a shell.
       </p>
 
       <div style={{ display: "grid", gap: 20, maxWidth: 820 }}>
@@ -74,13 +75,13 @@ export function CustomActionsPage() {
               <input className="field" placeholder="what it does" value={description} onChange={(e) => setDescription(e.target.value)} />
             </div>
           </div>
-          <label className="lbl">Command — one argument per line (first line = binary)</label>
+          <label className="lbl">Commands — one full command per line (run in order, stop on failure)</label>
           <textarea
             className="field"
             style={{ fontFamily: "var(--font-mono)", minHeight: 96, resize: "vertical" }}
-            placeholder={"systemctl\nrestart\nnginx"}
-            value={argvText}
-            onChange={(e) => setArgvText(e.target.value)}
+            placeholder={"systemctl restart nginx\ndocker compose -f /srv/app.yml pull"}
+            value={commandsText}
+            onChange={(e) => setCommandsText(e.target.value)}
           />
           <label className="lbl" style={{ marginTop: 12 }}>Allowed tags (VMs must carry one)</label>
           <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
@@ -123,7 +124,11 @@ export function CustomActionsPage() {
                     {a.description && <div className="muted tiny">{a.description}</div>}
                   </td>
                   <td>
-                    <code className="tiny" style={{ color: "var(--ember-soft)" }}>{a.argv.join(" ")}</code>
+                    {a.commands.map((line, i) => (
+                      <div key={i}>
+                        <code className="tiny" style={{ color: "var(--ember-soft)" }}>{line}</code>
+                      </div>
+                    ))}
                   </td>
                   <td>
                     <div className="row" style={{ gap: 4, flexWrap: "wrap" }}>

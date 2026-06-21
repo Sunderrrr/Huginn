@@ -1,10 +1,11 @@
 """Admin-defined custom commands runnable on VMs in ``custom`` exec mode.
 
-Unlike the built-in whitelist (whose argv lives on the worker), a custom action's
-argv is defined here and shipped to the worker in the task payload. It is run as a
-**fixed argv with no shell** — same injection-safety as the built-ins — and is
-gated twice: the target VM must be in ``custom``/``unrestricted`` mode AND carry
-one of the action's allowed tags.
+Unlike the built-in whitelist (whose argv lives on the worker), a custom action
+is defined here as a **sequence of fixed argv vectors** (one per command line) and
+shipped to the worker in the task payload. Each command runs as a **fixed argv
+with no shell** — same injection-safety as the built-ins — in order, stopping at
+the first failure. It is gated twice: the target VM must be in
+``custom``/``unrestricted`` mode AND carry one of the action's allowed tags.
 """
 
 from __future__ import annotations
@@ -24,8 +25,9 @@ class CustomAction(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     description: Mapped[str] = mapped_column(String(255), default="", nullable=False)
-    # Fixed argv (list of strings); argv[0] is the binary. Never a shell string.
-    argv: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # An ordered list of fixed argv vectors (one per command line). Each inner
+    # list is a command's argv; argv[0] is the binary. Never a shell string.
+    commands: Mapped[list[list[str]]] = mapped_column(JSON, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

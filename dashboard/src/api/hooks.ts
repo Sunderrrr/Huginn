@@ -345,7 +345,7 @@ export function useCustomActions() {
 type CustomActionInput = {
   name: string;
   description: string;
-  argv: string[];
+  commands: string[]; // one full command line per entry
   tag_ids: string[];
 };
 
