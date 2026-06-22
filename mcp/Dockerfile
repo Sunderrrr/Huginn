@@ -11,6 +11,9 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN pip install --upgrade pip && pip install .
 COPY app ./app
+# Normalize permissions so the unprivileged user can read the app code
+# regardless of the build host's umask (COPY preserves source file modes).
+RUN chmod -R a+rX /app
 
 RUN useradd --system --uid 10002 huginn
 USER huginn

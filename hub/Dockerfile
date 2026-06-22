@@ -16,7 +16,10 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Normalize permissions so the unprivileged user can read the app code and exec
+# the entrypoint regardless of the build host's umask (COPY preserves source
+# file modes, which on a umask-077 checkout would be unreadable to non-root).
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh && chmod -R a+rX /app
 
 # Run as an unprivileged user.
 RUN useradd --system --uid 10001 huginn
