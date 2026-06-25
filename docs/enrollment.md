@@ -18,6 +18,41 @@ curl -X POST https://<hub>/api/enrollment-tokens \
 
 The plaintext token is shown **once**; only its HMAC is stored.
 
+Fields:
+- `ttl_seconds` — lifetime in seconds; **`0` = never expires**.
+- `max_uses` — how many VMs may enroll with it; **`0` = unlimited** (a reusable
+  *join key*).
+- `auto_approve` — when `true`, VMs enrolled with this token come up **ACTIVE**
+  immediately instead of PENDING (skips step 3). Convenient for unattended /
+  bulk provisioning; the tradeoff is that anyone holding the token can add a live
+  worker, so keep it secret and revoke it when the rollout is done.
+
+In the dashboard, **Fleet → Add a VM** exposes both as checkboxes ("Reusable
+(join key)" and "Auto-approve enrolled VMs") and shows the ready-to-paste install
+command for the generated token.
+
+## Bulk / unattended enrollment (Ansible, cloud-init, scripts)
+
+Create **one reusable, auto-approving token** and reuse it for the whole fleet:
+
+```bash
+curl -X POST https://<hub>/api/enrollment-tokens \
+  -H "Authorization: Bearer <admin-jwt>" -H "Content-Type: application/json" \
+  -d '{"label":"ansible","ttl_seconds":0,"max_uses":0,"auto_approve":true}'
+```
+
+Then run the same one-liner on every host — no per-VM token, no manual approval:
+
+```bash
+curl -fsSLk https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
+```
+
+The installer is idempotent-friendly: it writes `/etc/huginn/worker.json`, so in
+an Ansible role gate the `shell`/`command` task on `creates: /etc/huginn/worker.json`
+(or `args.creates`) to skip already-enrolled hosts on re-runs. Set `NAME=<inventory_hostname>`
+to control the VM name (defaults to the host's hostname). Revoke the token
+(`DELETE /api/enrollment-tokens/<id>`) once provisioning is complete.
+
 ## 2. Install on the VM
 
 ```bash

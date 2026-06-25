@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Uuid
+from sqlalchemy import Boolean, DateTime, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -20,8 +20,14 @@ class EnrollmentToken(Base, TimestampMixin):
     token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     label: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    # max_uses == 0 means unlimited (a reusable "join key" for fleet provisioning,
+    # e.g. Ansible); any positive value caps how many VMs may enroll with it.
     max_uses: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     uses_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # When true, VMs enrolled with this token come up ACTIVE instead of PENDING —
+    # no manual approval. Convenient for non-interactive bulk enrollment; the
+    # tradeoff is that anyone holding the token can add a live worker.
+    auto_approve: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -29,6 +35,6 @@ class EnrollmentToken(Base, TimestampMixin):
         now = now or utcnow()
         return (
             self.revoked_at is None
-            and self.uses_count < self.max_uses
+            and (self.max_uses == 0 or self.uses_count < self.max_uses)
             and as_aware_utc(self.expires_at) > now
         )

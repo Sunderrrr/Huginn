@@ -69,15 +69,31 @@ async def enroll(
     except enrollment_service.EnrollmentError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 
+    auto_approved = vm.state is VMState.active
     await audit.record(
         session,
         actor_type=ActorType.system,
         actor_id="worker",
         event_type="enroll",
         vm_id=vm.id,
-        detail={"name": vm.name, "arch": vm.arch.value},
+        detail={"name": vm.name, "arch": vm.arch.value, "auto_approved": auto_approved},
         source_ip=client_ip(request),
     )
+    # An auto-approved VM is active right away; queue a status + metrics refresh so
+    # the dashboard shows live telemetry as soon as the worker starts polling, just
+    # like the manual approve path. Best-effort — never fail the enrollment.
+    if auto_approved:
+        for action in ("status", "metrics"):
+            try:
+                await tasks_service.create_action_task(
+                    session,
+                    vm=vm,
+                    action_name=action,
+                    params=None,
+                    created_by="system:auto-approve",
+                )
+            except Exception:  # noqa: BLE001 - telemetry refresh is best-effort
+                logger.warning("could not queue %s refresh for vm %s", action, vm.id)
     return WorkerEnrollResponse(worker_id=vm.id, worker_secret=secret, state=vm.state.value)
 
 

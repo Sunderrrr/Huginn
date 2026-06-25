@@ -102,6 +102,77 @@ async def test_token_max_uses_enforced(session, monkeypatch) -> None:
         )
 
 
+async def test_unlimited_token_enrolls_many(session) -> None:
+    """max_uses == 0 is a reusable join key: many VMs, never exhausted."""
+    import uuid
+
+    token_row, plaintext = await enrollment_service.create_token(
+        session, created_by=uuid.uuid4(), label="join", ttl_seconds=0, max_uses=0
+    )
+    await session.flush()
+
+    for name in ("u1", "u2", "u3"):
+        vm, _ = await enrollment_service.enroll_worker(
+            session,
+            token=plaintext,
+            name=name,
+            hostname=None,
+            ip_address=None,
+            arch=WorkerArch.amd64,
+            os_info={},
+            worker_version=None,
+        )
+        assert vm.state.value == "pending"
+    assert token_row.uses_count == 3
+    assert token_row.is_usable()
+
+
+async def test_auto_approve_token_activates_vm(client, admin_headers) -> None:
+    """A VM enrolled with an auto_approve token is active right away."""
+    resp = await client.post(
+        "/api/enrollment-tokens",
+        json={"max_uses": 0, "auto_approve": True},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["auto_approve"] is True
+    token = resp.json()["token"]
+
+    enroll = await client.post(
+        "/api/worker/enroll",
+        json={"token": token, "name": "auto-1", "arch": "amd64"},
+    )
+    assert enroll.status_code == 201, enroll.text
+    assert enroll.json()["state"] == "active"
+
+
+async def test_auto_approve_sets_approved_at(session) -> None:
+    import uuid
+
+    _, plaintext = await enrollment_service.create_token(
+        session,
+        created_by=uuid.uuid4(),
+        label="auto",
+        ttl_seconds=3600,
+        max_uses=1,
+        auto_approve=True,
+    )
+    await session.flush()
+    vm, _ = await enrollment_service.enroll_worker(
+        session,
+        token=plaintext,
+        name="auto-svc",
+        hostname=None,
+        ip_address=None,
+        arch=WorkerArch.amd64,
+        os_info={},
+        worker_version=None,
+    )
+    assert vm.state.value == "active"
+    assert vm.approved_at is not None
+    assert vm.approved_by is None  # activated by the token, no human actor
+
+
 async def test_revoked_token_unusable(session) -> None:
     import uuid
 

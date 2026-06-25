@@ -135,8 +135,9 @@ export interface Task {
 export interface EnrollmentToken {
   id: string;
   label: string;
-  max_uses: number;
+  max_uses: number; // 0 = unlimited (reusable join key)
   uses_count: number;
+  auto_approve: boolean;
   expires_at: string;
   revoked_at: string | null;
   created_at: string;

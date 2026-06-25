@@ -35,13 +35,18 @@ async def create_token(
         label=body.label,
         ttl_seconds=body.ttl_seconds,
         max_uses=body.max_uses,
+        auto_approve=body.auto_approve,
     )
     await audit.record(
         session,
         actor_type=principal.actor_type,
         actor_id=principal.actor_id,
         event_type="token_create",
-        detail={"token_id": str(token.id), "max_uses": body.max_uses},
+        detail={
+            "token_id": str(token.id),
+            "max_uses": body.max_uses,
+            "auto_approve": body.auto_approve,
+        },
         source_ip=client_ip(request),
     )
     base = EnrollmentTokenOut.model_validate(token)

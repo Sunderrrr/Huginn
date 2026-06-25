@@ -24,6 +24,10 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
 
   const [label, setLabel] = useState("");
   const [ttl, setTtl] = useState(3600);
+  // Reusable = a join key (max_uses 0 = unlimited) for bulk/Ansible enrollment;
+  // otherwise the token is single-use.
+  const [reusable, setReusable] = useState(false);
+  const [autoApprove, setAutoApprove] = useState(false);
   const [created, setCreated] = useState<EnrollmentTokenCreated | null>(null);
   const [reveal, setReveal] = useState(false);
   const [revealCmd, setRevealCmd] = useState(false);
@@ -43,12 +47,19 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
     setReveal(false);
     setRevealCmd(false);
     setLabel("");
+    setReusable(false);
+    setAutoApprove(false);
   }
 
   async function onGenerate() {
     try {
-      // One token = one machine.
-      const t = await create.mutateAsync({ label, ttl_seconds: ttl, max_uses: 1 });
+      // Reusable token => unlimited uses (join key); otherwise single-use.
+      const t = await create.mutateAsync({
+        label,
+        ttl_seconds: ttl,
+        max_uses: reusable ? 0 : 1,
+        auto_approve: autoApprove,
+      });
       setReveal(false);
       setRevealCmd(false);
       setCreated(t);
@@ -58,11 +69,12 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
     }
   }
 
-  // Outstanding invitations: single-use tokens not yet used, revoked, or expired.
+  // Outstanding invitations: tokens not yet used up, revoked, or expired
+  // (max_uses 0 = unlimited, so it always has uses left).
   const pending = (tokens ?? []).filter(
     (t) =>
       !t.revoked_at &&
-      t.uses_count < t.max_uses &&
+      (t.max_uses === 0 || t.uses_count < t.max_uses) &&
       new Date(t.expires_at).getTime() > Date.now(),
   );
 
@@ -71,7 +83,9 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
       {created ? (
         <div>
           <p className="muted tiny" style={{ marginBottom: 12 }}>
-            Run this on the new machine. The token is single-use and shown only once.
+            {created.max_uses === 0
+              ? "Run this on every machine you want to enroll — this token is reusable. The secret is shown only once."
+              : "Run this on the new machine. The token is single-use and shown only once."}
           </p>
 
           <label className="lbl">One-line install</label>
@@ -100,8 +114,17 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
           </div>
 
           <div className="muted tiny" style={{ marginTop: 10, lineHeight: 1.6 }}>
-            The VM appears as <b>PENDING</b> after it enrolls — approve it from the fleet before it
-            can receive any command.
+            {created.auto_approve ? (
+              <>
+                Enrolled VMs are <b style={{ color: "var(--signal)" }}>auto-approved</b> and become
+                active immediately — no manual approval needed.
+              </>
+            ) : (
+              <>
+                The VM appears as <b>PENDING</b> after it enrolls — approve it from the fleet before
+                it can receive any command.
+              </>
+            )}
           </div>
 
           <div className="row" style={{ justifyContent: "flex-end", marginTop: 18, gap: 8 }}>
@@ -129,15 +152,54 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
             </button>
           </div>
 
+          <div className="stack" style={{ gap: 10, marginTop: 16 }}>
+            <label className="row" style={{ gap: 10, cursor: "pointer", alignItems: "flex-start" }}>
+              <input
+                type="checkbox"
+                checked={reusable}
+                onChange={(e) => setReusable(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <span style={{ fontSize: 13 }}>Reusable (join key)</span>
+                <span className="muted tiny" style={{ display: "block" }}>
+                  Unlimited uses — enroll as many VMs as you want with one token. Ideal for Ansible
+                  or scripted provisioning.
+                </span>
+              </span>
+            </label>
+            <label className="row" style={{ gap: 10, cursor: "pointer", alignItems: "flex-start" }}>
+              <input
+                type="checkbox"
+                checked={autoApprove}
+                onChange={(e) => setAutoApprove(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <span style={{ fontSize: 13 }}>Auto-approve enrolled VMs</span>
+                <span className="muted tiny" style={{ display: "block" }}>
+                  Enrolled VMs become active immediately, skipping manual approval. Anyone holding
+                  this token can add a live worker — keep it secret and revoke when done.
+                </span>
+              </span>
+            </label>
+          </div>
+
           {pending.length > 0 && (
             <div style={{ marginTop: 22 }}>
               <div className="eyebrow" style={{ marginBottom: 8 }}>pending invitations</div>
               <div className="stack" style={{ gap: 6 }}>
                 {pending.map((t) => (
                   <div key={t.id} className="spread">
-                    <div>
+                    <div className="row" style={{ gap: 8 }}>
                       <span style={{ fontSize: 13 }}>{t.label || "unlabeled"}</span>
-                      <span className="muted tiny"> · expires {fmtTime(t.expires_at)}</span>
+                      {t.max_uses === 0 && (
+                        <span className="badge badge--whitelist">reusable</span>
+                      )}
+                      {t.auto_approve && (
+                        <span className="badge badge--active">auto-approve</span>
+                      )}
+                      <span className="muted tiny">· expires {fmtTime(t.expires_at)}</span>
                     </div>
                     <button
                       className="btn btn--sm btn--danger"

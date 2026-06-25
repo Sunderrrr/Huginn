@@ -7,7 +7,10 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 
 - The hub is the trust anchor and must be deployed behind TLS with strong secrets.
 - Workers are semi-trusted: they only ever run what an authenticated principal
-  asked for, and only after manual approval.
+  asked for, and only after approval. Approval is manual by default; an admin may
+  issue an `auto_approve` enrollment token for unattended/bulk provisioning, which
+  deliberately trades that human gate for convenience — such a token lets anyone
+  holding it add a live worker, so it must be kept secret and revoked after use.
 - The MCP server is a trusted façade authenticated by a service token. It acts
   either as the anonymous automation agent (operator, not admin) or, when an
   agent presents a per-user MCP token, **on behalf of that user with the user's

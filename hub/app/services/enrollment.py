@@ -26,6 +26,7 @@ async def create_token(
     label: str,
     ttl_seconds: int,
     max_uses: int,
+    auto_approve: bool = False,
 ) -> tuple[EnrollmentToken, str]:
     """Create a token; returns the row and the plaintext secret (shown once)."""
     plaintext = security.generate_secret()
@@ -40,6 +41,7 @@ async def create_token(
         created_by=created_by,
         max_uses=max_uses,
         uses_count=0,
+        auto_approve=auto_approve,
         expires_at=expires_at,
     )
     session.add(token)
@@ -85,16 +87,18 @@ async def enroll_worker(
     os_info: dict,
     worker_version: str | None,
 ) -> tuple[VM, str]:
-    """Consume one token use and register a new PENDING VM.
+    """Consume one token use and register a new VM.
 
     Returns the VM and its plaintext per-worker secret (delivered once over TLS).
-    The VM is inert until an admin approves it.
+    The VM is PENDING and inert until an admin approves it — unless the token is
+    flagged ``auto_approve``, in which case it comes up ACTIVE immediately.
     """
     token_row = await _resolve_usable_token(session, token)
     token_row.uses_count += 1
 
     worker_secret = security.generate_secret()
     now = utcnow()
+    approved = token_row.auto_approve
     vm = VM(
         name=name,
         hostname=hostname,
@@ -102,7 +106,9 @@ async def enroll_worker(
         arch=arch,
         os_info=os_info or {},
         worker_version=worker_version,
-        state=VMState.pending,
+        state=VMState.active if approved else VMState.pending,
+        # auto-approved VMs are activated by the token itself (no human actor)
+        approved_at=now if approved else None,
         worker_secret_hash=security.hash_secret(worker_secret),
         enrollment_token_id=token_row.id,
         enrolled_at=now,

@@ -203,8 +203,12 @@ export function useTriggerUpdate() {
 export function useCreateToken() {
   const invalidate = useInvalidate(["tokens"]);
   return useMutation({
-    mutationFn: (vars: { label: string; ttl_seconds: number; max_uses: number }) =>
-      api.post<EnrollmentTokenCreated>("/api/enrollment-tokens", vars),
+    mutationFn: (vars: {
+      label: string;
+      ttl_seconds: number;
+      max_uses: number;
+      auto_approve?: boolean;
+    }) => api.post<EnrollmentTokenCreated>("/api/enrollment-tokens", vars),
     onSuccess: invalidate,
   });
 }

@@ -38,7 +38,11 @@ class EnrollmentTokenCreate(BaseModel):
     label: str = Field(default="", max_length=255)
     # 0 = never expires
     ttl_seconds: int = Field(default=3600, ge=0, le=30 * 24 * 3600)
-    max_uses: int = Field(default=1, ge=1, le=1000)
+    # 0 = unlimited uses (a reusable join key, e.g. for Ansible provisioning)
+    max_uses: int = Field(default=1, ge=0, le=1000)
+    # When true, VMs enrolled with this token are activated immediately instead
+    # of waiting for manual approval.
+    auto_approve: bool = False
 
 
 class EnrollmentTokenOut(BaseModel):
@@ -48,6 +52,7 @@ class EnrollmentTokenOut(BaseModel):
     label: str
     max_uses: int
     uses_count: int
+    auto_approve: bool
     expires_at: datetime
     revoked_at: datetime | None
     created_at: datetime
