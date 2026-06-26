@@ -1,0 +1,528 @@
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { api } from "./client";
+import type {
+  CustomAction,
+  AuditEntry,
+  AuthConfig,
+  EnrollmentToken,
+  EnrollmentTokenCreated,
+  ExecMode,
+  McpToken,
+  McpTokenCreated,
+  PasswordChange,
+  Schedule,
+  ScheduleCreate,
+  Settings,
+  Tag,
+  TagCreate,
+  TagUpdate,
+  Task,
+  TotpEnrollBegin,
+  User,
+  UserCreate,
+  UserUpdate,
+  VM,
+  WebAuthnCredentialOut,
+} from "./types";
+
+export function useAuthConfig() {
+  return useQuery({
+    queryKey: ["auth-config"],
+    queryFn: () => api.get<AuthConfig>("/api/auth/config"),
+    staleTime: 300_000,
+    retry: false,
+  });
+}
+
+export function useMe() {
+  return useQuery({
+    queryKey: ["me"],
+    queryFn: () => api.get<User>("/api/auth/me"),
+    retry: false,
+    staleTime: 60_000,
+  });
+}
+
+export function useVms() {
+  return useQuery({
+    queryKey: ["vms"],
+    queryFn: () => api.get<VM[]>("/api/vms"),
+    refetchInterval: 5_000,
+  });
+}
+
+export function useVm(id: string) {
+  return useQuery({
+    queryKey: ["vm", id],
+    queryFn: () => api.get<VM>(`/api/vms/${id}`),
+    refetchInterval: 5_000,
+  });
+}
+
+export function useSettings() {
+  return useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.get<Settings>("/api/settings"),
+  });
+}
+
+export function useAudit(params?: { vm_id?: string; event_type?: string; limit?: number }) {
+  const search = new URLSearchParams();
+  if (params?.vm_id) search.set("vm_id", params.vm_id);
+  if (params?.event_type) search.set("event_type", params.event_type);
+  search.set("limit", String(params?.limit ?? 100));
+  return useQuery({
+    queryKey: ["audit", params],
+    queryFn: () => api.get<AuditEntry[]>(`/api/audit?${search.toString()}`),
+    refetchInterval: 8_000,
+  });
+}
+
+export function useTokens() {
+  return useQuery({
+    queryKey: ["tokens"],
+    queryFn: () => api.get<EnrollmentToken[]>("/api/enrollment-tokens"),
+  });
+}
+
+export function useUsers() {
+  return useQuery({
+    queryKey: ["users"],
+    queryFn: () => api.get<User[]>("/api/users"),
+  });
+}
+
+export function useMcpTokens() {
+  return useQuery({
+    queryKey: ["mcp-tokens"],
+    queryFn: () => api.get<McpToken[]>("/api/mcp/tokens"),
+  });
+}
+
+// --- Mutations ---
+
+function useInvalidate(keys: string[]) {
+  const qc = useQueryClient();
+  return () => keys.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+}
+
+export function useApproveVm() {
+  const invalidate = useInvalidate(["vms", "vm", "audit"]);
+  return useMutation({
+    mutationFn: (id: string) => api.post<VM>(`/api/vms/${id}/approve`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRevokeVm() {
+  const invalidate = useInvalidate(["vms", "vm", "audit"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; uninstall?: boolean }) =>
+      api.post<VM>(`/api/vms/${vars.id}/revoke`, { uninstall: vars.uninstall ?? false }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteVm() {
+  const invalidate = useInvalidate(["vms", "vm", "audit"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/vms/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetExecMode() {
+  const invalidate = useInvalidate(["vms", "vm", "audit"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; mode: ExecMode }) =>
+      api.put<VM>(`/api/vms/${vars.id}/exec-mode`, { exec_mode: vars.mode }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRunAction() {
+  const invalidate = useInvalidate(["audit"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; action: string; params?: Record<string, string> }) =>
+      api.post<Task>(`/api/vms/${vars.id}/actions`, {
+        action: vars.action,
+        params: vars.params ?? {},
+        wait: true,
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export interface BulkActionResult {
+  vm_id: string;
+  task_id: string | null;
+  status: string;
+  error: string | null;
+}
+
+export function useBulkRunAction() {
+  const invalidate = useInvalidate(["audit"]);
+  return useMutation({
+    mutationFn: (vars: {
+      vm_ids?: string[];
+      tag_ids?: string[];
+      action: string;
+      params?: Record<string, string>;
+    }) =>
+      api.post<BulkActionResult[]>(`/api/vms/bulk/actions`, {
+        vm_ids: vars.vm_ids ?? [],
+        tag_ids: vars.tag_ids ?? [],
+        action: vars.action,
+        params: vars.params ?? {},
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRunCommand() {
+  const invalidate = useInvalidate(["audit"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; command: string }) =>
+      api.post<Task>(`/api/vms/${vars.id}/commands`, { command: vars.command, wait: true }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useTriggerUpdate() {
+  const invalidate = useInvalidate(["vms", "vm", "audit"]);
+  return useMutation({
+    mutationFn: (id: string) => api.post<Task>(`/api/vms/${id}/update`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useCreateToken() {
+  const invalidate = useInvalidate(["tokens"]);
+  return useMutation({
+    mutationFn: (vars: {
+      label: string;
+      ttl_seconds: number;
+      max_uses: number;
+      auto_approve?: boolean;
+    }) => api.post<EnrollmentTokenCreated>("/api/enrollment-tokens", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRevokeToken() {
+  const invalidate = useInvalidate(["tokens"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/enrollment-tokens/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateSettings() {
+  const invalidate = useInvalidate(["settings", "audit"]);
+  return useMutation({
+    mutationFn: (vars: Partial<Settings>) => api.put<Settings>("/api/settings", vars),
+    onSuccess: invalidate,
+  });
+}
+
+// --- User management ---
+
+export function useCreateUser() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (vars: UserCreate) => api.post<User>("/api/users", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateUser() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (vars: { id: string } & UserUpdate) =>
+      api.put<User>(`/api/users/${vars.id}`, { role: vars.role, is_active: vars.is_active, email: vars.email }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeactivateUser() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/users/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (vars: { id: string } & PasswordChange) =>
+      api.put<{ status: string }>(`/api/users/${vars.id}/password`, {
+        old_password: vars.old_password,
+        new_password: vars.new_password,
+      }),
+  });
+}
+
+export function useSetUserVms() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; vm_ids: string[] }) =>
+      api.put<User>(`/api/users/${vars.id}/vms`, { vm_ids: vars.vm_ids }),
+    onSuccess: invalidate,
+  });
+}
+
+// --- MCP Tokens (per-user) ---
+
+export function useCreateMcpToken() {
+  const invalidate = useInvalidate(["mcp-tokens"]);
+  return useMutation({
+    mutationFn: (vars: { name: string; allowed_ip?: string | null }) =>
+      api.post<McpTokenCreated>("/api/mcp/tokens", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateMcpToken() {
+  const invalidate = useInvalidate(["mcp-tokens"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; allowed_ip: string | null }) =>
+      api.patch<McpToken>(`/api/mcp/tokens/${vars.id}`, { allowed_ip: vars.allowed_ip }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRevokeMcpToken() {
+  const invalidate = useInvalidate(["mcp-tokens"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/mcp/tokens/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+// --- Tags ---
+
+export function useTags() {
+  return useQuery({
+    queryKey: ["tags"],
+    queryFn: () => api.get<Tag[]>("/api/tags"),
+  });
+}
+
+export function useCreateTag() {
+  const invalidate = useInvalidate(["tags"]);
+  return useMutation({
+    mutationFn: (vars: TagCreate) => api.post<Tag>("/api/tags", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateTag() {
+  const invalidate = useInvalidate(["tags", "vms"]);
+  return useMutation({
+    mutationFn: (vars: { id: string } & TagUpdate) =>
+      api.put<Tag>(`/api/tags/${vars.id}`, { name: vars.name, color: vars.color }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteTag() {
+  const invalidate = useInvalidate(["tags", "vms"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/tags/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+// --- Custom actions (admin-defined commands) ---
+
+export function useCustomActions() {
+  return useQuery({
+    queryKey: ["custom-actions"],
+    queryFn: () => api.get<CustomAction[]>("/api/actions"),
+  });
+}
+
+type CustomActionInput = {
+  name: string;
+  description: string;
+  commands: string[]; // one full command line per entry
+  tag_ids: string[];
+};
+
+export function useCreateCustomAction() {
+  const invalidate = useInvalidate(["custom-actions"]);
+  return useMutation({
+    mutationFn: (vars: CustomActionInput) => api.post<CustomAction>("/api/actions", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateCustomAction() {
+  const invalidate = useInvalidate(["custom-actions"]);
+  return useMutation({
+    mutationFn: (vars: { id: string } & Partial<Omit<CustomActionInput, "name">> & { enabled?: boolean }) => {
+      const { id, ...body } = vars;
+      return api.patch<CustomAction>(`/api/actions/${id}`, body);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteCustomAction() {
+  const invalidate = useInvalidate(["custom-actions"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/actions/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetVmTags() {
+  const invalidate = useInvalidate(["vms", "vm"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; tag_ids: string[] }) =>
+      api.put<VM>(`/api/vms/${vars.id}/tags`, { tag_ids: vars.tag_ids }),
+    onSuccess: invalidate,
+  });
+}
+
+// --- Scheduled commands ---
+
+export function useSchedules(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["schedules"],
+    queryFn: () => api.get<Schedule[]>("/api/schedules"),
+    enabled: opts?.enabled ?? true,
+  });
+}
+
+export function useCreateSchedule() {
+  const invalidate = useInvalidate(["schedules"]);
+  return useMutation({
+    mutationFn: (vars: ScheduleCreate) => api.post<Schedule>("/api/schedules", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateSchedule() {
+  const invalidate = useInvalidate(["schedules"]);
+  return useMutation({
+    // Only the provided fields are sent (the backend uses exclude_unset), so this
+    // serves both the enabled toggle and a full edit.
+    mutationFn: (vars: { id: string } & Partial<ScheduleCreate>) => {
+      const { id, ...rest } = vars;
+      return api.put<Schedule>(`/api/schedules/${id}`, rest);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteSchedule() {
+  const invalidate = useInvalidate(["schedules"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/schedules/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+// --- MFA: TOTP + passkeys ---
+
+export function useTotpEnrollBegin() {
+  return useMutation({
+    mutationFn: () => api.post<TotpEnrollBegin>("/api/auth/mfa/totp/enroll/begin"),
+  });
+}
+
+export function useTotpEnrollFinish() {
+  const invalidate = useInvalidate(["me"]);
+  return useMutation({
+    mutationFn: (vars: { code: string }) =>
+      api.post<{ backup_codes: string[] }>("/api/auth/mfa/totp/enroll/finish", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useTotpDisable() {
+  const invalidate = useInvalidate(["me"]);
+  return useMutation({
+    mutationFn: (vars: { password?: string; code?: string }) =>
+      api.post<void>("/api/auth/mfa/totp/disable", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRegenerateBackupCodes() {
+  return useMutation({
+    mutationFn: (vars: { code: string }) =>
+      api.post<{ backup_codes: string[] }>("/api/auth/mfa/totp/backup-codes/regenerate", vars),
+  });
+}
+
+export function usePasskeys() {
+  return useQuery({
+    queryKey: ["passkeys"],
+    queryFn: () => api.get<WebAuthnCredentialOut[]>("/api/auth/mfa/webauthn/credentials"),
+  });
+}
+
+export function useRegisterPasskey() {
+  const invalidate = useInvalidate(["passkeys", "me"]);
+  return useMutation({
+    // No name needed up front — the OS ceremony runs straight away and we apply a
+    // sensible default; the user can rename it inline afterwards.
+    mutationFn: async (vars?: { name?: string }) => {
+      const { startRegistration } = await import("@simplewebauthn/browser");
+      const options = await api.post<Record<string, unknown>>(
+        "/api/auth/mfa/webauthn/register/begin",
+      );
+      const attestation = await startRegistration({ optionsJSON: options as never });
+      const name = vars?.name || `Passkey · ${new Date().toLocaleDateString()}`;
+      return api.post<{ id: string; name: string }>("/api/auth/mfa/webauthn/register/finish", {
+        name,
+        credential: attestation,
+      });
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useRenamePasskey() {
+  const invalidate = useInvalidate(["passkeys"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; name: string }) =>
+      api.put<WebAuthnCredentialOut>(`/api/auth/mfa/webauthn/credentials/${vars.id}`, {
+        name: vars.name,
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeletePasskey() {
+  const invalidate = useInvalidate(["passkeys", "me"]);
+  return useMutation({
+    mutationFn: (id: string) => api.del<void>(`/api/auth/mfa/webauthn/credentials/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useAdminResetMfa() {
+  const invalidate = useInvalidate(["users"]);
+  return useMutation({
+    mutationFn: (vars: { userId: string; includePasskeys?: boolean }) =>
+      api.post<User>(
+        `/api/users/${vars.userId}/mfa/reset?include_passkeys=${vars.includePasskeys ? "true" : "false"}`,
+      ),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateProfile() {
+  const invalidate = useInvalidate(["me"]);
+  return useMutation({
+    mutationFn: (vars: { email: string | null }) => api.put<User>("/api/auth/me", vars),
+    onSuccess: invalidate,
+  });
+}

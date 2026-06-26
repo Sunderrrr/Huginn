@@ -1,0 +1,63 @@
+# Local Huginn stack: PostgreSQL + hub + MCP server.
+# Copy deploy/.env.example to deploy/.env and edit the secrets first.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-huginn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-huginn}
+      POSTGRES_DB: ${POSTGRES_DB:-huginn}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-huginn}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  hub:
+    build:
+      context: ../hub
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HUGINN_ENV: ${HUGINN_ENV:-dev}
+      HUGINN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-huginn}:${POSTGRES_PASSWORD:-huginn}@postgres:5432/${POSTGRES_DB:-huginn}
+      HUGINN_JWT_SECRET: ${HUGINN_JWT_SECRET:?set in .env}
+      HUGINN_SECRET_HASH_KEY: ${HUGINN_SECRET_HASH_KEY:?set in .env}
+      HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?set in .env}
+      HUGINN_REQUIRE_TLS: ${HUGINN_REQUIRE_TLS:-false}
+      HUGINN_CORS_ORIGINS: ${HUGINN_CORS_ORIGINS:-}
+      HUGINN_BOOTSTRAP_ADMIN_USERNAME: ${HUGINN_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      HUGINN_BOOTSTRAP_ADMIN_PASSWORD: ${HUGINN_BOOTSTRAP_ADMIN_PASSWORD:?set in .env}
+      HUGINN_TARGET_RELEASE_REPO: ${HUGINN_TARGET_RELEASE_REPO:-Sunderrrr/Huginn}
+    ports:
+      - "8000:8000"
+
+  dashboard:
+    build:
+      context: ../dashboard
+      args:
+        VITE_HUB_URL: ${HUGINN_PUBLIC_HUB_URL:-http://localhost:8000}
+    depends_on:
+      - hub
+    ports:
+      - "5173:80"
+
+  mcp:
+    build:
+      context: ../mcp
+    depends_on:
+      - hub
+    environment:
+      HUGINN_MCP_HUB_URL: http://hub:8000
+      HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?set in .env}
+      HUGINN_MCP_TRANSPORT: streamable-http
+      HUGINN_MCP_HOST: 0.0.0.0
+      HUGINN_MCP_PORT: 9000
+    ports:
+      - "9000:9000"
+
+volumes:
+  pgdata:

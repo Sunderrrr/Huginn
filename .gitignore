@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Go
+/worker/bin/
+/worker/dist/
+*.test
+*.out
+
+# Node / dashboard
+node_modules/
+dashboard/dist/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local secrets / runtime
+*.pem
+*.key
+*.crt
+.env.prod
+.env.*
+!.env.example
+!.env.prod.example
+!deploy/**/*.example
+worker-identity.json
+*.local
+
+# Built worker artifacts served by prod Caddy
+deploy/artifacts/
+
+# TLS cert/key mounted into Caddy (issued by the internal Internal CA) + config backups
+deploy/certs/
+deploy/*.bak-*

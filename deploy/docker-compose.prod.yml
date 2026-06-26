@@ -1,0 +1,139 @@
+# ============================================================================
+# Huginn — production deployment on a single host with Docker Compose + Caddy.
+# An alternative to the Kubernetes manifests in deploy/k8s/.
+#
+#   cp .env.prod.example .env.prod   # then edit (real domain + secrets)
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# Caddy terminates TLS (automatic HTTPS via Let's Encrypt) and routes everything
+# under one domain, so the dashboard and API share an origin (no CORS needed):
+#   /            -> dashboard
+#   /api, /healthz -> hub
+#   /mcp         -> mcp
+# Only Caddy publishes ports (80/443); all other services stay on the internal
+# network.
+# ============================================================================
+
+# Shared container hardening: no privilege escalation, drop all Linux caps.
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env.prod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:-huginn}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  hub:
+    <<: *hardening
+    build:
+      context: ../hub
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HUGINN_ENV: prod
+      HUGINN_REQUIRE_TLS: "true"
+      HUGINN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-huginn}
+      HUGINN_JWT_SECRET: ${HUGINN_JWT_SECRET:?generate with openssl rand -hex 32}
+      HUGINN_SECRET_HASH_KEY: ${HUGINN_SECRET_HASH_KEY:?generate with openssl rand -hex 32}
+      HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?generate with openssl rand -hex 32}
+      HUGINN_MFA_ENCRYPTION_KEY: ${HUGINN_MFA_ENCRYPTION_KEY:?generate with openssl rand -hex 32}
+      HUGINN_REQUIRE_ADMIN_MFA: ${HUGINN_REQUIRE_ADMIN_MFA:-true}
+      HUGINN_WEBAUTHN_RP_ID: ${HUGINN_WEBAUTHN_RP_ID:-${HUGINN_DOMAIN}}
+      HUGINN_WEBAUTHN_RP_NAME: ${HUGINN_WEBAUTHN_RP_NAME:-Huginn}
+      HUGINN_WEBAUTHN_ORIGIN: ${HUGINN_WEBAUTHN_ORIGIN:-https://${HUGINN_DOMAIN}}
+      HUGINN_WEBAUTHN_USER_VERIFICATION: ${HUGINN_WEBAUTHN_USER_VERIFICATION:-preferred}
+      HUGINN_ALLOW_PASSWORD_LOGIN: ${HUGINN_ALLOW_PASSWORD_LOGIN:-false}
+      HUGINN_BOOTSTRAP_ADMIN_USERNAME: ${HUGINN_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      HUGINN_BOOTSTRAP_ADMIN_PASSWORD: ${HUGINN_BOOTSTRAP_ADMIN_PASSWORD:?set in .env.prod}
+      # Self-hosted by default: the hub serves worker binaries at /dist (built by
+      # build-artifacts.sh), so updates pull from the hub itself — no GitHub
+      # release needed. Override with "owner/repo" to use GitHub releases instead.
+      HUGINN_TARGET_RELEASE_REPO: ${HUGINN_TARGET_RELEASE_REPO:-https://${HUGINN_DOMAIN}/dist}
+      HUGINN_ALLOWED_RELEASE_DOMAINS: ${HUGINN_ALLOWED_RELEASE_DOMAINS:-github.com,objects.githubusercontent.com,${HUGINN_DOMAIN}}
+      HUGINN_TARGET_WORKER_VERSION: ${HUGINN_TARGET_WORKER_VERSION:-v1.3.0}
+      # Same-origin via Caddy, but allow the public origin explicitly too.
+      HUGINN_CORS_ORIGINS: https://${HUGINN_DOMAIN:?set in .env.prod}
+      HUGINN_OIDC_POST_LOGIN_REDIRECT: https://${HUGINN_DOMAIN}/login
+    expose:
+      - "8000"
+
+  mcp:
+    <<: *hardening
+    build:
+      context: ../mcp
+    restart: unless-stopped
+    depends_on:
+      - hub
+    environment:
+      HUGINN_MCP_HUB_URL: http://hub:8000
+      HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN}
+      HUGINN_MCP_TRANSPORT: streamable-http
+      HUGINN_MCP_HOST: 0.0.0.0
+      HUGINN_MCP_PORT: "9000"
+    expose:
+      - "9000"
+
+  dashboard:
+    build:
+      context: ../dashboard
+      args:
+        # Empty → the SPA calls /api relative to whatever origin it's served
+        # from. This is reverse-proxy/SSO-agnostic: works on the LAN IP and on a
+        # public domain (e.g. behind an Authentik forward-auth) without rebuild.
+        VITE_HUB_URL: ""
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - hub
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - hub
+      - dashboard
+      - mcp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      HUGINN_DOMAIN: ${HUGINN_DOMAIN}
+      # "internal" (self-signed, for IP/LAN) or your email (Let's Encrypt, domain).
+      HUGINN_TLS_INTERNAL: ${HUGINN_TLS_INTERNAL:-internal}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # TLS cert/key issued by the internal Internal Root CA (Vault pki/internal-lan).
+      - ./certs:/etc/caddy/certs:ro
+      # Self-hosted worker artifacts served at /install.sh and /dist/*.
+      - ../scripts/install.sh:/srv/install.sh:ro
+      - ./artifacts:/srv/dist:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

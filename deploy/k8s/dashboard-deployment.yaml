@@ -1,0 +1,62 @@
+# The dashboard is a static SPA served by nginx. The hub base URL is baked in at
+# image build time (VITE_HUB_URL), so build the image with your public hub URL —
+# the browser calls the hub directly, so it must be reachable from clients.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: huginn-dashboard
+  namespace: huginn
+  labels:
+    app: huginn-dashboard
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: huginn-dashboard
+  template:
+    metadata:
+      labels:
+        app: huginn-dashboard
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101 # nginx unprivileged user
+      containers:
+        - name: dashboard
+          image: ghcr.io/example-website/huginn-dashboard:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: huginn-dashboard
+  namespace: huginn
+  labels:
+    app: huginn-dashboard
+spec:
+  selector:
+    app: huginn-dashboard
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP

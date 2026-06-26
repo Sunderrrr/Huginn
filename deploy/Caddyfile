@@ -1,0 +1,72 @@
+# Huginn reverse proxy.
+#
+# HUGINN_TLS_INTERNAL controls certificates (defaults to "internal"):
+#   - "internal"  -> Caddy's self-signed internal CA. Use for an IP, localhost,
+#                    or any LAN hostname (browsers warn once; accept the cert).
+#   - <your email> -> automatic, trusted Let's Encrypt certs. Use ONLY with a
+#                    real public domain in HUGINN_DOMAIN that resolves here.
+
+# Clients connecting by IP literal send no SNI; treat such connections as the
+# configured host so the right certificate is served.
+{
+	default_sni {$HUGINN_DOMAIN}
+}
+
+{$HUGINN_DOMAIN}, huginn.example.lan {
+	# Cert issued by the internal Internal Root CA (Vault pki/internal-lan), valid for
+	# huginn.example.lan + IP 192.0.2.13. Replaces the self-signed `internal` cert
+	# so clients trusting the Internal root (incl. Node/Claude Code) connect cleanly.
+	tls /etc/caddy/certs/huginn.crt /etc/caddy/certs/huginn.key
+	encode gzip
+
+	# Security headers on every response.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+		-Server
+	}
+
+	# Hub REST API + health.
+	handle /api/* {
+		reverse_proxy hub:8000
+	}
+	handle /healthz {
+		reverse_proxy hub:8000
+	}
+
+	# MCP server (streamable HTTP).
+	handle /mcp* {
+		reverse_proxy mcp:9000 {
+			# Stamp the real client IP into a header the client cannot forge
+			# (overwrites any client-supplied value). The MCP server trusts
+			# this for per-token IP allow-lists.
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Self-hosted worker artifacts (served from mounted files), so the install
+	# one-liner works without depending on GitHub releases.
+	handle /install.sh {
+		root * /srv
+		file_server
+	}
+	handle /dist/* {
+		root * /srv
+		file_server
+	}
+	# Hub CA root (the public certificate, not the key) for trust bootstrap.
+	handle /caddy-root.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		file_server
+	}
+
+	# Everything else: the dashboard SPA.
+	handle {
+		reverse_proxy dashboard:80
+	}
+}
