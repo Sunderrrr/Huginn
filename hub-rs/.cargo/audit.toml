@@ -1,0 +1,10 @@
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 (Marvin Attack, `rsa` crate) — no patched version exists
+    # (patched = [] by design). Not applicable here: `rsa` only enters the
+    # lockfile through sqlx's *optional* mysql feature (sqlx-mysql -> rsa),
+    # which this crate never enables (features = postgres only). `cargo tree -i
+    # rsa` resolves to nothing — the code is not compiled into any of our
+    # binaries, so the network timing side-channel cannot exist.
+    "RUSTSEC-2023-0071",
+]
