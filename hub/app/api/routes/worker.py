@@ -42,9 +42,7 @@ def _enforce_tls(request: Request, settings: Settings) -> None:
     forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     scheme = forwarded or request.url.scheme
     if scheme != "https":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "TLS is required for worker communication"
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "TLS is required for worker communication")
 
 
 @router.post("/enroll", response_model=WorkerEnrollResponse, status_code=status.HTTP_201_CREATED)

@@ -67,9 +67,7 @@ async def test_long_poll_returns_empty_when_idle(client, enrolled_worker) -> Non
     assert poll.json() is None
 
 
-async def test_long_poll_picks_up_queued_task(
-    client, admin_headers, enrolled_worker
-) -> None:
+async def test_long_poll_picks_up_queued_task(client, admin_headers, enrolled_worker) -> None:
     import asyncio
 
     w = await enrolled_worker()
@@ -131,9 +129,7 @@ async def test_auto_update_queues_task_on_version_mismatch(
     assert poll2.json() is None
 
 
-async def test_auto_update_disabled_queues_nothing(
-    client, admin_headers, enrolled_worker
-) -> None:
+async def test_auto_update_disabled_queues_nothing(client, admin_headers, enrolled_worker) -> None:
     w = await enrolled_worker()
     await client.put(
         "/api/settings",
@@ -303,6 +299,7 @@ async def test_execute_action_requires_auth(client, enrolled_worker) -> None:
     resp = await client.post(f"/api/vms/{w['vm_id']}/actions", json={"action": "status"})
     assert resp.status_code == 401
 
+
 async def test_result_large_output_is_truncated_not_rejected(
     client, admin_headers, enrolled_worker
 ) -> None:
@@ -325,9 +322,7 @@ async def test_result_large_output_is_truncated_not_rejected(
     assert stored.endswith("[...truncated...]")
 
 
-async def test_result_oversized_field_rejected(
-    client, admin_headers, enrolled_worker
-) -> None:
+async def test_result_oversized_field_rejected(client, admin_headers, enrolled_worker) -> None:
     """A single result field beyond the schema bound is rejected at validation."""
     w = await enrolled_worker()
     task_id = (

@@ -34,9 +34,7 @@ def _require_active(vm: VM) -> None:
         raise ExecForbidden("VM is not approved/active")
 
 
-async def _find_idempotent(
-    session: AsyncSession, vm_id: uuid.UUID, key: str | None
-) -> Task | None:
+async def _find_idempotent(session: AsyncSession, vm_id: uuid.UUID, key: str | None) -> Task | None:
     if not key:
         return None
     result = await session.execute(
@@ -79,7 +77,10 @@ async def create_action_task(
     # A name not in the built-in catalog may be an admin-defined custom command.
     if action_name not in ACTION_CATALOG:
         return await _create_custom_action_task(
-            session, vm=vm, action_name=action_name, created_by=created_by,
+            session,
+            vm=vm,
+            action_name=action_name,
+            created_by=created_by,
             idempotency_key=idempotency_key,
         )
     # validate_action raises ActionError on unknown action / unsafe params.
@@ -284,11 +285,13 @@ async def wait_for_terminal(
 async def has_inflight_update(session: AsyncSession, vm_id: uuid.UUID) -> bool:
     """True if an update task for this VM is still pending or dispatched."""
     result = await session.execute(
-        select(Task.id).where(
+        select(Task.id)
+        .where(
             Task.vm_id == vm_id,
             Task.type == TaskType.update,
             Task.status.in_([TaskStatus.pending, TaskStatus.dispatched, TaskStatus.running]),
-        ).limit(1)
+        )
+        .limit(1)
     )
     return result.scalar_one_or_none() is not None
 
