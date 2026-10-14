@@ -68,7 +68,7 @@ services:
       # release needed. Override with "owner/repo" to use GitHub releases instead.
       HUGINN_TARGET_RELEASE_REPO: ${HUGINN_TARGET_RELEASE_REPO:-https://${HUGINN_DOMAIN}/dist}
       HUGINN_ALLOWED_RELEASE_DOMAINS: ${HUGINN_ALLOWED_RELEASE_DOMAINS:-github.com,objects.githubusercontent.com,${HUGINN_DOMAIN}}
-      HUGINN_TARGET_WORKER_VERSION: ${HUGINN_TARGET_WORKER_VERSION:-v1.3.0}
+      HUGINN_TARGET_WORKER_VERSION: ${HUGINN_TARGET_WORKER_VERSION:-v1.4.0}
       # Same-origin via Caddy, but allow the public origin explicitly too.
       HUGINN_CORS_ORIGINS: https://${HUGINN_DOMAIN:?set in .env.prod}
       HUGINN_OIDC_POST_LOGIN_REDIRECT: https://${HUGINN_DOMAIN}/login
