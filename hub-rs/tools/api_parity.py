@@ -47,6 +47,11 @@ PLACEHOLDERS = [
         "<JWT>",
     ),
     (re.compile(r"\b[0-9a-f]{64}\b"), "<HASH64>"),
+    # Volatile test fixtures: generated names, urlsafe secrets (dots would only
+    # appear inside JWTs, already matched above).
+    (re.compile(r"parity-\d+"), "parity-<N>"),
+    (re.compile(r"[A-Za-z0-9_-]{40,}"), "<TOKEN>"),
+    (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"), "<IP>"),
 ]
 
 
@@ -102,8 +107,12 @@ def capture(base: str, admin_user: str, admin_pass: str, out_dir: Path):
 
     def rec(name, method, path, **kw):
         status, body = call(base, method, path, **kw)
-        results[name] = {"method": method, "path": path, "status": status,
-                         "body": normalize(body)}
+        results[name] = {
+            "method": normalize(method),
+            "path": normalize(path),
+            "status": status,
+            "body": normalize(body),
+        }
         return status, body
 
     # --- unauthenticated surface (auth gate shapes) -------------------------
@@ -234,8 +243,10 @@ def capture(base: str, admin_user: str, admin_pass: str, out_dir: Path):
 
 
 def diff(a_dir: Path, b_dir: Path) -> int:
-    a = json.loads((a_dir / "responses.json").read_text())
-    b = json.loads((b_dir / "responses.json").read_text())
+    # Normalize on read too: goldens stay raw, and normalization rules can be
+    # tightened without re-capturing both sides.
+    a = normalize(json.loads((a_dir / "responses.json").read_text()))
+    b = normalize(json.loads((b_dir / "responses.json").read_text()))
     names = sorted(set(a) | set(b))
     bad = 0
     for name in names:

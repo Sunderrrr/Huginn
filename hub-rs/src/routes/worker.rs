@@ -99,7 +99,10 @@ impl WorkerEnrollRequest {
         if let Some(ip) = &self.ip_address {
             validate_ip_literal(ip)?;
         }
-        validate_os_info(&self.os_info)?;
+        // `os_info` is optional in the Python schema: validate only when sent.
+        if !self.os_info.is_null() {
+            validate_os_info(&self.os_info)?;
+        }
         Ok(())
     }
 }
@@ -262,11 +265,30 @@ pub struct WorkerState {
     pub config: Config,
     pub security: SecurityConfig,
     pub events: Arc<TaskEvents>,
+    /// Dashboard SSE bus (`app/core/events.py`), shared with `routes/fleet` so
+    /// task results published here reach connected dashboards.
+    pub bus: Arc<crate::routes::fleet::events::EventBus>,
     enroll_limiter: RateLimiter,
 }
 
 impl WorkerState {
     pub fn new(pool: sqlx::PgPool, config: Config) -> Self {
+        Self::with_events(
+            pool,
+            config,
+            TaskEvents::new(),
+            Arc::new(crate::routes::fleet::events::EventBus::new_default()),
+        )
+    }
+
+    /// Build a state around shared buses (the app assembly wires one
+    /// [`TaskEvents`] and one [`EventBus`] into worker + fleet routes).
+    pub fn with_events(
+        pool: sqlx::PgPool,
+        config: Config,
+        events: Arc<TaskEvents>,
+        bus: Arc<crate::routes::fleet::events::EventBus>,
+    ) -> Self {
         let security = SecurityConfig::new(
             &config.mfa_encryption_key,
             &config.jwt_secret,
@@ -277,7 +299,8 @@ impl WorkerState {
             pool,
             config,
             security,
-            events: TaskEvents::new(),
+            events,
+            bus,
             enroll_limiter,
         }
     }
@@ -605,8 +628,8 @@ async fn submit_task_result(
         state.events.notify_queue_on_commit(&vm.id.to_string());
     }
     // Push a live hint to connected dashboards (events.publish({"type":
-    // "tasks"})) and notify external integrations on failure — both hook into
-    // modules landing later, see INTEGRATION_NOTES.md.
+    // "tasks"}) in Python). External failure notifications are not ported yet.
+    state.bus.publish_hint("tasks");
 
     Ok(StatusCode::NO_CONTENT)
 }

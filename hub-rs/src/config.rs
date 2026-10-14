@@ -117,6 +117,7 @@ impl Default for Config {
     }
 }
 
+#[allow(dead_code)] // API surface: consumed by the router assembly/CORS layer
 impl Config {
     /// Load from the process environment (`HUGINN_*`), starting from defaults.
     /// Boolean and numeric parsing mirrors pydantic's coercion loosely but
@@ -302,6 +303,7 @@ fn parse_bool(raw: &str, fallback: bool) -> bool {
     }
 }
 
+#[allow(dead_code)] // used by the Config methods above
 fn csv(value: &str) -> Vec<String> {
     value
         .split(',')
