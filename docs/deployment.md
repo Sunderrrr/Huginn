@@ -115,7 +115,6 @@ kubectl create namespace huginn
 kubectl -n huginn apply -f deploy/k8s/secret.example.yaml
 
 # 2. Migrate the database (idempotent; run on every upgrade).
-kubectl -n huginn apply -f deploy/k8s/migrate-job.yaml
 kubectl -n huginn wait --for=condition=complete job/huginn-migrate --timeout=120s
 
 # 3. Workloads.

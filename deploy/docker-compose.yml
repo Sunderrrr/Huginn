@@ -17,13 +17,13 @@ services:
 
   hub:
     build:
-      context: ../hub
+      context: ../hub-rs
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       HUGINN_ENV: ${HUGINN_ENV:-dev}
-      HUGINN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-huginn}:${POSTGRES_PASSWORD:-huginn}@postgres:5432/${POSTGRES_DB:-huginn}
+      HUGINN_DATABASE_URL: postgresql://${POSTGRES_USER:-huginn}:${POSTGRES_PASSWORD:-huginn}@postgres:5432/${POSTGRES_DB:-huginn}
       HUGINN_JWT_SECRET: ${HUGINN_JWT_SECRET:?set in .env}
       HUGINN_SECRET_HASH_KEY: ${HUGINN_SECRET_HASH_KEY:?set in .env}
       HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?set in .env}
