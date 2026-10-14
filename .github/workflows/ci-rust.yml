@@ -40,6 +40,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ${{ matrix.component }}
+          # RUSTSEC-2023-0071 (unpatched) — rationale in audit.toml at the repo
+          # root: `rsa` only enters hub-rs's lockfile through sqlx's unused
+          # mysql feature. Kept in both places because audit-check resolves the
+          # config from the workspace root.
+          ignore: RUSTSEC-2023-0071
 
   # The migration release gate: hub-rs must answer exactly like the Python hub
   # (golden responses captured from it, see hub-rs/tools/api_parity.py).
