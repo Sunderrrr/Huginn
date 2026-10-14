@@ -6,7 +6,8 @@ Huginn is a hub-and-spoke system for managing a fleet of Linux VMs.
                 ┌─────────────┐         ┌──────────────┐
    Hermes ──MCP─▶│             │         │  Dashboard   │
                 │     HUB     │◀──REST──│   (React)    │
-   Dashboard ──▶│ FastAPI +   │         └──────────────┘
+   Dashboard ──▶│ hub-rs      │         └──────────────┘
+                │ (Rust) +    │
                 │ PostgreSQL  │
                 │  + MCP srv  │
                 └──────┬──────┘
@@ -20,8 +21,11 @@ Huginn is a hub-and-spoke system for managing a fleet of Linux VMs.
 
 ## Components
 
-### Hub (`/hub`)
-FastAPI + PostgreSQL (async SQLAlchemy 2, Alembic). The single source of truth:
+### Hub (`hub-rs/`)
+Rust (axum + SQLx) with PostgreSQL. The schema is managed by embedded SQL
+migrations (`hub-rs/migrations/`) that reproduce the baseline Alembic schema, so
+databases migrated by either implementation are interchangeable. The single
+source of truth:
 - **Inventory & lifecycle** — VMs, their state (PENDING/ACTIVE/OFFLINE/REVOKED), and exec mode.
 - **Enrollment** — limited-use, revocable tokens; manual approval.
 - **AuthN/Z** — local (Argon2id), LDAP, and OIDC/SSO users with admin/operator/
@@ -32,13 +36,14 @@ FastAPI + PostgreSQL (async SQLAlchemy 2, Alembic). The single source of truth:
 
 A background sweeper re-queues/dead-letters stuck tasks and flags offline VMs.
 
-### Worker (`/worker`)
-A single static Go binary, installed natively via systemd. It **pulls** work from
-the hub over one outbound HTTPS connection (NAT-friendly), executes it locally, and
-reports results. An optional push listener can be enabled where a VM is routable.
+### Worker (`worker-rs/`)
+A single static Rust binary, installed natively via systemd. It **pulls** work
+from the hub over one outbound HTTPS connection (NAT-friendly), executes it
+locally, and reports results. An optional push listener can be enabled where a VM
+is routable.
 
-### MCP server (`/mcp`)
-A thin FastMCP façade over the hub's REST API, exposing tools for an external AI
+### MCP server (`mcp-rs/`)
+A thin Rust MCP façade over the hub's REST API, exposing tools for an external AI
 agent. It holds no business logic and never contacts workers directly.
 
 ### Dashboard (`/dashboard`)
@@ -68,7 +73,7 @@ pending ──poll──▶ dispatched ──result──▶ succeeded | failed 
 
 ## Data model
 
-See `hub/app/models/`. Key tables: `users` (with TOTP columns),
+See `hub-rs/src/models/`. Key tables: `users` (with TOTP columns),
 `enrollment_tokens`, `vms`, `tasks`, `audit_log` (append-only, hash-chained), a
 single-row `settings`, `user_vm_access`, `tags` + `vm_tags`,
 `scheduled_commands`, `mfa_backup_codes`, and `webauthn_credentials` /

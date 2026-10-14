@@ -27,9 +27,9 @@ your fleet — Hermes, Claude, Cursor, Continue, and more.
 
 ### stdio (local)
 
-No extra setup needed — the agent launches `python -m app.server` as a
-subprocess. The hub URL and service token are passed via environment variables in
-the agent config.
+No extra setup needed — the agent launches the `huginn-mcp` binary (built from
+`mcp-rs/`, stdio transport by default) as a subprocess. The hub URL and service
+token are passed via environment variables in the agent config.
 
 ### streamable-http (remote)
 
@@ -41,7 +41,7 @@ HUGINN_MCP_HUB_URL=https://hub.example.com \
 HUGINN_MCP_SERVICE_TOKEN=<service-token> \
 HUGINN_MCP_HOST=0.0.0.0 \
 HUGINN_MCP_PORT=9000 \
-python -m app.server
+huginn-mcp
 ```
 
 Or use the `mcp` service from `docker-compose.yml` (already configured for
@@ -66,9 +66,7 @@ your deployment's MCP URL.
 {
   "mcpServers": {
     "huginn": {
-      "command": "python",
-      "args": ["-m", "app.server"],
-      "cwd": "/path/to/Huginn/mcp",
+      "command": "/path/to/Huginn/mcp-rs/target/release/huginn-mcp",
       "env": {
         "HUGINN_MCP_HUB_URL": "https://hub.example.com",
         "HUGINN_MCP_SERVICE_TOKEN": "<service-token>"
@@ -102,9 +100,7 @@ or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 {
   "mcpServers": {
     "huginn": {
-      "command": "python",
-      "args": ["-m", "app.server"],
-      "cwd": "/path/to/Huginn/mcp",
+      "command": "/path/to/Huginn/mcp-rs/target/release/huginn-mcp",
       "env": {
         "HUGINN_MCP_HUB_URL": "https://hub.example.com",
         "HUGINN_MCP_SERVICE_TOKEN": "<service-token>"
@@ -136,7 +132,7 @@ list.
 stdio:
 ```bash
 claude mcp add huginn \
-  -- python -m app.server
+  -- /path/to/Huginn/mcp-rs/target/release/huginn-mcp
 ```
 
 HTTP:
@@ -153,9 +149,7 @@ With env vars, create a `.mcp.json` in your project root:
 {
   "mcpServers": {
     "huginn": {
-      "command": "python",
-      "args": ["-m", "app.server"],
-      "cwd": "/path/to/Huginn/mcp",
+      "command": "/path/to/Huginn/mcp-rs/target/release/huginn-mcp",
       "env": {
         "HUGINN_MCP_HUB_URL": "https://hub.example.com",
         "HUGINN_MCP_SERVICE_TOKEN": "<service-token>"
@@ -188,9 +182,7 @@ Add to `.cursor/mcp.json` in your project root (or global settings):
 {
   "mcpServers": {
     "huginn": {
-      "command": "python",
-      "args": ["-m", "app.server"],
-      "cwd": "/path/to/Huginn/mcp",
+      "command": "/path/to/Huginn/mcp-rs/target/release/huginn-mcp",
       "env": {
         "HUGINN_MCP_HUB_URL": "https://hub.example.com",
         "HUGINN_MCP_SERVICE_TOKEN": "<service-token>"
@@ -244,9 +236,7 @@ Add to `~/.continue/config.json`:
       "name": "huginn",
       "transport": {
         "type": "stdio",
-        "command": "python",
-        "args": ["-m", "app.server"],
-        "cwd": "/path/to/Huginn/mcp",
+        "command": "/path/to/Huginn/mcp-rs/target/release/huginn-mcp",
         "env": {
           "HUGINN_MCP_HUB_URL": "https://hub.example.com",
           "HUGINN_MCP_SERVICE_TOKEN": "<service-token>"
