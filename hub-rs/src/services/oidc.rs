@@ -747,6 +747,96 @@ mod tests {
         ));
     }
 
+    // ---- full exchange against a fake provider ---------------------------
+
+    #[derive(Clone)]
+    struct MockIdp {
+        discovery: serde_json::Value,
+        jwks: serde_json::Value,
+        token: serde_json::Value,
+    }
+
+    async fn mock_discovery(
+        axum::extract::State(s): axum::extract::State<MockIdp>,
+    ) -> axum::Json<serde_json::Value> {
+        axum::Json(s.discovery)
+    }
+    async fn mock_jwks(
+        axum::extract::State(s): axum::extract::State<MockIdp>,
+    ) -> axum::Json<serde_json::Value> {
+        axum::Json(s.jwks)
+    }
+    async fn mock_token(
+        axum::extract::State(s): axum::extract::State<MockIdp>,
+    ) -> axum::Json<serde_json::Value> {
+        axum::Json(s.token)
+    }
+
+    #[tokio::test]
+    async fn exchange_code_runs_the_full_flow_against_a_mock_provider() {
+        use axum::routing::{get, post};
+
+        // Bind first so the issuer (== our base URL) is known before signing.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let issuer = format!("http://{addr}");
+
+        let (key, jwk) = gen_rsa();
+        let id_token = key.sign(
+            "RS256",
+            Some("rsa-key"),
+            &serde_json::json!({
+                "sub": "subject-1", "preferred_username": "alice", "email": "alice@example.com",
+                "iss": issuer, "aud": "client-1", "nonce": "nonce-1",
+                "iat": 1_700_000_000_i64, "exp": 4_000_000_000_i64,
+            }),
+        );
+
+        let state = MockIdp {
+            discovery: serde_json::json!({
+                "issuer": issuer,
+                "authorization_endpoint": format!("{issuer}/auth"),
+                "token_endpoint": format!("{issuer}/token"),
+                "jwks_uri": format!("{issuer}/jwks"),
+            }),
+            jwks: serde_json::json!({ "keys": [jwk] }),
+            token: serde_json::json!({
+                "id_token": id_token, "access_token": "at", "token_type": "Bearer",
+            }),
+        };
+        let app = axum::Router::new()
+            .route("/.well-known/openid-configuration", get(mock_discovery))
+            .route("/jwks", get(mock_jwks))
+            .route("/token", post(mock_token))
+            .with_state(state);
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+        let client = OidcClient::new(OidcConfig {
+            enabled: true,
+            issuer,
+            client_id: "client-1".into(),
+            client_secret: "secret".into(),
+            redirect_url: "http://localhost:8000/api/auth/oidc/callback".into(),
+            post_login_redirect: String::new(),
+        });
+
+        // Happy path: discovery -> token exchange -> JWKS -> verified claims.
+        let claims = client
+            .exchange_code("the-code", Some("nonce-1"))
+            .await
+            .expect("exchange_code succeeds");
+        assert_eq!(claims.subject, "subject-1");
+        assert_eq!(claims.username, "alice");
+        assert_eq!(claims.email.as_deref(), Some("alice@example.com"));
+
+        // A wrong nonce is rejected (replay protection).
+        let err = client
+            .exchange_code("the-code", Some("wrong-nonce"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OidcError::NonceMismatch));
+    }
+
     // ---- reconciliation decisions ---------------------------------------
 
     #[test]
