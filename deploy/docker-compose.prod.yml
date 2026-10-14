@@ -78,7 +78,9 @@ services:
   mcp:
     <<: *hardening
     build:
-      context: ../mcp
+      # Rust server (mcp-rs/) — the Python server in mcp/ remains as reference
+      # during the transition.
+      context: ../mcp-rs
     restart: unless-stopped
     depends_on:
       - hub
