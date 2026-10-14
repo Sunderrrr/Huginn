@@ -25,7 +25,6 @@ pub const INSTRUCTIONS: &str = r#"Huginn — fleet control. How to use these too
 4. Every action is audited and attributed to your user. Stay within scope.
 "#;
 
-
 /// Strict identifier validation before any value is interpolated into a hub
 /// URL (defense in depth: task_id/vm_id are validated as UUIDs or conservative
 /// name tokens; `state` as a lowercase slug). Prevents path/query injection
@@ -33,15 +32,12 @@ pub const INSTRUCTIONS: &str = r#"Huginn — fleet control. How to use these too
 fn safe_id(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= 128
-        && v
-            .chars()
+        && v.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 fn safe_slug(v: &str) -> bool {
-    !v.is_empty()
-        && v.len() <= 32
-        && v.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+    !v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_lowercase() || c == '_')
 }
 
 /// Structured tool error, matching the Python `{"error": {"status", "detail"}}`.
@@ -194,7 +190,10 @@ pub async fn call_tool(
                 Ok(v) => v,
                 Err(e) => return from_hub_error(e),
             };
-            let mode = vm_obj.get("exec_mode").and_then(Value::as_str).unwrap_or("");
+            let mode = vm_obj
+                .get("exec_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             if mode != "custom" && mode != "unrestricted" {
                 return Value::Array(vec![]); // VM can't run custom commands
             }
@@ -463,12 +462,18 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/vms"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                vm("11111111-1111-1111-1111-111111111111", "web-01", "active"),
-                vm("22222222-2222-2222-2222-222222222222", "VM-Plane-Global", "active"),
-                vm("33333333-3333-3333-3333-333333333333", "dup", "revoked"),
-                vm("44444444-4444-4444-4444-444444444444", "dup", "active")
-            ])))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    vm("11111111-1111-1111-1111-111111111111", "web-01", "active"),
+                    vm(
+                        "22222222-2222-2222-2222-222222222222",
+                        "VM-Plane-Global",
+                        "active"
+                    ),
+                    vm("33333333-3333-3333-3333-333333333333", "dup", "revoked"),
+                    vm("44444444-4444-4444-4444-444444444444", "dup", "active")
+                ])),
+            )
             .mount(&server)
             .await;
 
@@ -484,7 +489,9 @@ mod tests {
 
         // UUID → passthrough
         assert_eq!(
-            resolve_vm(&hub, &ctx, "55555555-5555-5555-5555-555555555555").await.unwrap(),
+            resolve_vm(&hub, &ctx, "55555555-5555-5555-5555-555555555555")
+                .await
+                .unwrap(),
             "55555555-5555-5555-5555-555555555555"
         );
         // exact name
@@ -510,9 +517,12 @@ mod tests {
         let server2 = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/vms"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                vm("6", "twin", "active"), vm("7", "twin", "active")
-            ])))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    vm("6", "twin", "active"),
+                    vm("7", "twin", "active")
+                ])),
+            )
             .mount(&server2)
             .await;
         let settings2 = crate::config::Settings {

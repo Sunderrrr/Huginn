@@ -106,11 +106,7 @@ async fn mcp_get() -> Response {
         .into_response()
 }
 
-async fn mcp_post(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Body,
-) -> Response {
+async fn mcp_post(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body) -> Response {
     // Client IP: X-Real-IP (stamped by the trusted edge proxy — always present
     // behind Caddy) → first X-Forwarded-For hop → peer. The direct peer is not
     // extracted here (axum 0.8: ConnectInfo is not an optional part
@@ -136,19 +132,11 @@ async fn mcp_post(
     let bytes = match axum::body::to_bytes(body, 4 << 20).await {
         Ok(b) => b,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                r#"{"error":"invalid body"}"#,
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, r#"{"error":"invalid body"}"#).into_response();
         }
     };
     let Ok(json_body) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            r#"{"error":"invalid json"}"#,
-        )
-            .into_response();
+        return (StatusCode::BAD_REQUEST, r#"{"error":"invalid json"}"#).into_response();
     };
     let ctx = CallCtx {
         obo_token: Some(presented),
@@ -202,7 +190,10 @@ mod e2e_tests {
     #[tokio::test]
     async fn rejects_unauthenticated_requests() {
         let state = state_with_hub("http://127.0.0.1:1".into());
-        let resp = router(state).oneshot(rpc(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)).await.unwrap();
+        let resp = router(state)
+            .oneshot(rpc(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "no token must 401");
     }
 
@@ -216,9 +207,10 @@ mod e2e_tests {
                 "X-MCP-On-Behalf-Of",
                 "user-token-1",
             ))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"id": "u1", "username": "alice"}),
-            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": "u1", "username": "alice"})),
+            )
             .mount(&server)
             .await;
 
@@ -228,7 +220,9 @@ mod e2e_tests {
             .insert("authorization", "Bearer user-token-1".parse().unwrap());
         let resp = router(state).oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["result"]["tools"].as_array().unwrap().len(), 9);
     }
@@ -259,11 +253,15 @@ mod e2e_tests {
             .await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/tasks/abc"))
-            .and(wiremock::matchers::header("X-MCP-On-Behalf-Of", "user-token-1"))
-            .and(wiremock::matchers::header("X-Forwarded-For", "203.0.113.7"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"id": "abc", "status": "succeeded"}),
+            .and(wiremock::matchers::header(
+                "X-MCP-On-Behalf-Of",
+                "user-token-1",
             ))
+            .and(wiremock::matchers::header("X-Forwarded-For", "203.0.113.7"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": "abc", "status": "succeeded"})),
+            )
             .mount(&server)
             .await;
 
@@ -277,7 +275,9 @@ mod e2e_tests {
             .insert("x-real-ip", "203.0.113.7".parse().unwrap());
         let resp = router(state).oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let text = json["result"]["content"][0]["text"].as_str().unwrap();
         let out: serde_json::Value = serde_json::from_str(text).unwrap();

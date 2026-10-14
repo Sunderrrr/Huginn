@@ -91,7 +91,10 @@ mod tests {
             client_ip(None, Some(" 9.9.9.9 , 8.8.8.8"), Some("7.7.7.7")),
             Some("9.9.9.9".into())
         );
-        assert_eq!(client_ip(None, None, Some("7.7.7.7")), Some("7.7.7.7".into()));
+        assert_eq!(
+            client_ip(None, None, Some("7.7.7.7")),
+            Some("7.7.7.7".into())
+        );
         assert_eq!(client_ip(None, None, None), None);
     }
 
@@ -126,7 +129,8 @@ mod tests {
         let reqs = server.received_requests().await.unwrap();
         assert_eq!(
             reqs.iter()
-                .filter(|r| r.headers
+                .filter(|r| r
+                    .headers
                     .get("X-MCP-On-Behalf-Of")
                     .map(|v| v == "tok-ok")
                     .unwrap_or(false))

@@ -40,9 +40,16 @@ impl HubClient {
     }
 
     /// `GET /api/mcp/whoami` — validates a presented per-user MCP token.
-    pub async fn whoami(&self, presented: &str, client_ip: Option<&str>) -> Result<Value, HubError> {
+    pub async fn whoami(
+        &self,
+        presented: &str,
+        client_ip: Option<&str>,
+    ) -> Result<Value, HubError> {
         let mut headers = vec![
-            ("X-MCP-Service-Token".to_string(), self.service_token.clone()),
+            (
+                "X-MCP-Service-Token".to_string(),
+                self.service_token.clone(),
+            ),
             ("X-MCP-On-Behalf-Of".to_string(), presented.to_string()),
         ];
         if let Some(ip) = client_ip {
