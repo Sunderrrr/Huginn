@@ -76,12 +76,20 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), DbError> {
 }
 
 async fn alembic_at_baseline(pool: &PgPool) -> Result<bool, DbError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT version_num FROM alembic_version WHERE version_num = $1",
-    )
-    .bind(BASELINE_ALEMBIC_REV)
-    .fetch_optional(pool)
-    .await?;
+    // A fresh database has no `alembic_version` table at all: undefined_table
+    // (42P01) simply means "not initialized by Alembic" — run sqlx migrations.
+    let row: Option<(String,)> =
+        match sqlx::query_as("SELECT version_num FROM alembic_version WHERE version_num = $1")
+            .bind(BASELINE_ALEMBIC_REV)
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(row) => row,
+            Err(sqlx::Error::Database(db)) if db.code().as_deref() == Some("42P01") => {
+                return Ok(false)
+            }
+            Err(e) => return Err(e.into()),
+        };
     Ok(row.is_some())
 }
 
