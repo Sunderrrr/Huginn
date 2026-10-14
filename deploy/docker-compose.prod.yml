@@ -27,6 +27,10 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+      # Ubuntu + podman: the default AppArmor profile (containers-default-*)
+      # denies gosu's signal() syscalls, so the entrypoint spins forever and
+      # postgres never starts. opt out for this service only.
+      - apparmor=unconfined
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set in .env.prod}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.prod}
@@ -50,7 +54,7 @@ services:
     environment:
       HUGINN_ENV: prod
       HUGINN_REQUIRE_TLS: "true"
-      HUGINN_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-huginn}
+      HUGINN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-huginn}
       HUGINN_JWT_SECRET: ${HUGINN_JWT_SECRET:?generate with openssl rand -hex 32}
       HUGINN_SECRET_HASH_KEY: ${HUGINN_SECRET_HASH_KEY:?generate with openssl rand -hex 32}
       HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?generate with openssl rand -hex 32}
@@ -68,7 +72,7 @@ services:
       # release needed. Override with "owner/repo" to use GitHub releases instead.
       HUGINN_TARGET_RELEASE_REPO: ${HUGINN_TARGET_RELEASE_REPO:-https://${HUGINN_DOMAIN}/dist}
       HUGINN_ALLOWED_RELEASE_DOMAINS: ${HUGINN_ALLOWED_RELEASE_DOMAINS:-github.com,objects.githubusercontent.com,${HUGINN_DOMAIN}}
-      HUGINN_TARGET_WORKER_VERSION: ${HUGINN_TARGET_WORKER_VERSION:-v1.4.0}
+      HUGINN_TARGET_WORKER_VERSION: ${HUGINN_TARGET_WORKER_VERSION:-v1.3.0}
       # Same-origin via Caddy, but allow the public origin explicitly too.
       HUGINN_CORS_ORIGINS: https://${HUGINN_DOMAIN:?set in .env.prod}
       HUGINN_OIDC_POST_LOGIN_REDIRECT: https://${HUGINN_DOMAIN}/login
@@ -78,8 +82,7 @@ services:
   mcp:
     <<: *hardening
     build:
-      # Rust server (mcp-rs/) — the Python server in mcp/ remains as reference
-      # during the transition.
+      # Rust server (mcp-rs/) — live migration test.
       context: ../mcp-rs
     restart: unless-stopped
     depends_on:
