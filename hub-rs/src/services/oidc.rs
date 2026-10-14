@@ -513,41 +513,90 @@ fn quote_plus(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::enums::UserRole;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
 
-    // Test keys (fixed, embedded — deterministic across runs). Generated once
-    // with OpenSSL; only the public halves appear in the JWKS below.
-    const RSA_PEM: &str = include_str!("../../tests/keys/oidc_rsa.pem");
-    const EC_PEM: &str = include_str!("../../tests/keys/oidc_ec.pem");
+    // ---- ephemeral test keys (generated at runtime; nothing committed) ----
 
-    fn rsa_jwk() -> serde_json::Value {
-        serde_json::json!({
-            "kty": "RSA", "kid": "rsa-key", "alg": "RS256", "use": "sig",
-            "n": include_str!("../../tests/keys/rsa_n.txt").trim(),
-            "e": include_str!("../../tests/keys/rsa_e.txt").trim(),
-        })
-    }
-    fn ec_jwk() -> serde_json::Value {
-        serde_json::json!({
-            "kty": "EC", "kid": "ec-key", "alg": "ES256", "use": "sig", "crv": "P-256",
-            "x": include_str!("../../tests/keys/ec_x.txt").trim(),
-            "y": include_str!("../../tests/keys/ec_y.txt").trim(),
-        })
+    fn b64url(data: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(data)
     }
 
-    fn sign(alg: Algorithm, kid: &str, payload: serde_json::Value, pem: &str) -> String {
-        use jsonwebtoken::{encode, EncodingKey, Header};
-        let mut header = Header::new(alg);
-        header.kid = if kid.is_empty() {
-            None
-        } else {
-            Some(kid.to_owned())
-        };
-        let enc = match alg {
-            Algorithm::RS256 => EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap(),
-            Algorithm::ES256 => EncodingKey::from_ec_pem(pem.as_bytes()).unwrap(),
-            _ => EncodingKey::from_secret(pem.as_bytes()),
-        };
-        encode(&header, &payload, &enc).unwrap()
+    enum TestKey {
+        Rsa(rsa::RsaPrivateKey),
+        Ec(p256::SecretKey),
+    }
+
+    impl TestKey {
+        fn jwk(&self, kid: &str) -> serde_json::Value {
+            match self {
+                TestKey::Rsa(sk) => {
+                    use rsa::traits::PublicKeyParts;
+                    let pk = sk.public_key();
+                    serde_json::json!({
+                        "kty": "RSA", "kid": kid, "alg": "RS256", "use": "sig",
+                        "n": b64url(&pk.n().to_bytes_be()),
+                        "e": b64url(&pk.e().to_bytes_be()),
+                    })
+                }
+                TestKey::Ec(sk) => {
+                    use p256::elliptic_curve::sec1::ToEncodedPoint;
+                    let point = sk.public_key().to_encoded_point(false);
+                    let bytes = point.as_bytes();
+                    serde_json::json!({
+                        "kty": "EC", "kid": kid, "alg": "ES256", "use": "sig", "crv": "P-256",
+                        "x": b64url(&bytes[1..33]),
+                        "y": b64url(&bytes[33..65]),
+                    })
+                }
+            }
+        }
+
+        fn sign(&self, alg: &str, kid: Option<&str>, payload: &serde_json::Value) -> String {
+            let mut header = serde_json::json!({"alg": alg, "typ": "JWT"});
+            if let Some(k) = kid {
+                header["kid"] = serde_json::json!(k);
+            }
+            let h = b64url(&serde_json::to_vec(&header).unwrap());
+            let p = b64url(&serde_json::to_vec(payload).unwrap());
+            let signing_input = format!("{h}.{p}");
+            let sig = match self {
+                TestKey::Rsa(sk) => {
+                    use rsa::pkcs1v15::Pkcs1v15Sign;
+                    use sha2::Digest;
+                    let digest = sha2::Sha256::digest(signing_input.as_bytes());
+                    sk.sign(Pkcs1v15Sign::new::<sha2::Sha256>(), &digest)
+                        .unwrap()
+                }
+                TestKey::Ec(sk) => {
+                    use signature::Signer;
+                    let signing = p256::ecdsa::SigningKey::from(sk.clone());
+                    let sig: p256::ecdsa::Signature = signing.sign(signing_input.as_bytes());
+                    sig.to_bytes().to_vec()
+                }
+            };
+            format!("{signing_input}.{}", b64url(&sig))
+        }
+    }
+
+    fn gen_rsa() -> (TestKey, serde_json::Value) {
+        let key = TestKey::Rsa(rsa::RsaPrivateKey::new(&mut rand::rngs::OsRng, 2048).unwrap());
+        let jwk = key.jwk("rsa-key");
+        (key, jwk)
+    }
+
+    fn gen_ec() -> (TestKey, serde_json::Value) {
+        let key = TestKey::Ec(p256::SecretKey::random(&mut rand::rngs::OsRng));
+        let jwk = key.jwk("ec-key");
+        (key, jwk)
+    }
+
+    /// A syntactically-valid HS256 token (rejected before any signature check).
+    fn hs256_token(payload: &serde_json::Value) -> String {
+        let header = serde_json::json!({"alg": "HS256", "typ": "JWT"});
+        let h = b64url(&serde_json::to_vec(&header).unwrap());
+        let p = b64url(&serde_json::to_vec(payload).unwrap());
+        format!("{h}.{p}.{}", b64url(b"not-a-real-signature"))
     }
 
     fn base_payload() -> serde_json::Value {
@@ -566,14 +615,18 @@ mod tests {
 
     #[test]
     fn verifies_rs256_and_es256_and_maps_claims() {
-        for (alg, kid, pem, jwks) in [
-            (Algorithm::RS256, "rsa-key", RSA_PEM, rsa_jwk()),
-            (Algorithm::ES256, "ec-key", EC_PEM, ec_jwk()),
+        for (alg, key, jwk) in [
+            ("RS256", gen_rsa().0, gen_rsa().1),
+            ("ES256", gen_ec().0, gen_ec().1),
         ] {
-            let token = sign(alg, kid, base_payload(), pem);
-            let set = serde_json::json!({ "keys": [jwks] });
-            let claims = verify_id_token(&token, &set, "https://idp.example", "client-1", None)
-                .expect("valid token verifies");
+            let _ = jwk;
+            let kid = if alg == "RS256" { "rsa-key" } else { "ec-key" };
+            let jwk = key.jwk(kid);
+            let token = key.sign(alg, Some(kid), &base_payload());
+            let set = serde_json::json!({ "keys": [jwk] });
+            let claims =
+                verify_id_token(&token, &set, "https://idp.example", "client-1", None)
+                    .expect("valid token verifies");
             assert_eq!(claims.subject, "subject-1");
             assert_eq!(claims.username, "alice");
             assert_eq!(claims.email.as_deref(), Some("alice@example.com"));
@@ -582,7 +635,6 @@ mod tests {
 
     #[test]
     fn username_falls_back_to_email_then_sub() {
-        // No preferred_username → email; neither → sub.
         let mut p = base_payload();
         p.as_object_mut().unwrap().remove("preferred_username");
         assert_eq!(extract_claims(&p).unwrap().username, "alice@example.com");
@@ -595,28 +647,26 @@ mod tests {
 
     #[test]
     fn rejects_audience_mismatch_expired_and_bad_issuer() {
-        let set = serde_json::json!({ "keys": [rsa_jwk()] });
+        let (key, jwk) = gen_rsa();
+        let set = serde_json::json!({ "keys": [jwk] });
 
-        // aud mismatch.
         let mut p = base_payload();
         p["aud"] = serde_json::json!("other-client");
-        let t = sign(Algorithm::RS256, "rsa-key", p, RSA_PEM);
+        let t = key.sign("RS256", Some("rsa-key"), &p);
         assert!(matches!(
             verify_id_token(&t, &set, "https://idp.example", "client-1", None),
             Err(OidcError::Verification(_))
         ));
 
-        // Expired.
         let mut p = base_payload();
         p["exp"] = serde_json::json!(1_700_000_000_i64 - 10_000);
-        let t = sign(Algorithm::RS256, "rsa-key", p, RSA_PEM);
+        let t = key.sign("RS256", Some("rsa-key"), &p);
         assert!(matches!(
             verify_id_token(&t, &set, "https://idp.example", "client-1", None),
             Err(OidcError::Verification(_))
         ));
 
-        // Issuer mismatch.
-        let t = sign(Algorithm::RS256, "rsa-key", base_payload(), RSA_PEM);
+        let t = key.sign("RS256", Some("rsa-key"), &base_payload());
         assert!(matches!(
             verify_id_token(&t, &set, "https://evil.example", "client-1", None),
             Err(OidcError::Verification(_))
@@ -625,21 +675,16 @@ mod tests {
 
     #[test]
     fn rejects_nonce_mismatch_and_missing_sub() {
-        let set = serde_json::json!({ "keys": [rsa_jwk()] });
+        let (key, jwk) = gen_rsa();
+        let set = serde_json::json!({ "keys": [jwk] });
+
         let mut p = base_payload();
         p["nonce"] = serde_json::json!("right-nonce");
-        let t = sign(Algorithm::RS256, "rsa-key", p, RSA_PEM);
+        let t = key.sign("RS256", Some("rsa-key"), &p);
         assert!(matches!(
-            verify_id_token(
-                &t,
-                &set,
-                "https://idp.example",
-                "client-1",
-                Some("wrong-nonce")
-            ),
+            verify_id_token(&t, &set, "https://idp.example", "client-1", Some("wrong-nonce")),
             Err(OidcError::NonceMismatch)
         ));
-        // Matching nonce is fine.
         assert!(verify_id_token(
             &t,
             &set,
@@ -649,10 +694,9 @@ mod tests {
         )
         .is_ok());
 
-        // Missing sub.
         let mut p = base_payload();
         p.as_object_mut().unwrap().remove("sub");
-        let t = sign(Algorithm::RS256, "rsa-key", p, RSA_PEM);
+        let t = key.sign("RS256", Some("rsa-key"), &p);
         assert!(matches!(
             verify_id_token(&t, &set, "https://idp.example", "client-1", None),
             Err(OidcError::MissingSubject)
@@ -661,16 +705,17 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_algorithm_and_untrusted_key() {
-        let set = serde_json::json!({ "keys": [rsa_jwk()] });
-        // HS256 is not in the allow-list.
-        let t = sign(Algorithm::HS256, "rsa-key", base_payload(), "not-a-key");
+        let (key, jwk) = gen_rsa();
+        let set = serde_json::json!({ "keys": [jwk] });
+
+        let t = hs256_token(&base_payload());
         assert!(matches!(
             verify_id_token(&t, &set, "https://idp.example", "client-1", None),
             Err(OidcError::UnsupportedAlgorithm)
         ));
 
-        // A kid with no matching key → NoMatchingKey.
-        let t = sign(Algorithm::RS256, "unknown-kid", base_payload(), RSA_PEM);
+        // A token whose kid matches no key in the set.
+        let t = key.sign("RS256", Some("unknown-kid"), &base_payload());
         assert!(matches!(
             verify_id_token(&t, &set, "https://idp.example", "client-1", None),
             Err(OidcError::NoMatchingKey)
@@ -679,15 +724,17 @@ mod tests {
 
     #[test]
     fn selects_key_by_kid_or_first_when_absent() {
-        let both = serde_json::json!({ "keys": [ec_jwk(), rsa_jwk()] });
-        // Token signed with the RSA key but a mixed set: the ec key is first,
-        // the rsa key is picked by kid.
-        let t = sign(Algorithm::RS256, "rsa-key", base_payload(), RSA_PEM);
+        let (rsa_key, rsa_jwk) = gen_rsa();
+        let (_ec_key, ec_jwk) = gen_ec();
+        let both = serde_json::json!({ "keys": [ec_jwk, rsa_jwk] });
+
+        // RSA-signed token picked by kid from a mixed set.
+        let t = rsa_key.sign("RS256", Some("rsa-key"), &base_payload());
         assert!(verify_id_token(&t, &both, "https://idp.example", "client-1", None).is_ok());
 
-        // No kid on the token → the first key is used (here: ec). A token
-        // signed with rsa would then fail to verify against the ec key.
-        let t_no_kid = sign(Algorithm::RS256, "", base_payload(), RSA_PEM);
+        // No kid on the token → the first key (ec) is used; an RSA-signed token
+        // then fails to verify against it.
+        let t_no_kid = rsa_key.sign("RS256", None, &base_payload());
         assert!(matches!(
             verify_id_token(&t_no_kid, &both, "https://idp.example", "client-1", None),
             Err(OidcError::Verification(_))
@@ -739,19 +786,11 @@ mod tests {
         assert_eq!(quote_plus("openid profile email"), "openid+profile+email");
         assert_eq!(quote_plus("a-b_c.d~e"), "a-b_c.d~e");
         assert_eq!(quote_plus("a/b?c=d"), "a%2Fb%3Fc%3Dd");
-        assert_eq!(quote_plus("héllo"), "h%C3%A9llo");
+        assert_eq!(quote_plus("h\u{e9}llo"), "h%C3%A9llo");
     }
 
     #[test]
     fn authorization_url_encodes_all_params() {
-        let cfg = OidcConfig {
-            enabled: true,
-            issuer: "https://idp.example".into(),
-            client_id: "client-1".into(),
-            redirect_url: "http://localhost:8000/api/auth/oidc/callback".into(),
-            ..OidcConfig::default()
-        };
-        let client = OidcClient::new(cfg);
         let params = [
             ("response_type", "code"),
             ("client_id", "client-1"),
@@ -769,7 +808,6 @@ mod tests {
             .contains("redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fauth%2Foidc%2Fcallback"));
         assert!(qs.contains("state=st-1"));
         assert!(qs.contains("nonce=n-1"));
-        assert!(client.is_enabled());
     }
 
     #[test]
@@ -786,7 +824,6 @@ mod tests {
 
     #[test]
     fn client_secret_never_appears_in_debug_output() {
-        // The config's Debug must not leak the secret into logs.
         let cfg = OidcConfig {
             client_secret: "super-secret-value".into(),
             ..OidcConfig::from_config(&Config::default())

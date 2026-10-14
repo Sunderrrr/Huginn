@@ -108,9 +108,7 @@ impl fmt::Display for WebAuthnError {
             Self::AuthenticationFailed => "authentication verification failed",
             Self::MissingCredentialId => "missing credential id",
             Self::UnknownCredential => "unknown credential",
-            Self::CounterRegression => {
-                "sign counter regression (possible cloned authenticator)"
-            }
+            Self::CounterRegression => "sign counter regression (possible cloned authenticator)",
             Self::UserInactive => "user not found or inactive",
             Self::Db(err) => return write!(f, "{err}"),
         };
@@ -433,9 +431,7 @@ async fn store_challenge(
     purpose: &str,
 ) -> Result<WebAuthnChallenge, WebAuthnError> {
     let expires_at = Utc::now() + Duration::minutes(CHALLENGE_TTL_MINUTES);
-    Ok(
-        webauthn::create_challenge(pool, challenge_b64, user_id, purpose, expires_at).await?,
-    )
+    Ok(webauthn::create_challenge(pool, challenge_b64, user_id, purpose, expires_at).await?)
 }
 
 /// `webauthn.begin_registration` — registration options plus a stored challenge.
@@ -468,7 +464,8 @@ pub async fn finish_registration(
     if row.user_id != Some(user.id) {
         return Err(WebAuthnError::ChallengeOwnerMismatch);
     }
-    let expected_challenge = b64u_decode(&row.challenge).map_err(|_| WebAuthnError::MalformedCredential)?;
+    let expected_challenge =
+        b64u_decode(&row.challenge).map_err(|_| WebAuthnError::MalformedCredential)?;
     let uv = UserVerification::from_config(&config.webauthn_user_verification);
     let verified = verify_registration(
         credential,
@@ -536,7 +533,8 @@ pub async fn finish_login(
         .await?
         .ok_or(WebAuthnError::UnknownCredential)?;
 
-    let expected_challenge = b64u_decode(&row.challenge).map_err(|_| WebAuthnError::MalformedCredential)?;
+    let expected_challenge =
+        b64u_decode(&row.challenge).map_err(|_| WebAuthnError::MalformedCredential)?;
     let uv = UserVerification::from_config(&config.webauthn_user_verification);
     let verified = verify_authentication(
         credential,
@@ -633,7 +631,9 @@ pub struct VerifiedAuthentication {
 }
 
 /// py_webauthn's `AttestationStatement` fields checked by the `none` format.
-const ATT_STMT_FIELDS: [&str; 7] = ["sig", "x5c", "response", "alg", "ver", "certInfo", "pubArea"];
+const ATT_STMT_FIELDS: [&str; 7] = [
+    "sig", "x5c", "response", "alg", "ver", "certInfo", "pubArea",
+];
 
 /// `webauthn.verify_registration_response` for the service's parameters
 /// (`require_user_presence=True`, `require_user_verification` from config).
@@ -692,8 +692,9 @@ fn verify_registration_inner(
     }
     check_token_binding(&client_data)?;
 
-    let attestation = parse_attestation_object(&cred.attestation_object)
-        .map_err(|e| format!("attestationObject was malformed. See __cause__ for more info: {e}"))?;
+    let attestation = parse_attestation_object(&cred.attestation_object).map_err(|e| {
+        format!("attestationObject was malformed. See __cause__ for more info: {e}")
+    })?;
     let auth_data = &attestation.auth_data;
 
     let expected_rp_id_hash = sha256(expected_rp_id.as_bytes());
@@ -701,9 +702,7 @@ fn verify_registration_inner(
         return Err("Unexpected RP ID hash".into());
     }
     if !auth_data.flag(FLAG_UP) {
-        return Err(
-            "User presence was required, but was not present during attestation".into(),
-        );
+        return Err("User presence was required, but was not present during attestation".into());
     }
     if require_user_verification && !auth_data.flag(FLAG_UV) {
         return Err(
@@ -930,8 +929,9 @@ impl ParsedCredential {
         if let Some(handle) = response.get("userHandle") {
             if !handle.is_null() {
                 if let Some(handle) = handle.as_str() {
-                    b64u_decode(handle)
-                        .map_err(|_| "Could not parse authentication credential from JSON data".to_string())?;
+                    b64u_decode(handle).map_err(|_| {
+                        "Could not parse authentication credential from JSON data".to_string()
+                    })?;
                 } else {
                     return Err("Credential response had unexpected userHandle".into());
                 }
@@ -964,8 +964,8 @@ struct ClientData {
 }
 
 fn parse_client_data_json(bytes: &[u8]) -> Result<ClientData, String> {
-    let value: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| "Unable to decode clientDataJSON bytes as JSON")?;
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|_| "Unable to decode clientDataJSON bytes as JSON")?;
     if !value.is_object() {
         return Err("clientDataJSON was not a dict".into());
     }
@@ -1046,8 +1046,8 @@ impl AuthData {
 /// `parse_cbor(..., allow_duplicate_keys=False)` does (recursively).
 fn cbor_decode_one(bytes: &[u8]) -> Result<(Value, usize), String> {
     let mut cursor = std::io::Cursor::new(bytes);
-    let value: Value =
-        ciborium::de::from_reader(&mut cursor).map_err(|e| format!("Could not decode CBOR data: {e}"))?;
+    let value: Value = ciborium::de::from_reader(&mut cursor)
+        .map_err(|e| format!("Could not decode CBOR data: {e}"))?;
     reject_duplicate_keys(&value)?;
     Ok((value, cursor.position() as usize))
 }
@@ -1245,10 +1245,7 @@ impl AttestationObject {
 
     fn att_stmt_x5c(&self) -> Option<Vec<Vec<u8>>> {
         let certs = self.att_stmt_get("x5c")?.as_array()?;
-        let certs: Option<Vec<Vec<u8>>> = certs
-            .iter()
-            .map(|v| v.as_bytes().cloned())
-            .collect();
+        let certs: Option<Vec<Vec<u8>>> = certs.iter().map(|v| v.as_bytes().cloned()).collect();
         certs.filter(|c| !c.is_empty())
     }
 }
@@ -1265,10 +1262,18 @@ struct DecodedKey {
 
 enum KeyMaterial {
     /// P-256 (`crv` 1), x/y 32 bytes each — also the raw `0x04` U2F spelling.
-    Ec2 { x: Vec<u8>, y: Vec<u8> },
+    Ec2 {
+        x: Vec<u8>,
+        y: Vec<u8>,
+    },
     /// Ed25519 (`crv` 6), x 32 bytes.
-    Okp { x: Vec<u8> },
-    Rsa { n: Vec<u8>, e: Vec<u8> },
+    Okp {
+        x: Vec<u8>,
+    },
+    Rsa {
+        n: Vec<u8>,
+        e: Vec<u8>,
+    },
 }
 
 fn int_param(entries: &[(Value, Value)], label: i64) -> Option<i64> {
@@ -1300,8 +1305,12 @@ fn decode_credential_public_key(key: &[u8]) -> Result<DecodedKey, String> {
 
     let (value, _consumed) = cbor_decode_one(key)?;
     let entries = map_entries(&value)?;
-    let kty = int_param(entries, 1).filter(|&k| k != 0).ok_or("Credential public key missing kty")?;
-    let alg = int_param(entries, 3).filter(|&a| a != 0).ok_or("Credential public key missing alg")?;
+    let kty = int_param(entries, 1)
+        .filter(|&k| k != 0)
+        .ok_or("Credential public key missing kty")?;
+    let alg = int_param(entries, 3)
+        .filter(|&a| a != 0)
+        .ok_or("Credential public key missing alg")?;
 
     match kty {
         // OKP
@@ -1356,7 +1365,9 @@ fn decode_credential_public_key(key: &[u8]) -> Result<DecodedKey, String> {
                 },
             })
         }
-        other => Err(format!("Unsupported credential public key type \"{other}\"")),
+        other => Err(format!(
+            "Unsupported credential public key type \"{other}\""
+        )),
     }
 }
 
@@ -1453,10 +1464,19 @@ fn verify_attestation(
             }
             Ok(())
         }
-        "packed" => verify_packed(attestation, auth_data, client_data_json, credential_public_key),
-        "fido-u2f" => {
-            verify_fido_u2f(attestation, auth_data, client_data_json, credential_public_key, credential_id)
-        }
+        "packed" => verify_packed(
+            attestation,
+            auth_data,
+            client_data_json,
+            credential_public_key,
+        ),
+        "fido-u2f" => verify_fido_u2f(
+            attestation,
+            auth_data,
+            client_data_json,
+            credential_public_key,
+            credential_id,
+        ),
         other => Err(format!("Unsupported attestation type \"{other}\"")),
     }
 }
@@ -1469,7 +1489,9 @@ fn verify_packed(
     client_data_json: &[u8],
     credential_public_key: &[u8],
 ) -> Result<(), String> {
-    let sig = attestation.att_stmt_sig().map_err(|e| format!("{e} (Packed)"))?;
+    let sig = attestation
+        .att_stmt_sig()
+        .map_err(|e| format!("{e} (Packed)"))?;
     let alg = attestation
         .att_stmt_alg()
         .map_err(|e| format!("{e} (Packed)"))?;
@@ -1480,8 +1502,7 @@ fn verify_packed(
     if let Some(x5c) = attestation.att_stmt_x5c() {
         // Chain validation is a no-op without configured root certs, exactly
         // like `validate_certificate_chain` in the Python hub.
-        let leaf = leaf_public_key(&x5c[0])
-            .map_err(|e| format!("{e} (Packed)"))?;
+        let leaf = leaf_public_key(&x5c[0]).map_err(|e| format!("{e} (Packed)"))?;
         verify_spki_signature(&leaf, alg, sig, &verification_data)
             .map_err(|e| format!("{e} (Packed)"))
     } else {
@@ -1509,7 +1530,9 @@ fn verify_fido_u2f(
     credential_id: &[u8],
 ) -> Result<(), String> {
     let suffix = "(FIDO-U2F)";
-    let sig = attestation.att_stmt_sig().map_err(|e| format!("{e} {suffix}"))?;
+    let sig = attestation
+        .att_stmt_sig()
+        .map_err(|e| format!("{e} {suffix}"))?;
     let x5c = attestation
         .att_stmt_x5c()
         .ok_or_else(|| format!("Attestation statement was missing certificate {suffix}"))?;
@@ -1531,7 +1554,9 @@ fn verify_fido_u2f(
     let leaf = leaf_public_key(&x5c[0]).map_err(|e| format!("{e} {suffix}"))?;
     // Leaf cert must be an EC P-256 certificate (raw SPKI point 65 bytes).
     if leaf.len() != 65 || leaf[0] != 0x04 {
-        return Err(format!("Leaf cert was not an EC2 P-256 certificate {suffix}"));
+        return Err(format!(
+            "Leaf cert was not an EC2 P-256 certificate {suffix}"
+        ));
     }
 
     let decoded = decode_credential_public_key(credential_public_key)?;
@@ -1548,8 +1573,7 @@ fn verify_fido_u2f(
     verification_data.extend_from_slice(x);
     verification_data.extend_from_slice(y);
 
-    verify_spki_signature(&leaf, -7, sig, &verification_data)
-        .map_err(|e| format!("{e} {suffix}"))
+    verify_spki_signature(&leaf, -7, sig, &verification_data).map_err(|e| format!("{e} {suffix}"))
 }
 
 /// The raw `subjectPublicKey` BIT STRING of an x5c leaf certificate.
@@ -1557,13 +1581,12 @@ fn leaf_public_key(der: &[u8]) -> Result<Vec<u8>, String> {
     use x509_cert::der::Decode;
     let cert = x509_cert::Certificate::from_der(der)
         .map_err(|e| format!("Could not parse x5c certificate: {e}"))?;
-    Ok(
-        cert.tbs_certificate
-            .subject_public_key_info
-            .subject_public_key
-            .raw_bytes()
-            .to_vec(),
-    )
+    Ok(cert
+        .tbs_certificate
+        .subject_public_key_info
+        .subject_public_key
+        .raw_bytes()
+        .to_vec())
 }
 
 /// Verify with an SPKI raw public key (the content of the BIT STRING), for the
@@ -1672,10 +1695,7 @@ pub(crate) mod test_support {
             use rsa::traits::PublicKeyParts;
             let signing = rsa::RsaPrivateKey::new(&mut rand::rngs::OsRng, 2048).unwrap();
             let public = signing.to_public_key();
-            let cose = cose_rsa_key(
-                &public.n().to_bytes_be(),
-                &public.e().to_bytes_be(),
-            );
+            let cose = cose_rsa_key(&public.n().to_bytes_be(), &public.e().to_bytes_be());
             Self::Rs256 { signing, cose }
         }
 
@@ -1724,9 +1744,9 @@ pub(crate) mod test_support {
 
     pub(crate) fn cose_ec2_key(x: &[u8], y: &[u8]) -> Vec<u8> {
         cbor_int_map(vec![
-            (1, Value::Integer(2_i64.into())),  // kty: EC2
+            (1, Value::Integer(2_i64.into())),    // kty: EC2
             (3, Value::Integer((-7_i64).into())), // alg: ES256
-            (-1, Value::Integer(1_i64.into())), // crv: P-256
+            (-1, Value::Integer(1_i64.into())),   // crv: P-256
             (-2, Value::Bytes(x.to_vec())),
             (-3, Value::Bytes(y.to_vec())),
         ])
@@ -1734,16 +1754,16 @@ pub(crate) mod test_support {
 
     pub(crate) fn cose_okp_key(x: &[u8]) -> Vec<u8> {
         cbor_int_map(vec![
-            (1, Value::Integer(1_i64.into())),   // kty: OKP
+            (1, Value::Integer(1_i64.into())),    // kty: OKP
             (3, Value::Integer((-8_i64).into())), // alg: EdDSA
-            (-1, Value::Integer(6_i64.into())),  // crv: Ed25519
+            (-1, Value::Integer(6_i64.into())),   // crv: Ed25519
             (-2, Value::Bytes(x.to_vec())),
         ])
     }
 
     pub(crate) fn cose_rsa_key(n: &[u8], e: &[u8]) -> Vec<u8> {
         cbor_int_map(vec![
-            (1, Value::Integer(3_i64.into())),    // kty: RSA
+            (1, Value::Integer(3_i64.into())),      // kty: RSA
             (3, Value::Integer((-257_i64).into())), // alg: RS256
             (-1, Value::Bytes(n.to_vec())),
             (-2, Value::Bytes(e.to_vec())),
@@ -1956,11 +1976,8 @@ mod tests {
 
     #[test]
     fn authentication_options_match_py_webauthn_to_the_byte() {
-        let options = authentication_options(
-            &sample_rp(),
-            UserVerification::Required,
-            "Y2hhbGxlbmdl",
-        );
+        let options =
+            authentication_options(&sample_rp(), UserVerification::Required, "Y2hhbGxlbmdl");
         assert_eq!(
             serde_json::to_string(&options).unwrap(),
             r#"{"challenge":"Y2hhbGxlbmdl","timeout":60000,"rpId":"huginn.example.com","allowCredentials":[],"userVerification":"required"}"#
@@ -1969,13 +1986,31 @@ mod tests {
 
     #[test]
     fn user_verification_matches_the_python_enum() {
-        assert_eq!(UserVerification::from_config("required"), UserVerification::Required);
-        assert_eq!(UserVerification::from_config("REQUIRED"), UserVerification::Required);
-        assert_eq!(UserVerification::from_config("preferred"), UserVerification::Preferred);
-        assert_eq!(UserVerification::from_config("discouraged"), UserVerification::Discouraged);
+        assert_eq!(
+            UserVerification::from_config("required"),
+            UserVerification::Required
+        );
+        assert_eq!(
+            UserVerification::from_config("REQUIRED"),
+            UserVerification::Required
+        );
+        assert_eq!(
+            UserVerification::from_config("preferred"),
+            UserVerification::Preferred
+        );
+        assert_eq!(
+            UserVerification::from_config("discouraged"),
+            UserVerification::Discouraged
+        );
         // Unknown values fail back to preferred (ValueError → PREFERRED).
-        assert_eq!(UserVerification::from_config("sometimes"), UserVerification::Preferred);
-        assert_eq!(UserVerification::from_config(""), UserVerification::Preferred);
+        assert_eq!(
+            UserVerification::from_config("sometimes"),
+            UserVerification::Preferred
+        );
+        assert_eq!(
+            UserVerification::from_config(""),
+            UserVerification::Preferred
+        );
         assert!(UserVerification::Required.require_user_verification());
         assert!(!UserVerification::Preferred.require_user_verification());
         assert!(!UserVerification::Discouraged.require_user_verification());
@@ -2031,11 +2066,23 @@ mod tests {
         let (credential, _) = registration_payload(&key, challenge, 0);
 
         assert!(matches!(
-            verify_registration(&credential, b"another 32-byte challenge!!!!!!", RP_ID, ORIGIN, true),
+            verify_registration(
+                &credential,
+                b"another 32-byte challenge!!!!!!",
+                RP_ID,
+                ORIGIN,
+                true
+            ),
             Err(WebAuthnError::RegistrationFailed)
         ));
         assert!(matches!(
-            verify_registration(&credential, challenge, RP_ID, "https://evil.example.com", true),
+            verify_registration(
+                &credential,
+                challenge,
+                RP_ID,
+                "https://evil.example.com",
+                true
+            ),
             Err(WebAuthnError::RegistrationFailed)
         ));
         assert!(matches!(
@@ -2108,8 +2155,13 @@ mod tests {
         let cdj = client_data_json("webauthn.create", challenge, ORIGIN);
 
         // fmt "none" with anything in the attestation statement is rejected…
-        for field in ["sig", "x5c", "response", "alg", "ver", "certInfo", "pubArea"] {
-            let stmt = Value::Map(vec![(Value::Text(field.into()), Value::Integer(1_i64.into()))]);
+        for field in [
+            "sig", "x5c", "response", "alg", "ver", "certInfo", "pubArea",
+        ] {
+            let stmt = Value::Map(vec![(
+                Value::Text(field.into()),
+                Value::Integer(1_i64.into()),
+            )]);
             let att = attestation_object("none", stmt, &auth_data);
             let credential = registration_credential(credential_id, &cdj, &att, None);
             assert!(
@@ -2244,7 +2296,11 @@ mod tests {
             RP_ID,
             FLAG_UP | FLAG_UV | FLAG_AT,
             0,
-            Some((&aaguid, credential_id, &cose_ec2_key(&[0x02; 32], &[0x03; 32]))),
+            Some((
+                &aaguid,
+                credential_id,
+                &cose_ec2_key(&[0x02; 32], &[0x03; 32]),
+            )),
         );
         let mut verification_data = auth_data.clone();
         verification_data.extend_from_slice(&sha256(&cdj));
@@ -2266,7 +2322,10 @@ mod tests {
         // A signature by any other key fails.
         let stmt = Value::Map(vec![
             (Value::Text("alg".into()), Value::Integer((-7_i64).into())),
-            (Value::Text("sig".into()), Value::Bytes(FabricatedKey::es256().sign(&verification_data))),
+            (
+                Value::Text("sig".into()),
+                Value::Bytes(FabricatedKey::es256().sign(&verification_data)),
+            ),
             (
                 Value::Text("x5c".into()),
                 Value::Array(vec![Value::Bytes(leaf_der.clone())]),
@@ -2382,16 +2441,9 @@ mod tests {
             FabricatedKey::rs256(),
         ] {
             let (credential, _id) = assertion_payload(&key, challenge, 8);
-            let verified = verify_authentication(
-                &credential,
-                challenge,
-                RP_ID,
-                ORIGIN,
-                key.cose(),
-                7,
-                true,
-            )
-            .expect("valid assertion must verify");
+            let verified =
+                verify_authentication(&credential, challenge, RP_ID, ORIGIN, key.cose(), 7, true)
+                    .expect("valid assertion must verify");
             assert_eq!(verified.new_sign_count, 8);
             assert!(verified.user_verified);
         }
@@ -2499,16 +2551,10 @@ mod tests {
         signature_base.extend_from_slice(&sha256(&cdj));
         let signature = key.sign(&signature_base);
         let credential = authentication_credential(b"id", &cdj, &auth_data, &signature);
-        assert!(verify_authentication(
-            &credential,
-            challenge,
-            RP_ID,
-            ORIGIN,
-            key.cose(),
-            7,
-            false
-        )
-        .is_ok());
+        assert!(
+            verify_authentication(&credential, challenge, RP_ID, ORIGIN, key.cose(), 7, false)
+                .is_ok()
+        );
         assert!(matches!(
             verify_authentication(&credential, challenge, RP_ID, ORIGIN, key.cose(), 7, true),
             Err(WebAuthnError::AuthenticationFailed)
@@ -2522,7 +2568,14 @@ mod tests {
 
         // Verification mirrors py_webauthn: a counter that did not advance is
         // rejected whenever either side is non-zero.
-        for (new, stored, ok) in [(8, 7, true), (7, 7, false), (6, 7, false), (0, 7, false), (0, 0, true), (1, 0, true)] {
+        for (new, stored, ok) in [
+            (8, 7, true),
+            (7, 7, false),
+            (6, 7, false),
+            (0, 7, false),
+            (0, 0, true),
+            (1, 0, true),
+        ] {
             let (credential, _) = assertion_payload(&key, challenge, new);
             let result = verify_authentication(
                 &credential,
@@ -2541,8 +2594,14 @@ mod tests {
         assert!(check_sign_counter(8, 7).is_ok());
         assert!(check_sign_counter(0, 0).is_ok());
         let err = check_sign_counter(7, 7).unwrap_err();
-        assert_eq!(err.to_string(), "sign counter regression (possible cloned authenticator)");
-        assert_eq!(check_sign_counter(6, 7).unwrap_err().to_string(), "sign counter regression (possible cloned authenticator)");
+        assert_eq!(
+            err.to_string(),
+            "sign counter regression (possible cloned authenticator)"
+        );
+        assert_eq!(
+            check_sign_counter(6, 7).unwrap_err().to_string(),
+            "sign counter regression (possible cloned authenticator)"
+        );
     }
 
     // ---- challenge extraction / malformed payloads ------------------------
@@ -2577,12 +2636,18 @@ mod tests {
 
     #[test]
     fn error_messages_match_the_python_webauthn_error_strings() {
-        assert_eq!(WebAuthnError::NotConfigured.to_string(), "WebAuthn is not configured");
+        assert_eq!(
+            WebAuthnError::NotConfigured.to_string(),
+            "WebAuthn is not configured"
+        );
         assert_eq!(
             WebAuthnError::BadRpId.to_string(),
             "webauthn_rp_id must be a registrable domain, not an IP"
         );
-        assert_eq!(WebAuthnError::MalformedCredential.to_string(), "malformed credential");
+        assert_eq!(
+            WebAuthnError::MalformedCredential.to_string(),
+            "malformed credential"
+        );
         assert_eq!(
             WebAuthnError::BadChallenge.to_string(),
             "unknown, used, or expired challenge"
@@ -2599,12 +2664,21 @@ mod tests {
             WebAuthnError::AuthenticationFailed.to_string(),
             "authentication verification failed"
         );
-        assert_eq!(WebAuthnError::MissingCredentialId.to_string(), "missing credential id");
-        assert_eq!(WebAuthnError::UnknownCredential.to_string(), "unknown credential");
+        assert_eq!(
+            WebAuthnError::MissingCredentialId.to_string(),
+            "missing credential id"
+        );
+        assert_eq!(
+            WebAuthnError::UnknownCredential.to_string(),
+            "unknown credential"
+        );
         assert_eq!(
             WebAuthnError::CounterRegression.to_string(),
             "sign counter regression (possible cloned authenticator)"
         );
-        assert_eq!(WebAuthnError::UserInactive.to_string(), "user not found or inactive");
+        assert_eq!(
+            WebAuthnError::UserInactive.to_string(),
+            "user not found or inactive"
+        );
     }
 }
