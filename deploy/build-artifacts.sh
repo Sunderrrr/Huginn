@@ -5,20 +5,17 @@
 # the prod stack (or whenever the worker changes) so the install one-liner is
 # self-contained (no GitHub release required).
 #
-#   ./build-artifacts.sh [VERSION] [--go]
+#   ./build-artifacts.sh [VERSION]
 #
-# Default: builds worker-rs (Rust) for linux/amd64 + linux/arm64, statically
-# linked (musl), cross-compiled with cargo-zigbuild (requires: rustup,
+# Builds worker-rs (Rust) for linux/amd64 + linux/arm64, statically linked
+# (musl), cross-compiled with cargo-zigbuild (requires: rustup,
 # `pip install ziglang`, `cargo install cargo-zigbuild`).
-#   --go: legacy pipeline — builds the Go worker instead (requires Go >= 1.24).
 #
 set -euo pipefail
 
 VERSION="v1.4.0"
-MODE="rust"
 for arg in "$@"; do
   case "$arg" in
-    --go) MODE="go" ;;
     --*) echo "unknown flag: $arg" >&2; exit 2 ;;
     *) VERSION="$arg" ;;
   esac
@@ -27,10 +24,9 @@ done
 here="$(cd "$(dirname "$0")" && pwd)"
 out="${here}/artifacts"
 rust_dir="$(cd "${here}/../worker-rs" 2>/dev/null && pwd || true)"
-worker_dir="$(cd "${here}/../worker" && pwd)"
 
 build_rust() {
-  [ -n "$rust_dir" ] || { echo "worker-rs/ not found — use --go" >&2; exit 1; }
+  [ -n "$rust_dir" ] || { echo "worker-rs/ not found" >&2; exit 1; }
   echo "==> building worker-rs ${VERSION} (musl static: linux/amd64, linux/arm64)"
   export PATH="${HOME}/.cargo/bin:${PATH}"
   command -v cargo >/dev/null || { echo "cargo not found (install rustup)" >&2; exit 1; }
@@ -49,17 +45,7 @@ build_rust() {
   done
 }
 
-build_go() {
-  echo "==> building Go worker ${VERSION} (linux/amd64, linux/arm64)"
-  ( cd "${worker_dir}" && make release VERSION="${VERSION}" )
-  mkdir -p "$out"
-  cp "${worker_dir}"/dist/huginn-worker-linux-* "${out}/"
-}
-
-case "$MODE" in
-  rust) build_rust ;;
-  go) build_go ;;
-esac
+build_rust
 
 ( cd "$out" && sha256sum huginn-worker-linux-* > checksums.txt )
 

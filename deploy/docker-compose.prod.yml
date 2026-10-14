@@ -42,7 +42,7 @@ services:
   hub:
     <<: *hardening
     build:
-      context: ../hub
+      context: ../hub-rs
     restart: unless-stopped
     depends_on:
       postgres:
@@ -50,7 +50,7 @@ services:
     environment:
       HUGINN_ENV: prod
       HUGINN_REQUIRE_TLS: "true"
-      HUGINN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-huginn}
+      HUGINN_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-huginn}
       HUGINN_JWT_SECRET: ${HUGINN_JWT_SECRET:?generate with openssl rand -hex 32}
       HUGINN_SECRET_HASH_KEY: ${HUGINN_SECRET_HASH_KEY:?generate with openssl rand -hex 32}
       HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?generate with openssl rand -hex 32}

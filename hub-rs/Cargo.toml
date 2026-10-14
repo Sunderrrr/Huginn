@@ -22,7 +22,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # Security primitives (parity-tested against the Python hub's vectors).
 argon2 = "0.5"
 sha1 = "0.10"
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
 hmac = "0.12"
 base64 = "0.22"
 aes = "0.8"
@@ -30,16 +30,40 @@ cbc = { version = "0.1", features = ["alloc"] }
 rand = "0.8"
 subtle = "2"
 thiserror = "2"
+# WebAuthn ceremony crypto (services/webauthn.rs): CBOR attestation objects and
+# COSE keys via ciborium; ES256/RS256/EdDSA signature verification via the
+# RustCrypto stack; x509-cert parses the leaf certificate of x5c attestation
+# statements (packed / fido-u2f). All audit-clean (see the audit.toml at the
+# workspace root).
+ciborium = "0.2"
+signature = "2"
+p256 = "0.13"
+ed25519-dalek = "2"
+rsa = "0.9"
+x509-cert = "0.2"
 tracing = "0.1"
 # Stream trait for the SSE body of GET /api/events (fleet/events.rs); already in
 # the dependency graph via tokio, so no new transitive crates.
 tokio-stream = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
+# OIDC/SSO (port of hub/app/core/oidc.py): HTTP client + RS256/ES256 ID-token
+# verification against the provider's JWKS. `jsonwebtoken` uses the pure-Rust
+# `rust_crypto` backend so it reuses the `rsa`/`p256` already in the tree and
+# adds no new C/crypto build. reqwest/ldap3 use rustls (ring), which `sqlx`'s
+# TLS already requires. (Note: `rsa` is present for the WebAuthn port too; the
+# pre-existing RUSTSEC-2023-0071 is covered by the ignore in audit.toml / CI.)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
+# LDAP/LDAPS fallback (port of hub/app/core/ldap.py). rustls-based TLS avoids an
+# OpenSSL/pkg-config build dependency.
+ldap3 = { version = "0.12", default-features = false, features = ["sync", "tls-rustls-ring"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+# Self-signed X.509 leaf certificates for the WebAuthn `x5c` attestation tests.
+rcgen = "0.13"
 
 [profile.release]
 opt-level = 3

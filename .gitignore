@@ -13,9 +13,8 @@ htmlcov/
 dist/
 build/
 
-# Go
-/worker/bin/
-/worker/dist/
+# Rust build artifacts (per-crate .gitignore too)
+/worker-rs/target/
 *.test
 *.out
 
