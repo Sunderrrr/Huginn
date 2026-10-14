@@ -15,7 +15,9 @@
 //! Keys are injected explicitly: there are no hidden globals. Use [`init`] (or
 //! [`SecurityConfig::new`]) to carry the configured keys, or pass keys straight
 //! to the free functions.
-
+// Facade re-exports: part of the inter-module contract of the migration
+// (consumed by routes/tests landing in later commits).
+#![allow(unused_imports)]
 // The security API is consumed by the routes/services layers landing later in
 // the migration; suppress dead-code noise in this self-contained module so
 // `cargo clippy -- -D warnings` stays clean in the meantime.

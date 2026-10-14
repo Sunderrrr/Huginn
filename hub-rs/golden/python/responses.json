@@ -16,21 +16,6 @@
     "detail": {},
     "event_type": "login",
     "exit_code": null,
-    "id": 2,
-    "result_status": null,
-    "source_ip": "10.89.0.2",
-    "ts": "<TS>",
-    "vm_id": null
-   },
-   {
-    "action_name": null,
-    "actor_id": "<UUID>",
-    "actor_label": "admin",
-    "actor_type": "user",
-    "command": null,
-    "detail": {},
-    "event_type": "login",
-    "exit_code": null,
     "id": 1,
     "result_status": null,
     "source_ip": "10.89.0.2",
@@ -78,7 +63,7 @@
    "label": "",
    "max_uses": 1,
    "revoked_at": null,
-   "token": "9iKFMbs1Z0nvrqJ7T00PWm6M_jAHULJoVUg4Q9vAcXM",
+   "token": "Sd-Q-eu5X0BC3952sdxjwotelnfIOttvGIzUvL5T9xc",
    "uses_count": 0
   },
   "method": "POST",
@@ -88,7 +73,7 @@
  "enrollment_token_delete": {
   "body": null,
   "method": "DELETE",
-  "path": "/api/enrollment-tokens/c642af68-a426-4bd8-8937-bcb4313ce7a2",
+  "path": "/api/enrollment-tokens/<UUID>",
   "status": 204
  },
  "enrollment_tokens_list": {
@@ -202,7 +187,7 @@
    "color": "#ff0000",
    "created_at": "<TS>",
    "id": "<UUID>",
-   "name": "parity-1791984371"
+   "name": "parity-1791996849"
   },
   "method": "POST",
   "path": "/api/tags",
@@ -211,7 +196,7 @@
  "tag_delete": {
   "body": null,
   "method": "DELETE",
-  "path": "/api/tags/08376071-5060-4d3b-9616-3f66c7ca3fa1",
+  "path": "/api/tags/<UUID>",
   "status": 204
  },
  "tag_update": {
@@ -219,10 +204,10 @@
    "color": "#00ff00",
    "created_at": "<TS>",
    "id": "<UUID>",
-   "name": "parity-1791984371"
+   "name": "parity-1791996849"
   },
   "method": "PUT",
-  "path": "/api/tags/08376071-5060-4d3b-9616-3f66c7ca3fa1",
+  "path": "/api/tags/<UUID>",
   "status": 200
  },
  "tags_list": {
@@ -274,7 +259,7 @@
   "body": {
    "state": "pending",
    "worker_id": "<UUID>",
-   "worker_secret": "y0vzyAdPNftIdckwN7bli5QvCUg7O5gZDxIsugdmm1A"
+   "worker_secret": "mo-Fv1zZKH9p4aufobNSUnQzgWaGko7x1D3yB_E2UcI"
   },
   "method": "POST",
   "path": "/api/worker/enroll",

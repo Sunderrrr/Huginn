@@ -6,6 +6,12 @@
 //! hashing and event fan-out belong to the service/route layers. What lives
 //! here is row mapping, atomic SQL (claims, idempotent inserts, sweeps), and
 //! the exact filtering/ordering semantics of the Python queries.
+// Migration note: the data layer ships ahead of its consumers (WebAuthn
+// ceremonies, OIDC/LDAP, route handlers still landing). Dead-code warnings
+// for that surface are expected until everything is wired; the routes keep
+// their own strict allow(dead_code) carve-out meanwhile.
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
 pub mod audit;
 pub mod custom_action;
