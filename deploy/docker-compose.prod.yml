@@ -24,6 +24,7 @@ x-hardening: &hardening
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: huginn-postgres
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -45,6 +46,8 @@ services:
 
   hub:
     <<: *hardening
+    image: huginn-hub
+    container_name: huginn-hub
     build:
       context: ../hub-rs
     restart: unless-stopped
@@ -81,8 +84,10 @@ services:
 
   mcp:
     <<: *hardening
+    image: huginn-mcp
+    container_name: huginn-mcp
     build:
-      # Rust server (mcp-rs/) — live migration test.
+      # Rust server (mcp-rs/).
       context: ../mcp-rs
     restart: unless-stopped
     depends_on:
@@ -97,6 +102,8 @@ services:
       - "9000"
 
   dashboard:
+    image: huginn-dashboard
+    container_name: huginn-dashboard
     build:
       context: ../dashboard
       args:
@@ -114,6 +121,7 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    container_name: huginn-caddy
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

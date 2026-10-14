@@ -3,6 +3,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: huginn-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-huginn}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-huginn}
@@ -16,6 +17,8 @@ services:
       retries: 10
 
   hub:
+    image: huginn-hub
+    container_name: huginn-hub
     build:
       context: ../hub-rs
     depends_on:
@@ -36,6 +39,8 @@ services:
       - "8000:8000"
 
   dashboard:
+    image: huginn-dashboard
+    container_name: huginn-dashboard
     build:
       context: ../dashboard
       args:
@@ -46,9 +51,9 @@ services:
       - "5173:80"
 
   mcp:
+    image: huginn-mcp
+    container_name: huginn-mcp
     build:
-      # Rust server (mcp-rs/) — the Python server in mcp/ remains as reference
-      # during the transition.
       context: ../mcp-rs
     depends_on:
       - hub
