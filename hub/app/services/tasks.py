@@ -34,9 +34,7 @@ def _require_active(vm: VM) -> None:
         raise ExecForbidden("VM is not approved/active")
 
 
-async def _find_idempotent(
-    session: AsyncSession, vm_id: uuid.UUID, key: str | None
-) -> Task | None:
+async def _find_idempotent(session: AsyncSession, vm_id: uuid.UUID, key: str | None) -> Task | None:
     if not key:
         return None
     result = await session.execute(
@@ -54,6 +52,7 @@ async def _insert_idempotent(session: AsyncSession, task: Task) -> Task:
     session.add(task)
     try:
         await session.flush()
+        task_events.notify_queue_on_commit(session, str(task.vm_id))
         return task
     except IntegrityError:
         await session.rollback()
@@ -79,7 +78,10 @@ async def create_action_task(
     # A name not in the built-in catalog may be an admin-defined custom command.
     if action_name not in ACTION_CATALOG:
         return await _create_custom_action_task(
-            session, vm=vm, action_name=action_name, created_by=created_by,
+            session,
+            vm=vm,
+            action_name=action_name,
+            created_by=created_by,
             idempotency_key=idempotency_key,
         )
     # validate_action raises ActionError on unknown action / unsafe params.
@@ -212,6 +214,7 @@ async def create_update_task(
     )
     session.add(task)
     await session.flush()
+    task_events.notify_queue_on_commit(session, str(task.vm_id))
     return task
 
 
@@ -233,6 +236,7 @@ async def create_uninstall_task(
     )
     session.add(task)
     await session.flush()
+    task_events.notify_queue_on_commit(session, str(task.vm_id))
     return task
 
 
@@ -284,11 +288,13 @@ async def wait_for_terminal(
 async def has_inflight_update(session: AsyncSession, vm_id: uuid.UUID) -> bool:
     """True if an update task for this VM is still pending or dispatched."""
     result = await session.execute(
-        select(Task.id).where(
+        select(Task.id)
+        .where(
             Task.vm_id == vm_id,
             Task.type == TaskType.update,
             Task.status.in_([TaskStatus.pending, TaskStatus.dispatched, TaskStatus.running]),
-        ).limit(1)
+        )
+        .limit(1)
     )
     return result.scalar_one_or_none() is not None
 
@@ -363,6 +369,7 @@ async def sweep_timeouts(session: AsyncSession) -> int:
     )
     swept = 0
     dead_lettered: list[str] = []
+    requeued_vm_ids: set[str] = set()
     for task in result.scalars():
         dispatched = task.dispatched_at or task.created_at
         if as_aware_utc(dispatched) + grace > now:
@@ -376,11 +383,15 @@ async def sweep_timeouts(session: AsyncSession) -> int:
         else:
             task.status = TaskStatus.pending
             task.dispatched_at = None
+            requeued_vm_ids.add(str(task.vm_id))
         swept += 1
     await session.flush()
     # Wake any waiters on tasks that just reached a terminal (dead-letter) state.
     for task_id in dead_lettered:
         task_events.notify(task_id)
+    # Re-queued tasks become claimable again once this transaction commits.
+    for vm_id in requeued_vm_ids:
+        task_events.notify_queue_on_commit(session, vm_id)
     return swept
 
 

@@ -60,22 +60,26 @@ async def test_post_approve_refresh(client, admin_headers) -> None:
 
 
 async def test_long_poll_returns_empty_when_idle(client, enrolled_worker) -> None:
+    import asyncio
+
     w = await enrolled_worker()
-    # With a tiny wait and no queued task, returns null after the wait (not 30s).
+    # With a tiny wait and no queued task, parks on the queue event and returns
+    # null only once the wait elapses (not instantly, and nowhere near 25s).
+    started = asyncio.get_running_loop().time()
     poll = await client.get("/api/worker/tasks/next?wait=1", headers=w["headers"])
+    elapsed = asyncio.get_running_loop().time() - started
     assert poll.status_code == 200
     assert poll.json() is None
+    assert elapsed >= 0.9
 
 
-async def test_long_poll_picks_up_queued_task(
-    client, admin_headers, enrolled_worker
-) -> None:
+async def test_long_poll_picks_up_queued_task(client, admin_headers, enrolled_worker) -> None:
     import asyncio
 
     w = await enrolled_worker()
 
     async def queue_after_delay() -> str:
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.15)
         resp = await client.post(
             f"/api/vms/{w['vm_id']}/actions",
             json={"action": "status"},
@@ -83,15 +87,19 @@ async def test_long_poll_picks_up_queued_task(
         )
         return resp.json()["id"]
 
-    # Start the long-poll and the delayed enqueue concurrently.
+    # Start the long-poll and the delayed enqueue concurrently; the enqueue
+    # must wake the parked poll instead of waiting out a re-poll interval.
+    started = asyncio.get_running_loop().time()
     poll_task = asyncio.create_task(
         client.get("/api/worker/tasks/next?wait=5", headers=w["headers"])
     )
     task_id = await queue_after_delay()
     poll = await poll_task
+    elapsed = asyncio.get_running_loop().time() - started
     assert poll.status_code == 200
     assert poll.json() is not None
     assert poll.json()["id"] == task_id
+    assert elapsed < 0.45
 
 
 async def test_auto_update_queues_task_on_version_mismatch(
@@ -131,9 +139,7 @@ async def test_auto_update_queues_task_on_version_mismatch(
     assert poll2.json() is None
 
 
-async def test_auto_update_disabled_queues_nothing(
-    client, admin_headers, enrolled_worker
-) -> None:
+async def test_auto_update_disabled_queues_nothing(client, admin_headers, enrolled_worker) -> None:
     w = await enrolled_worker()
     await client.put(
         "/api/settings",
@@ -303,6 +309,7 @@ async def test_execute_action_requires_auth(client, enrolled_worker) -> None:
     resp = await client.post(f"/api/vms/{w['vm_id']}/actions", json={"action": "status"})
     assert resp.status_code == 401
 
+
 async def test_result_large_output_is_truncated_not_rejected(
     client, admin_headers, enrolled_worker
 ) -> None:
@@ -325,9 +332,7 @@ async def test_result_large_output_is_truncated_not_rejected(
     assert stored.endswith("[...truncated...]")
 
 
-async def test_result_oversized_field_rejected(
-    client, admin_headers, enrolled_worker
-) -> None:
+async def test_result_oversized_field_rejected(client, admin_headers, enrolled_worker) -> None:
     """A single result field beyond the schema bound is rejected at validation."""
     w = await enrolled_worker()
     task_id = (

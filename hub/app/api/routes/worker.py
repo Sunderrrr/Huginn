@@ -42,9 +42,7 @@ def _enforce_tls(request: Request, settings: Settings) -> None:
     forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     scheme = forwarded or request.url.scheme
     if scheme != "https":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "TLS is required for worker communication"
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "TLS is required for worker communication")
 
 
 @router.post("/enroll", response_model=WorkerEnrollResponse, status_code=status.HTTP_201_CREATED)
@@ -153,7 +151,6 @@ async def heartbeat(
     )
 
 
-_POLL_INTERVAL_SECONDS = 0.5
 _MAX_WAIT_SECONDS = 25.0
 
 
@@ -165,30 +162,43 @@ async def next_task(
 ) -> WorkerTask | None:
     """Hand the worker its next queued task.
 
-    With ``wait>0`` this long-polls: if the queue is empty it re-checks every
-    ``_POLL_INTERVAL_SECONDS`` until a task appears or ``wait`` (capped at
-    ``_MAX_WAIT_SECONDS``) elapses, then returns null. This gives near-instant
-    task pickup without the worker hammering the hub.
+    With ``wait>0`` this long-polls: if the queue is empty it parks on an
+    in-process queue event (see ``app.core.task_events``) that fires the moment
+    a task for this VM becomes claimable, so pickup is instant and idle workers
+    cost zero database queries instead of one every 0.5s. After ``wait``
+    seconds (capped at ``_MAX_WAIT_SECONDS``) without a task, null is returned.
 
-    To avoid holding a pooled DB connection across the whole wait, the request's
-    session is committed (which records the heartbeat and releases the
-    connection) and each re-check opens its own short-lived session.
+    To avoid holding a pooled DB connection across the whole wait, the
+    request's session is committed (which records the heartbeat and releases
+    the connection) and each wake re-claims on that same session with a fresh
+    read snapshot. If several workers of the same VM are parked, every wake
+    re-claims and ``claim_next_task`` stays the transactional arbiter: the
+    first claim wins, the others find nothing and re-park.
     """
     vm.last_heartbeat_at = utcnow()
 
-    task = await tasks_service.claim_next_task(session, vm)
-    if task is None and wait > 0:
-        deadline = min(wait, _MAX_WAIT_SECONDS)
-        waited = 0.0
-        while waited < deadline:
-            # Commit between checks so this connection's read snapshot is dropped
-            # and the next claim observes tasks committed by other connections.
-            await session.commit()
-            await asyncio.sleep(_POLL_INTERVAL_SECONDS)
-            waited += _POLL_INTERVAL_SECONDS
-            task = await tasks_service.claim_next_task(session, vm)
-            if task is not None:
+    # Subscribe BEFORE the first claim so a task committed in the gap still
+    # wakes us instead of stalling until the wait elapses.
+    wake = task_events.subscribe_queue(str(vm.id))
+    try:
+        task = await tasks_service.claim_next_task(session, vm)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + min(wait, _MAX_WAIT_SECONDS)
+        while task is None:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
                 break
+            # Commit between checks so this connection's read snapshot is
+            # dropped and the next claim observes tasks committed elsewhere.
+            await session.commit()
+            try:
+                await asyncio.wait_for(wake.wait(), remaining)
+            except TimeoutError:
+                break
+            wake.clear()
+            task = await tasks_service.claim_next_task(session, vm)
+    finally:
+        task_events.unsubscribe_queue(str(vm.id), wake)
 
     if task is None:
         return None
