@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- **The superseded Python/Go implementations — `hub/`, `mcp/`, `worker/` — are
+  removed**; they are fully replaced by `hub-rs/`, `mcp-rs/`, and `worker-rs/`,
+  which are in production and parity-gated (29/29 golden responses identical).
+  The parity goldens and the security test vectors remain versioned in `hub-rs/`
+  (`hub-rs/golden/`, `hub-rs/security_vectors.json`) for regression testing.
+  Legacy CI (`.github/workflows/ci-hub.yml`, `ci-worker.yml`) is gone, and
+  `release.yml` now builds only the Rust artifacts (worker binaries + checksums,
+  `mcp-rs` and `hub-rs` images). Related auth work (WebAuthn/OIDC/LDAP ports to
+  Rust) is landing separately on this branch.
+
 ## [1.4.0] — Rust worker + Rust MCP server, event-driven hub long-poll
 
 ### Added

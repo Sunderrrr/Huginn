@@ -90,9 +90,7 @@ per-user tokens validated against the hub.
 {
   "mcpServers": {
     "huginn": {
-      "command": "python",
-      "args": ["-m", "app.server"],
-      "cwd": "/path/to/Huginn/mcp",
+      "command": "/path/to/Huginn/mcp-rs/target/release/huginn-mcp",
       "env": {
         "HUGINN_MCP_HUB_URL": "https://hub.example.com",
         "HUGINN_MCP_SERVICE_TOKEN": "<service-token>"
