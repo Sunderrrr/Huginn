@@ -1,0 +1,98 @@
+{
+  "argon2": {
+    "params": {
+      "hash_len": 32,
+      "memory_cost": 65536,
+      "parallelism": 4,
+      "salt_len": 16,
+      "time_cost": 3,
+      "type": "ID",
+      "version": 19
+    },
+    "password": "correct horse battery staple",
+    "phc_verify_only": "$argon2id$v=19$m=65536,t=3,p=4$47wsC1ltcM4XqmE4qGnl1A$HZ7hck1fk6CCqx+eERzycu4kYo2+isUeQFx9icA8dQI",
+    "wrong_password_must_fail": true
+  },
+  "audit_chain": {
+    "canonical_form_of_entry1": "{\"action_name\":null,\"actor_id\":\"admin\",\"actor_type\":\"user\",\"command\":null,\"detail\":{\"ok\":true},\"event_type\":\"login\",\"exit_code\":null,\"result_status\":null,\"source_ip\":\"203.0.113.7\",\"vm_id\":null}",
+    "entry1": {
+      "fields": {
+        "action_name": null,
+        "actor_id": "admin",
+        "actor_type": "user",
+        "command": null,
+        "detail": {
+          "ok": true
+        },
+        "event_type": "login",
+        "exit_code": null,
+        "result_status": null,
+        "source_ip": "203.0.113.7",
+        "vm_id": null
+      },
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "row_hash": "f0d894bc1cc55c11058aa4053b6fbafc9cefa3a22c183e6f24fc4c993e5bb5b0"
+    },
+    "entry2": {
+      "fields": {
+        "action_name": "status",
+        "actor_id": "admin",
+        "actor_type": "user",
+        "command": null,
+        "detail": {
+          "k": "v"
+        },
+        "event_type": "execute_action",
+        "exit_code": 0,
+        "result_status": "succeeded",
+        "source_ip": "203.0.113.7",
+        "vm_id": "22222222-2222-2222-2222-222222222222"
+      },
+      "prev_hash": "f0d894bc1cc55c11058aa4053b6fbafc9cefa3a22c183e6f24fc4c993e5bb5b0",
+      "row_hash": "8ccef78adb19b9b7be072ade00de13290fe62b816ba9494aa40f15b146278e2e"
+    },
+    "genesis": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "fernet": {
+    "ciphertext": "gAAAAABqz346HUFztAK1YN4dn3qTVJSUqtha3cGGWCsTRvuxDFaASPzDtp26iOVijpd5NgsHi8mGO5DWPqZY2F6yPYMkwB_oPtESGR5hg51SATuP8jmnDec=",
+    "derived_key_b64": "HuLe6vqan5lPlU9H5vZIm8f-0ExB1Tl5R7sC8fAqt2g=",
+    "mfa_key": "test-mfa-encryption-key-0123456789abcd",
+    "plaintext_secret_b32": "JBSWY3DPEHPK3PXP",
+    "tampered_must_fail": true
+  },
+  "hmac_secret": {
+    "hex": "5c46d629254fb4050d38d0e5ae76fadbc29a7fac0928a26c7b8660d5ff8fc57a",
+    "key": "test-secret-hash-key-0123456789abcdef",
+    "secret": "enrollment-token-fixed-00000000000000"
+  },
+  "jwt": {
+    "access_payload": {
+      "exp": 1700003600,
+      "iat": 1700000000,
+      "role": "admin",
+      "sub": "11111111-1111-1111-1111-111111111111"
+    },
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDAwMzYwMH0.VDbIKYatsPNk0fKG0pTFfL4W790xZZC4MOwtdhCojJ0",
+    "challenge_payload": {
+      "exp": 1700003600,
+      "iat": 1700000000,
+      "scope": "mfa_setup",
+      "sub": "11111111-1111-1111-1111-111111111111"
+    },
+    "challenge_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJzY29wZSI6Im1mYV9zZXR1cCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxNzAwMDAzNjAwfQ.CcU6f5r9Mm5McB9PFGLK8EsWx1vsRnOnJvBxPIxL5HY",
+    "secret": "test-jwt-secret-0123456789abcdef012345"
+  },
+  "totp": {
+    "codes_at": {
+      "1700000000": "324550",
+      "1700000005": "324550",
+      "1700000030": "367665",
+      "1700000060": "870960"
+    },
+    "digits": 6,
+    "period": 30,
+    "provisioning_uri": "otpauth://totp/Huginn:admin?secret=JBSWY3DPEHPK3PXP&issuer=Huginn",
+    "seed_b32": "JBSWY3DPEHPK3PXP",
+    "valid_window": 1
+  }
+}
