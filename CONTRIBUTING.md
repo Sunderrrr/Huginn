@@ -16,7 +16,7 @@ contributions to a high bar for security, clarity, and test coverage.
 
 ## Repository layout
 
-`hub/` (Python), `worker/` (Go), `mcp/` (Python), `dashboard/` (React),
+`hub-rs/` (Rust), `worker-rs/` (Rust), `mcp-rs/` (Rust), `dashboard/` (React),
 `deploy/`, `scripts/`, `docs/`.
 
 ## Local development

@@ -147,7 +147,6 @@ self-signed-cert warning if you used an IP/LAN with `HUGINN_TLS_INTERNAL=interna
 ```bash
 kubectl create namespace huginn
 kubectl -n huginn apply -f deploy/k8s/secret.example.yaml    # edit real secrets first
-kubectl -n huginn apply -f deploy/k8s/migrate-job.yaml       # DB migrations (run on every upgrade)
 kubectl -n huginn apply -f deploy/k8s/hub-deployment.yaml -f deploy/k8s/hub-service.yaml \
   -f deploy/k8s/mcp-deployment.yaml -f deploy/k8s/dashboard-deployment.yaml
 kubectl -n huginn apply -f deploy/k8s/ingress.example.yaml   # edit host/issuer first
