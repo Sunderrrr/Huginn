@@ -56,9 +56,65 @@ pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool,
     Ok(pool)
 }
 
+/// Alembic revision of the baseline schema (`hub-rs/migrations/0001_baseline.sql`
+/// was dumped from it; stamped back into `alembic_version`).
+const BASELINE_ALEMBIC_REV: &str = "n4c5d6e7f8a9";
+
 /// Apply every pending migration (idempotent; checksum-verified).
+///
+/// Coexistence with the Python hub: a database already initialized by Alembic
+/// at the baseline revision has the *identical* schema, so the baseline is
+/// recorded as applied (with the exact checksum sqlx would store) instead of
+/// replaying DDL against existing tables. Fresh databases run normally.
 pub async fn run_migrations(pool: &PgPool) -> Result<(), DbError> {
+    if alembic_at_baseline(pool).await? {
+        // Idempotent: CREATE IF NOT EXISTS + INSERT ON CONFLICT DO NOTHING.
+        return record_baseline_applied(pool).await;
+    }
     MIGRATIONS.run(pool).await?;
+    Ok(())
+}
+
+async fn alembic_at_baseline(pool: &PgPool) -> Result<bool, DbError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT version_num FROM alembic_version WHERE version_num = $1",
+    )
+    .bind(BASELINE_ALEMBIC_REV)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Create sqlx's migrator table and record the baseline row exactly like
+/// `Migrator::run` would (same columns, same checksum source).
+async fn record_baseline_applied(pool: &PgPool) -> Result<(), DbError> {
+    let migration = MIGRATIONS
+        .migrations
+        .iter()
+        .find(|m| m.version == 1)
+        .ok_or_else(|| DbError::Invalid("baseline migration missing".into()))?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS _sqlx_migrations ( \
+             version BIGINT PRIMARY KEY, \
+             description TEXT NOT NULL, \
+             installed_on TIMESTAMPTZ NOT NULL DEFAULT now(), \
+             success BOOLEAN NOT NULL, \
+             checksum BYTEA NOT NULL, \
+             execution_time BIGINT NOT NULL)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO _sqlx_migrations \
+             (version, description, installed_on, success, checksum, execution_time) \
+             VALUES ($1, $2, now(), true, $3, 0) \
+             ON CONFLICT (version) DO NOTHING",
+    )
+    .bind(migration.version)
+    .bind(&*migration.description)
+    .bind(&*migration.checksum)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
