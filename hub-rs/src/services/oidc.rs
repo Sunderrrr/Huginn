@@ -522,6 +522,7 @@ mod tests {
         URL_SAFE_NO_PAD.encode(data)
     }
 
+    #[allow(clippy::large_enum_variant)] // test-only helper; size is irrelevant
     enum TestKey {
         Rsa(rsa::RsaPrivateKey),
         Ec(p256::SecretKey),
@@ -532,7 +533,7 @@ mod tests {
             match self {
                 TestKey::Rsa(sk) => {
                     use rsa::traits::PublicKeyParts;
-                    let pk = sk.public_key();
+                    let pk = sk.to_public_key();
                     serde_json::json!({
                         "kty": "RSA", "kid": kid, "alg": "RS256", "use": "sig",
                         "n": b64url(&pk.n().to_bytes_be()),
@@ -624,9 +625,8 @@ mod tests {
             let jwk = key.jwk(kid);
             let token = key.sign(alg, Some(kid), &base_payload());
             let set = serde_json::json!({ "keys": [jwk] });
-            let claims =
-                verify_id_token(&token, &set, "https://idp.example", "client-1", None)
-                    .expect("valid token verifies");
+            let claims = verify_id_token(&token, &set, "https://idp.example", "client-1", None)
+                .expect("valid token verifies");
             assert_eq!(claims.subject, "subject-1");
             assert_eq!(claims.username, "alice");
             assert_eq!(claims.email.as_deref(), Some("alice@example.com"));
@@ -682,7 +682,13 @@ mod tests {
         p["nonce"] = serde_json::json!("right-nonce");
         let t = key.sign("RS256", Some("rsa-key"), &p);
         assert!(matches!(
-            verify_id_token(&t, &set, "https://idp.example", "client-1", Some("wrong-nonce")),
+            verify_id_token(
+                &t,
+                &set,
+                "https://idp.example",
+                "client-1",
+                Some("wrong-nonce")
+            ),
             Err(OidcError::NonceMismatch)
         ));
         assert!(verify_id_token(
