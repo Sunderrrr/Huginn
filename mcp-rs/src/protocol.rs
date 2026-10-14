@@ -28,23 +28,30 @@ fn result_obj(id: Value, result: Value) -> Value {
 
 /// Handles a single JSON-RPC message. Returns None for notifications
 /// (no response), matching the spec.
-pub async fn handle_message(
-    state: &AppState,
-    ctx: &CallCtx,
-    msg: &Value,
-) -> Option<Value> {
+pub async fn handle_message(state: &AppState, ctx: &CallCtx, msg: &Value) -> Option<Value> {
     if msg.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Some(error_obj(msg.get("id").cloned().unwrap_or(Value::Null), -32600, "invalid request"));
+        return Some(error_obj(
+            msg.get("id").cloned().unwrap_or(Value::Null),
+            -32600,
+            "invalid request",
+        ));
     }
     let id = msg.get("id").cloned();
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
         // A message without a method and with an id is invalid.
-        return Some(error_obj(id.unwrap_or(Value::Null), -32600, "invalid request"));
+        return Some(error_obj(
+            id.unwrap_or(Value::Null),
+            -32600,
+            "invalid request",
+        ));
     };
     let Some(id) = id else {
         return None; // notification — never answered
     };
-    let params = msg.get("params").cloned().unwrap_or(Value::Object(Default::default()));
+    let params = msg
+        .get("params")
+        .cloned()
+        .unwrap_or(Value::Object(Default::default()));
 
     match method {
         "initialize" => {
@@ -68,10 +75,7 @@ pub async fn handle_message(
         "ping" => Some(result_obj(id, json!({}))),
         "tools/list" => Some(result_obj(id, json!({"tools": tools::tool_definitions()}))),
         "tools/call" => {
-            let name = params
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             if name.is_empty() {
                 return Some(error_obj(id, -32602, "missing tool name"));
             }
@@ -97,11 +101,7 @@ pub async fn handle_message(
 }
 
 /// Handles a parsed body that may be a single message or a batch.
-pub async fn handle_body(
-    state: &AppState,
-    ctx: &CallCtx,
-    body: &Value,
-) -> Option<Value> {
+pub async fn handle_body(state: &AppState, ctx: &CallCtx, body: &Value) -> Option<Value> {
     match body {
         Value::Array(items) => {
             let mut responses = Vec::new();
@@ -134,9 +134,9 @@ mod tests {
         };
         AppState {
             hub: Arc::new(HubClient::new(&settings)),
-            validator: Arc::new(crate::auth::TokenValidator::new(Arc::new(
-                HubClient::new(&settings),
-            ))),
+            validator: Arc::new(crate::auth::TokenValidator::new(Arc::new(HubClient::new(
+                &settings,
+            )))),
         }
     }
 
@@ -151,8 +151,9 @@ mod tests {
         let resp = handle_message(&s, &ctx, &init).await.unwrap();
         assert_eq!(resp["result"]["serverInfo"]["name"], "Huginn");
 
-        let list = serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
-            .unwrap();
+        let list =
+            serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+                .unwrap();
         let resp = handle_message(&s, &ctx, &list).await.unwrap();
         let tools_arr = resp["result"]["tools"].as_array().unwrap();
         assert_eq!(tools_arr.len(), 9, "9 tools expected");
@@ -161,8 +162,15 @@ mod tests {
             .filter_map(|t| t["name"].as_str())
             .collect();
         for expected in [
-            "list_vms", "get_vm_status", "list_actions", "execute_action",
-            "execute_command", "trigger_update", "get_task", "wait_for_task", "get_audit_log",
+            "list_vms",
+            "get_vm_status",
+            "list_actions",
+            "execute_action",
+            "execute_command",
+            "trigger_update",
+            "get_task",
+            "wait_for_task",
+            "get_audit_log",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
@@ -183,7 +191,8 @@ mod tests {
     async fn unknown_method_errors() {
         let s = state();
         let ctx = CallCtx::default();
-        let m = serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":9,"method":"nope"}"#).unwrap();
+        let m =
+            serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":9,"method":"nope"}"#).unwrap();
         let resp = handle_message(&s, &ctx, &m).await.unwrap();
         assert_eq!(resp["error"]["code"], -32601);
     }

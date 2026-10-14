@@ -7,12 +7,12 @@ on:
   pull_request:
     paths: ["worker-rs/**", "mcp-rs/**", ".github/workflows/ci-rust.yml"]
 
+# Runs per crate (worker-rs, mcp-rs). CI policy: fmt clean, clippy warnings as
+# errors, tests green, zero known vulnerabilities in dependencies.
+
 jobs:
   rust:
     runs-on: ubuntu-latest
-    # Each component job runs only when its crate is present on the branch
-    # (worker-rs/ and mcp-rs/ land via their own PRs).
-    if: hashFiles(format('{0}/Cargo.toml', matrix.component)) != ''
     strategy:
       matrix:
         component: [worker-rs, mcp-rs]
@@ -24,7 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           workspaces: ${{ matrix.component }}
       - name: Format
@@ -34,6 +34,7 @@ jobs:
       - name: Test
         run: cargo test --release --locked
       - name: Audit dependencies
-        uses: rustsec/audit-check@v2
+        uses: rustsec/audit-check@v2.0.0
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ${{ matrix.component }}
