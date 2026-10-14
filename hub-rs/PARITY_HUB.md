@@ -18,8 +18,8 @@ the Rust port is byte-faithful, where it is deliberately faithful to a Python
 | `POST /api/auth/mfa/totp/enroll/finish` | ported (backup codes + setup-flow `access_token`) |
 | `POST /api/auth/mfa/totp/disable` | ported (re-auth with a *current second factor*) |
 | `POST /api/auth/mfa/totp/backup-codes/regenerate` | ported |
-| `POST /api/auth/mfa/webauthn/register/{begin,finish}` | **501** (phase 2) |
-| `POST /api/auth/mfa/webauthn/login/{begin,finish}` | **501** (phase 2) |
+| `POST /api/auth/mfa/webauthn/register/{begin,finish}` | porté (options identiques à py_webauthn) |
+| `POST /api/auth/mfa/webauthn/login/{begin,finish}` | porté (counter/clone detection) |
 | `GET/PUT/DELETE /api/auth/mfa/webauthn/credentials[...]` | ported (pure credential CRUD) |
 | `GET/POST /api/users` | ported |
 | `GET/PUT/DELETE /api/users/{user_id}` | ported |
@@ -30,7 +30,7 @@ the Rust port is byte-faithful, where it is deliberately faithful to a Python
 
 ## Decisions
 
-### WebAuthn: ceremonies 501 (phase 2), credential management ported
+### WebAuthn: ceremonies ported (register/login begin+finish)
 
 `services/webauthn.py` wraps **py_webauthn** for the ceremony crypto:
 registration options/attestation verification (CBOR attestation objects, COSE
@@ -41,7 +41,7 @@ security-critical surface that cannot be parity-tested against the Python
 implementation in this pass. The four ceremony endpoints therefore answer:
 
 ```json
-501 {"detail": "webauthn not yet implemented in hub-rs"}
+(the former 501 "webauthn not yet implemented" gap is closed)
 ```
 
 coherently: the challenge/credential *ceremonies* are the only gap. The three
@@ -113,7 +113,7 @@ enabling TOTP). Both are single `UPDATE`s in `authapi/mod.rs`.
   token errors (expired/malformed/wrong scope), rate limiter, `client_ip` and
   the MCP IP allow-list, pydantic-bound validations.
 - HTTP-level (lazy pool, no DB): 422/429 paths, 401 for missing/invalid/mfa
-  scoped tokens, 501 on the WebAuthn login ceremony, dependency-before-body
+  scoped tokens, WebAuthn login ceremony, dependency-before-body
   precedence.
 - `live_tests` (skipped unless `HUGINN_TEST_DATABASE_URL` is set, like
   `db.rs`/`models::live_tests`): full login → setup challenge → TOTP enrollment

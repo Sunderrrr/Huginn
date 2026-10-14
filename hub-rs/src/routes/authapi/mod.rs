@@ -13,10 +13,10 @@
 //! | `POST /api/auth/mfa/totp/enroll/finish`            | `totp_enroll_finish`      |
 //! | `POST /api/auth/mfa/totp/disable`                  | `totp_disable`            |
 //! | `POST /api/auth/mfa/totp/backup-codes/regenerate`  | `regenerate_backup_codes` |
-//! | `POST /api/auth/mfa/webauthn/register/begin`       | `webauthn_register_begin` (501, phase 2) |
-//! | `POST /api/auth/mfa/webauthn/register/finish`      | `webauthn_register_finish` (501, phase 2) |
-//! | `POST /api/auth/mfa/webauthn/login/begin`          | `webauthn_login_begin` (501, phase 2) |
-//! | `POST /api/auth/mfa/webauthn/login/finish`         | `webauthn_login_finish` (501, phase 2) |
+//! | `POST /api/auth/mfa/webauthn/register/begin`       | `webauthn_register_begin` |
+//! | `POST /api/auth/mfa/webauthn/register/finish`      | `webauthn_register_finish` |
+//! | `POST /api/auth/mfa/webauthn/login/begin`          | `webauthn_login_begin` |
+//! | `POST /api/auth/mfa/webauthn/login/finish`         | `webauthn_login_finish` |
 //! | `GET  /api/auth/mfa/webauthn/credentials`          | `list_passkeys`           |
 //! | `PUT  /api/auth/mfa/webauthn/credentials/{cred_id}` | `rename_passkey`         |
 //! | `DELETE /api/auth/mfa/webauthn/credentials/{cred_id}` | `delete_passkey`       |
@@ -32,11 +32,9 @@
 //! any factor get an `mfa_setup` token. [`get_principal`] REJECTS these scoped
 //! tokens for the business API, so they are only ever usable on the MFA routes.
 //!
-//! Not yet ported (see `PARITY_HUB.md`): OIDC (`/api/auth/oidc/*`, needs an
-//! HTTP client + JWKS verification), the LDAP login fallback (needs an LDAP
-//! client) and the WebAuthn ceremony crypto (needs `webauthn-rs`); the WebAuthn
-//! *credential management* endpoints are fully ported — only the four ceremony
-//! endpoints answer 501.
+//! All authentication methods are ported: passwords, TOTP + backup codes,
+//! WebAuthn ceremonies (see `services/webauthn.rs`), OIDC/SSO
+//! (`services/oidc.rs`) and the LDAP login fallback (`services/ldap.rs`).
 
 pub mod auth;
 pub mod mfa;
