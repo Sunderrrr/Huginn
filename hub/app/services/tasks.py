@@ -52,6 +52,7 @@ async def _insert_idempotent(session: AsyncSession, task: Task) -> Task:
     session.add(task)
     try:
         await session.flush()
+        task_events.notify_queue_on_commit(session, str(task.vm_id))
         return task
     except IntegrityError:
         await session.rollback()
@@ -213,6 +214,7 @@ async def create_update_task(
     )
     session.add(task)
     await session.flush()
+    task_events.notify_queue_on_commit(session, str(task.vm_id))
     return task
 
 
@@ -234,6 +236,7 @@ async def create_uninstall_task(
     )
     session.add(task)
     await session.flush()
+    task_events.notify_queue_on_commit(session, str(task.vm_id))
     return task
 
 
@@ -366,6 +369,7 @@ async def sweep_timeouts(session: AsyncSession) -> int:
     )
     swept = 0
     dead_lettered: list[str] = []
+    requeued_vm_ids: set[str] = set()
     for task in result.scalars():
         dispatched = task.dispatched_at or task.created_at
         if as_aware_utc(dispatched) + grace > now:
@@ -379,11 +383,15 @@ async def sweep_timeouts(session: AsyncSession) -> int:
         else:
             task.status = TaskStatus.pending
             task.dispatched_at = None
+            requeued_vm_ids.add(str(task.vm_id))
         swept += 1
     await session.flush()
     # Wake any waiters on tasks that just reached a terminal (dead-letter) state.
     for task_id in dead_lettered:
         task_events.notify(task_id)
+    # Re-queued tasks become claimable again once this transaction commits.
+    for vm_id in requeued_vm_ids:
+        task_events.notify_queue_on_commit(session, vm_id)
     return swept
 
 
