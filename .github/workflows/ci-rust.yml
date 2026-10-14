@@ -1,0 +1,39 @@
+name: ci-rust
+
+on:
+  push:
+    branches: [main]
+    paths: ["worker-rs/**", "mcp-rs/**", ".github/workflows/ci-rust.yml"]
+  pull_request:
+    paths: ["worker-rs/**", "mcp-rs/**", ".github/workflows/ci-rust.yml"]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    # Each component job runs only when its crate is present on the branch
+    # (worker-rs/ and mcp-rs/ land via their own PRs).
+    if: hashFiles(format('{0}/Cargo.toml', matrix.component)) != ''
+    strategy:
+      matrix:
+        component: [worker-rs, mcp-rs]
+    defaults:
+      run:
+        working-directory: ${{ matrix.component }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.component }}
+      - name: Format
+        run: cargo fmt --check
+      - name: Lint (clippy, warnings as errors)
+        run: cargo clippy --release --locked -- -D warnings
+      - name: Test
+        run: cargo test --release --locked
+      - name: Audit dependencies
+        uses: rustsec/audit-check@v2
+        with:
+          working-directory: ${{ matrix.component }}

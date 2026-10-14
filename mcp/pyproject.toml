@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 dependencies = [
-    "mcp>=1.2",
+    # <2: FastMCP (mcp.server.fastmcp) was removed/renamed in mcp 2.x; this
+    # codebase targets the 1.x API.
+    "mcp>=1.2,<2",
     "httpx>=0.27",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
