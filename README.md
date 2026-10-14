@@ -83,27 +83,33 @@ matching `*.example`): dev → `.env`, prod → `.env.prod`.
 ### Prerequisites
 
 The hub, MCP, and dashboard build **inside Docker** — you do **not** need Python,
-Node, etc. on the host. Only `build-artifacts.sh` (which cross-compiles the worker
-binaries the hub serves) needs `make` + Go on the host.
+Node, etc. on the host. Only `build-artifacts.sh` (which cross-compiles the
+worker binaries the hub serves) needs a Rust toolchain on the host.
 
 ```bash
 # Debian / Ubuntu
 sudo apt update
-sudo apt install -y docker.io docker-compose-v2 git make golang-go openssl
+sudo apt install -y docker.io docker-compose-v2 git openssl
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"      # then re-login, so `docker` needs no sudo
+
+# Rust toolchain for build-artifacts.sh (worker binaries)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+pip install ziglang                  # cross-linker for musl targets
+cargo install cargo-zigbuild
 ```
 
 | Tool | Needed for |
 |---|---|
 | Docker + the `docker compose` v2 plugin | running every stack |
 | `git` | cloning the repo |
-| `make` + **Go ≥ 1.24** | `build-artifacts.sh` only (worker binaries) |
+| `rustup` + `cargo-zigbuild` + `ziglang` | `build-artifacts.sh` only (static worker binaries) |
 | `openssl` | generating secrets (`openssl rand -hex 32`) |
 
-> If your distro's `golang-go` is older than 1.24, install Go from
-> [go.dev/dl](https://go.dev/dl/) — `make release` needs ≥ 1.24. (You can skip
-> Go/`make` entirely if you point workers at prebuilt GitHub-release binaries
+> The worker is written in Rust (`worker-rs/`); `build-artifacts.sh` cross-compiles
+> static musl binaries. The legacy Go worker in `worker/` still builds with
+> `./build-artifacts.sh --go` (needs Go ≥ 1.24) during the transition. (You can skip
+> local builds entirely if you point workers at prebuilt GitHub-release binaries
 > instead of self-hosting them — see [docs/deployment.md](docs/deployment.md).)
 
 ### Local / dev (Docker)
@@ -124,7 +130,7 @@ to the dashboard at `http://localhost:5173`.
 ```bash
 cd Huginn/deploy
 cp .env.prod.example .env.prod        # set HUGINN_DOMAIN + real secrets (openssl rand -hex 32)
-./build-artifacts.sh v1.3.0           # build the worker binaries the hub serves at /dist
+./build-artifacts.sh v1.4.0           # build the worker binaries the hub serves at /dist
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 

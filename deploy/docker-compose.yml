@@ -47,7 +47,9 @@ services:
 
   mcp:
     build:
-      context: ../mcp
+      # Rust server (mcp-rs/) — the Python server in mcp/ remains as reference
+      # during the transition.
+      context: ../mcp-rs
     depends_on:
       - hub
     environment:

@@ -8,7 +8,64 @@ permissions:
   contents: write
 
 jobs:
-  build-worker:
+  build-worker-rs:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - uses: taiki-e/install-action@cargo-zigbuild
+      - name: Install zig (cross-linker for musl targets)
+        run: pip install ziglang
+      - name: Cross-compile static worker binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            case "$t" in
+              x86_64-*) arch=amd64 ;;
+              aarch64-*) arch=arm64 ;;
+            esac
+            HUGINN_WORKER_VERSION="$VERSION" cargo zigbuild --release --locked --target "$t"
+            cp "target/$t/release/huginn-worker" "../dist/huginn-worker-linux-$arch"
+          done
+        shell: bash
+      - name: Generate checksums
+        working-directory: .
+        run: |
+          mkdir -p dist
+          cd dist
+          sha256sum huginn-worker-* > checksums.txt
+          cat checksums.txt
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/huginn-worker-*
+            dist/checksums.txt
+          generate_release_notes: true
+
+  build-mcp-rs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build + test MCP server
+        working-directory: mcp-rs
+        run: |
+          cargo build --release --locked
+          cargo test --release
+          cargo clippy --release -- -D warnings
+      - name: Docker image (smoke)
+        run: docker build -t huginn-mcp:${{ github.ref_name }} mcp-rs
+
+  # Legacy worker kept during the fleet-validation transition. Consumers are
+  # switched to the Rust assets above; remove this job when worker/ is deleted.
+  build-worker-go:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -18,19 +75,33 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-      - name: Cross-compile worker binaries
+      - name: Cross-compile worker binaries (legacy)
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ github.ref_name }}-go
         run: make release VERSION="${VERSION}"
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum huginn-worker-* > checksums.txt
-          cat checksums.txt
-      - name: Publish GitHub Release
+          sha256sum huginn-worker-* > checksums-go.txt
+          cat checksums-go.txt
+      - name: Upload legacy assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             worker/dist/huginn-worker-*
-            worker/dist/checksums.txt
-          generate_release_notes: true
+            worker/dist/checksums-go.txt
+          generate_release_notes: false
+          fail_on_unmatched_files: false
+
+  test-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Hub test suite
+        working-directory: hub
+        run: |
+          pip install -e ".[dev]"
+          python -m pytest tests -q
