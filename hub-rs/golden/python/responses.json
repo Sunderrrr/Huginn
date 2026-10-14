@@ -1,0 +1,315 @@
+{
+ "actions_list": {
+  "body": [],
+  "method": "GET",
+  "path": "/api/actions",
+  "status": 200
+ },
+ "audit_list": {
+  "body": [
+   {
+    "action_name": null,
+    "actor_id": "<UUID>",
+    "actor_label": "admin",
+    "actor_type": "user",
+    "command": null,
+    "detail": {},
+    "event_type": "login",
+    "exit_code": null,
+    "id": 2,
+    "result_status": null,
+    "source_ip": "10.89.0.2",
+    "ts": "<TS>",
+    "vm_id": null
+   },
+   {
+    "action_name": null,
+    "actor_id": "<UUID>",
+    "actor_label": "admin",
+    "actor_type": "user",
+    "command": null,
+    "detail": {},
+    "event_type": "login",
+    "exit_code": null,
+    "id": 1,
+    "result_status": null,
+    "source_ip": "10.89.0.2",
+    "ts": "<TS>",
+    "vm_id": null
+   }
+  ],
+  "method": "GET",
+  "path": "/api/audit?limit=5",
+  "status": 200
+ },
+ "audit_unauthenticated": {
+  "body": {
+   "detail": "authentication required"
+  },
+  "method": "GET",
+  "path": "/api/audit",
+  "status": 401
+ },
+ "audit_verify": {
+  "body": {
+   "intact": true
+  },
+  "method": "GET",
+  "path": "/api/audit/verify",
+  "status": 200
+ },
+ "auth_config": {
+  "body": {
+   "oidc_enabled": false,
+   "oidc_provider_name": "SSO",
+   "password_login_enabled": true,
+   "webauthn_enabled": false
+  },
+  "method": "GET",
+  "path": "/api/auth/config",
+  "status": 200
+ },
+ "enrollment_token_create": {
+  "body": {
+   "auto_approve": false,
+   "created_at": "<TS>",
+   "expires_at": "<TS>",
+   "id": "<UUID>",
+   "label": "",
+   "max_uses": 1,
+   "revoked_at": null,
+   "token": "9iKFMbs1Z0nvrqJ7T00PWm6M_jAHULJoVUg4Q9vAcXM",
+   "uses_count": 0
+  },
+  "method": "POST",
+  "path": "/api/enrollment-tokens",
+  "status": 201
+ },
+ "enrollment_token_delete": {
+  "body": null,
+  "method": "DELETE",
+  "path": "/api/enrollment-tokens/c642af68-a426-4bd8-8937-bcb4313ce7a2",
+  "status": 204
+ },
+ "enrollment_tokens_list": {
+  "body": [],
+  "method": "GET",
+  "path": "/api/enrollment-tokens",
+  "status": 200
+ },
+ "healthz": {
+  "body": {
+   "status": "ok"
+  },
+  "method": "GET",
+  "path": "/healthz",
+  "status": 200
+ },
+ "login": {
+  "body": {
+   "access_token": "<JWT>",
+   "expires_in": 3600,
+   "token_type": "bearer"
+  },
+  "method": "POST",
+  "path": "/api/auth/login",
+  "status": 200
+ },
+ "mcp_tokens_list": {
+  "body": [],
+  "method": "GET",
+  "path": "/api/mcp/tokens",
+  "status": 200
+ },
+ "mcp_whoami_unauthenticated": {
+  "body": {
+   "detail": "authentication required"
+  },
+  "method": "GET",
+  "path": "/api/mcp/whoami",
+  "status": 401
+ },
+ "me": {
+  "body": {
+   "email": null,
+   "id": "<UUID>",
+   "is_active": true,
+   "passkey_count": 0,
+   "role": "admin",
+   "totp_enabled": false,
+   "username": "admin",
+   "vm_ids": []
+  },
+  "method": "GET",
+  "path": "/api/auth/me",
+  "status": 200
+ },
+ "schedules_list": {
+  "body": [],
+  "method": "GET",
+  "path": "/api/schedules",
+  "status": 200
+ },
+ "settings_get": {
+  "body": {
+   "allow_password_login": false,
+   "allowed_release_domains": [
+    "github.com",
+    "objects.githubusercontent.com"
+   ],
+   "auto_update_enabled": false,
+   "discord_webhook_url": null,
+   "generic_webhook_url": null,
+   "ldap_bind_dn": "",
+   "ldap_enabled": false,
+   "ldap_server_url": "",
+   "ldap_start_tls": false,
+   "ldap_use_ldaps": false,
+   "ldap_user_search_base": "",
+   "ldap_user_search_filter": "",
+   "notifications_enabled": false,
+   "notify_task_failure": false,
+   "notify_vm_offline": true,
+   "notify_vm_recovered": false,
+   "oidc_client_id": "",
+   "oidc_enabled": false,
+   "oidc_issuer": "",
+   "oidc_post_login_redirect": "",
+   "oidc_provider_name": "SSO",
+   "oidc_redirect_url": "http://localhost:8000/api/auth/oidc/callback",
+   "require_admin_mfa": false,
+   "target_release_repo": "Sunderrrr/Huginn",
+   "target_worker_version": "v1.0.0",
+   "updated_at": "<TS>",
+   "webauthn_origin": "",
+   "webauthn_rp_id": "",
+   "webauthn_rp_name": "Huginn"
+  },
+  "method": "GET",
+  "path": "/api/settings",
+  "status": 200
+ },
+ "settings_unauthenticated": {
+  "body": {
+   "detail": "authentication required"
+  },
+  "method": "GET",
+  "path": "/api/settings",
+  "status": 401
+ },
+ "tag_create": {
+  "body": {
+   "color": "#ff0000",
+   "created_at": "<TS>",
+   "id": "<UUID>",
+   "name": "parity-1791984371"
+  },
+  "method": "POST",
+  "path": "/api/tags",
+  "status": 201
+ },
+ "tag_delete": {
+  "body": null,
+  "method": "DELETE",
+  "path": "/api/tags/08376071-5060-4d3b-9616-3f66c7ca3fa1",
+  "status": 204
+ },
+ "tag_update": {
+  "body": {
+   "color": "#00ff00",
+   "created_at": "<TS>",
+   "id": "<UUID>",
+   "name": "parity-1791984371"
+  },
+  "method": "PUT",
+  "path": "/api/tags/08376071-5060-4d3b-9616-3f66c7ca3fa1",
+  "status": 200
+ },
+ "tags_list": {
+  "body": [],
+  "method": "GET",
+  "path": "/api/tags",
+  "status": 200
+ },
+ "users_list": {
+  "body": [
+   {
+    "email": null,
+    "id": "<UUID>",
+    "is_active": true,
+    "passkey_count": 0,
+    "role": "admin",
+    "totp_enabled": false,
+    "username": "admin",
+    "vm_ids": []
+   }
+  ],
+  "method": "GET",
+  "path": "/api/users",
+  "status": 200
+ },
+ "users_unauthenticated": {
+  "body": {
+   "detail": "authentication required"
+  },
+  "method": "GET",
+  "path": "/api/users",
+  "status": 401
+ },
+ "vms_list": {
+  "body": [],
+  "method": "GET",
+  "path": "/api/vms",
+  "status": 200
+ },
+ "vms_unauthenticated": {
+  "body": {
+   "detail": "authentication required"
+  },
+  "method": "GET",
+  "path": "/api/vms",
+  "status": 401
+ },
+ "worker_enroll": {
+  "body": {
+   "state": "pending",
+   "worker_id": "<UUID>",
+   "worker_secret": "y0vzyAdPNftIdckwN7bli5QvCUg7O5gZDxIsugdmm1A"
+  },
+  "method": "POST",
+  "path": "/api/worker/enroll",
+  "status": 201
+ },
+ "worker_heartbeat_noauth_shape": {
+  "body": {
+   "detail": "worker authentication failed"
+  },
+  "method": "POST",
+  "path": "/api/worker/heartbeat",
+  "status": 401
+ },
+ "worker_heartbeat_unauthenticated": {
+  "body": {
+   "detail": "worker credentials required"
+  },
+  "method": "POST",
+  "path": "/api/worker/heartbeat",
+  "status": 401
+ },
+ "worker_next_unauthenticated": {
+  "body": {
+   "detail": "worker credentials required"
+  },
+  "method": "GET",
+  "path": "/api/worker/tasks/next",
+  "status": 401
+ },
+ "worker_tls_required": {
+  "body": {
+   "detail": "worker authentication failed"
+  },
+  "method": "GET",
+  "path": "/api/worker/tasks/next?wait=0",
+  "status": 401
+ }
+}
