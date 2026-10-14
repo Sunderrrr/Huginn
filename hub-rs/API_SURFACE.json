@@ -1,0 +1,546 @@
+[
+ {
+  "file": "audit.py",
+  "method": "GET",
+  "path": "/api/audit",
+  "fn": "list_audit",
+  "status": "200",
+  "response_model": "list[AuditEntryOut]"
+ },
+ {
+  "file": "audit.py",
+  "method": "GET",
+  "path": "/api/audit/verify",
+  "fn": "verify_audit",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "auth.py",
+  "method": "GET",
+  "path": "/api/auth/config",
+  "fn": "auth_config",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "auth.py",
+  "method": "POST",
+  "path": "/api/auth/login",
+  "fn": "login",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "auth.py",
+  "method": "GET",
+  "path": "/api/auth/me",
+  "fn": "me",
+  "status": "200",
+  "response_model": "UserOut"
+ },
+ {
+  "file": "auth.py",
+  "method": "PUT",
+  "path": "/api/auth/me",
+  "fn": "update_me",
+  "status": "200",
+  "response_model": "UserOut"
+ },
+ {
+  "file": "auth.py",
+  "method": "POST",
+  "path": "/api/auth/logout",
+  "fn": "logout",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "auth.py",
+  "method": "GET",
+  "path": "/api/auth/oidc/login",
+  "fn": "oidc_login",
+  "status": "200",
+  "response_model": "OIDCStartResponse"
+ },
+ {
+  "file": "auth.py",
+  "method": "GET",
+  "path": "/api/auth/oidc/callback",
+  "fn": "oidc_callback",
+  "status": "200",
+  "response_model": "TokenResponse"
+ },
+ {
+  "file": "custom_actions.py",
+  "method": "GET",
+  "path": "/api/actions",
+  "fn": "list_actions",
+  "status": "200",
+  "response_model": "list[CustomActionOut]"
+ },
+ {
+  "file": "custom_actions.py",
+  "method": "POST",
+  "path": "/api/actions",
+  "fn": "create_action",
+  "status": "201",
+  "response_model": "CustomActionOut"
+ },
+ {
+  "file": "custom_actions.py",
+  "method": "PATCH",
+  "path": "/api/actions/{action_id}",
+  "fn": "update_action",
+  "status": "200",
+  "response_model": "CustomActionOut"
+ },
+ {
+  "file": "custom_actions.py",
+  "method": "DELETE",
+  "path": "/api/actions/{action_id}",
+  "fn": "delete_action",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "enrollment.py",
+  "method": "POST",
+  "path": "/api/enrollment-tokens",
+  "fn": "create_token",
+  "status": "201",
+  "response_model": "EnrollmentTokenCreated"
+ },
+ {
+  "file": "enrollment.py",
+  "method": "GET",
+  "path": "/api/enrollment-tokens",
+  "fn": "list_tokens",
+  "status": "200",
+  "response_model": "list[EnrollmentTokenOut]"
+ },
+ {
+  "file": "enrollment.py",
+  "method": "DELETE",
+  "path": "/api/enrollment-tokens/{token_id}",
+  "fn": "revoke_token",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "events.py",
+  "method": "GET",
+  "path": "/api/events",
+  "fn": "events_stream",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "execution.py",
+  "method": "POST",
+  "path": "/api/vms/{vm_id}/actions",
+  "fn": "run_action",
+  "status": "202",
+  "response_model": "TaskOut"
+ },
+ {
+  "file": "execution.py",
+  "method": "POST",
+  "path": "/api/vms/{vm_id}/commands",
+  "fn": "run_command",
+  "status": "202",
+  "response_model": "TaskOut"
+ },
+ {
+  "file": "execution.py",
+  "method": "POST",
+  "path": "/api/vms/{vm_id}/update",
+  "fn": "trigger_update",
+  "status": "202",
+  "response_model": "TaskOut"
+ },
+ {
+  "file": "mcp.py",
+  "method": "GET",
+  "path": "/api/mcp/tokens",
+  "fn": "list_tokens",
+  "status": "200",
+  "response_model": "list[McpTokenOut]"
+ },
+ {
+  "file": "mcp.py",
+  "method": "POST",
+  "path": "/api/mcp/tokens",
+  "fn": "create_token",
+  "status": "201",
+  "response_model": "McpTokenCreated"
+ },
+ {
+  "file": "mcp.py",
+  "method": "PATCH",
+  "path": "/api/mcp/tokens/{token_id}",
+  "fn": "update_token",
+  "status": "200",
+  "response_model": "McpTokenOut"
+ },
+ {
+  "file": "mcp.py",
+  "method": "DELETE",
+  "path": "/api/mcp/tokens/{token_id}",
+  "fn": "revoke_token",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "mcp.py",
+  "method": "GET",
+  "path": "/api/mcp/whoami",
+  "fn": "whoami",
+  "status": "200",
+  "response_model": "WhoAmI"
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/verify",
+  "fn": "verify_mfa",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/totp/enroll/begin",
+  "fn": "totp_enroll_begin",
+  "status": "200",
+  "response_model": "TotpEnrollBeginResponse"
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/totp/enroll/finish",
+  "fn": "totp_enroll_finish",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/totp/disable",
+  "fn": "totp_disable",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/totp/backup-codes/regenerate",
+  "fn": "regenerate_backup_codes",
+  "status": "200",
+  "response_model": "BackupCodesResponse"
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/webauthn/register/begin",
+  "fn": "webauthn_register_begin",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/webauthn/register/finish",
+  "fn": "webauthn_register_finish",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "mfa.py",
+  "method": "PUT",
+  "path": "/api/auth/mfa/webauthn/credentials/{cred_id}",
+  "fn": "rename_passkey",
+  "status": "200",
+  "response_model": "WebAuthnCredentialOut"
+ },
+ {
+  "file": "mfa.py",
+  "method": "GET",
+  "path": "/api/auth/mfa/webauthn/credentials",
+  "fn": "list_passkeys",
+  "status": "200",
+  "response_model": "list[WebAuthnCredentialOut]"
+ },
+ {
+  "file": "mfa.py",
+  "method": "DELETE",
+  "path": "/api/auth/mfa/webauthn/credentials/{cred_id}",
+  "fn": "delete_passkey",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/webauthn/login/begin",
+  "fn": "webauthn_login_begin",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "mfa.py",
+  "method": "POST",
+  "path": "/api/auth/mfa/webauthn/login/finish",
+  "fn": "webauthn_login_finish",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "schedules.py",
+  "method": "GET",
+  "path": "/api/schedules",
+  "fn": "list_schedules",
+  "status": "200",
+  "response_model": "list[ScheduleOut]"
+ },
+ {
+  "file": "schedules.py",
+  "method": "POST",
+  "path": "/api/schedules",
+  "fn": "create_schedule",
+  "status": "201",
+  "response_model": "ScheduleOut"
+ },
+ {
+  "file": "schedules.py",
+  "method": "PUT",
+  "path": "/api/schedules/{schedule_id}",
+  "fn": "update_schedule",
+  "status": "200",
+  "response_model": "ScheduleOut"
+ },
+ {
+  "file": "schedules.py",
+  "method": "DELETE",
+  "path": "/api/schedules/{schedule_id}",
+  "fn": "delete_schedule",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "settings.py",
+  "method": "GET",
+  "path": "/api/settings",
+  "fn": "get_settings_endpoint",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "settings.py",
+  "method": "PUT",
+  "path": "/api/settings",
+  "fn": "update_settings_endpoint",
+  "status": "200",
+  "response_model": "SettingsOut"
+ },
+ {
+  "file": "tags.py",
+  "method": "GET",
+  "path": "/api/tags",
+  "fn": "list_tags",
+  "status": "200",
+  "response_model": "list[TagOut]"
+ },
+ {
+  "file": "tags.py",
+  "method": "POST",
+  "path": "/api/tags",
+  "fn": "create_tag",
+  "status": "201",
+  "response_model": "TagOut"
+ },
+ {
+  "file": "tags.py",
+  "method": "PUT",
+  "path": "/api/tags/{tag_id}",
+  "fn": "update_tag",
+  "status": "200",
+  "response_model": "TagOut"
+ },
+ {
+  "file": "tags.py",
+  "method": "DELETE",
+  "path": "/api/tags/{tag_id}",
+  "fn": "delete_tag",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "tasks.py",
+  "method": "GET",
+  "path": "/api/tasks/{task_id}",
+  "fn": "get_task",
+  "status": "200",
+  "response_model": "TaskOut"
+ },
+ {
+  "file": "tasks.py",
+  "method": "GET",
+  "path": "/api/tasks/{task_id}/wait",
+  "fn": "wait_task",
+  "status": "200",
+  "response_model": "TaskOut"
+ },
+ {
+  "file": "users.py",
+  "method": "GET",
+  "path": "/api/users",
+  "fn": "list_users",
+  "status": "200",
+  "response_model": "list[UserOut]"
+ },
+ {
+  "file": "users.py",
+  "method": "POST",
+  "path": "/api/users",
+  "fn": "create_user",
+  "status": "201",
+  "response_model": "UserOut"
+ },
+ {
+  "file": "users.py",
+  "method": "GET",
+  "path": "/api/users/{user_id}",
+  "fn": "get_user",
+  "status": "200",
+  "response_model": "UserOut"
+ },
+ {
+  "file": "users.py",
+  "method": "PUT",
+  "path": "/api/users/{user_id}",
+  "fn": "update_user",
+  "status": "200",
+  "response_model": "UserOut"
+ },
+ {
+  "file": "users.py",
+  "method": "DELETE",
+  "path": "/api/users/{user_id}",
+  "fn": "deactivate_user",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "users.py",
+  "method": "PUT",
+  "path": "/api/users/{user_id}/password",
+  "fn": "change_password",
+  "status": "200",
+  "response_model": null
+ },
+ {
+  "file": "users.py",
+  "method": "POST",
+  "path": "/api/users/{user_id}/mfa/reset",
+  "fn": "reset_user_mfa",
+  "status": "200",
+  "response_model": "UserOut"
+ },
+ {
+  "file": "users.py",
+  "method": "PUT",
+  "path": "/api/users/{user_id}/vms",
+  "fn": "set_user_vms",
+  "status": "200",
+  "response_model": "UserOut"
+ },
+ {
+  "file": "vms.py",
+  "method": "GET",
+  "path": "/api/vms",
+  "fn": "list_vms",
+  "status": "200",
+  "response_model": "list[VMOut]"
+ },
+ {
+  "file": "vms.py",
+  "method": "GET",
+  "path": "/api/vms/{vm_id}",
+  "fn": "get_vm",
+  "status": "200",
+  "response_model": "VMOut"
+ },
+ {
+  "file": "vms.py",
+  "method": "PUT",
+  "path": "/api/vms/{vm_id}/tags",
+  "fn": "set_vm_tags",
+  "status": "200",
+  "response_model": "VMOut"
+ },
+ {
+  "file": "vms.py",
+  "method": "POST",
+  "path": "/api/vms/{vm_id}/approve",
+  "fn": "approve_vm",
+  "status": "200",
+  "response_model": "VMOut"
+ },
+ {
+  "file": "vms.py",
+  "method": "PUT",
+  "path": "/api/vms/{vm_id}/exec-mode",
+  "fn": "set_exec_mode",
+  "status": "200",
+  "response_model": "VMOut"
+ },
+ {
+  "file": "vms.py",
+  "method": "POST",
+  "path": "/api/vms/{vm_id}/revoke",
+  "fn": "revoke_vm",
+  "status": "200",
+  "response_model": "VMOut"
+ },
+ {
+  "file": "vms.py",
+  "method": "DELETE",
+  "path": "/api/vms/{vm_id}",
+  "fn": "delete_vm",
+  "status": "204",
+  "response_model": null
+ },
+ {
+  "file": "worker.py",
+  "method": "POST",
+  "path": "/api/worker/enroll",
+  "fn": "enroll",
+  "status": "201",
+  "response_model": "WorkerEnrollResponse"
+ },
+ {
+  "file": "worker.py",
+  "method": "POST",
+  "path": "/api/worker/heartbeat",
+  "fn": "heartbeat",
+  "status": "200",
+  "response_model": "HeartbeatResponse"
+ },
+ {
+  "file": "worker.py",
+  "method": "GET",
+  "path": "/api/worker/tasks/next",
+  "fn": "next_task",
+  "status": "200",
+  "response_model": "WorkerTask"
+ },
+ {
+  "file": "worker.py",
+  "method": "POST",
+  "path": "/api/worker/tasks/{task_id}/result",
+  "fn": "submit_result",
+  "status": "204",
+  "response_model": null
+ }
+]
