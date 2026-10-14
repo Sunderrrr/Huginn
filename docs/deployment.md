@@ -37,7 +37,7 @@ publishes ports (80/443).
 ```bash
 cd deploy
 cp .env.prod.example .env.prod        # set HUGINN_DOMAIN + real secrets
-./build-artifacts.sh v1.3.0           # build worker binaries the hub will serve
+./build-artifacts.sh v1.4.0           # build worker binaries the hub will serve
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
@@ -148,5 +148,9 @@ Notes:
 ## Worker releases
 
 Tagging `vX.Y.Z` triggers `.github/workflows/release.yml`, which cross-compiles the
-worker for `linux/amd64` and `linux/arm64`, generates `checksums.txt`, and attaches
-them to the GitHub Release. `install.sh` and the self-updater consume these assets.
+**Rust worker** (`worker-rs/`) into static musl binaries for `linux/amd64` and
+`linux/arm64` (via cargo-zigbuild), injects the version, generates
+`checksums.txt`, and attaches everything to the GitHub Release — plus the legacy
+Go binaries under `-go` checksums during the transition. `install.sh` and the
+self-updater consume these assets. Locally, `deploy/build-artifacts.sh` produces
+the same artifacts for the self-hosted `/dist` route.

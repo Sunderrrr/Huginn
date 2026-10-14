@@ -6,6 +6,42 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] — Rust worker + Rust MCP server, event-driven hub long-poll
+
+### Added
+- **`worker-rs/` — the fleet worker in Rust** (full behavioral port of the Go
+  worker: identical CLI, wire protocol, and `worker.json` state file — the hub
+  and `install.sh` see no difference). Static musl binaries (`linux/amd64`,
+  `linux/arm64`): **3.2–3.6 MB vs 6.0 MB Go (−45 %)** and ~1–3 MB idle RAM vs
+  10–20 MB (no GC runtime) — across a 100-VM fleet that is ~1.5 GB → ~200 MB
+  aggregate. 46 tests ported from the Go suite (no-shell exec, output caps,
+  whitelist injection rejection, retry policy, exec-mode gating,
+  SSRF allowlist incl. every redirect hop, atomic update + rollback).
+  The Go worker in `worker/` is kept during fleet validation; see
+  `worker-rs/PARITY.md`.
+- **`mcp-rs/` — the MCP server in Rust** (port of the Python/FastMCP server:
+  same 9 tools, same per-user Bearer auth validated against
+  `/api/mcp/whoami`, same on-behalf-of attribution and client-IP forwarding).
+  Hand-rolled JSON-RPC 2.0 + MCP streamable-HTTP (stateless, json-response)
+  and stdio transports — fully unit- and e2e-tested (10 tests). Single static
+  binary instead of a ~250 MB Python image; ~3–5 MB RAM vs 41 MB. See
+  `mcp-rs/PARITY.md`.
+- `deploy/build-artifacts.sh` builds the Rust worker by default
+  (cargo-zigbuild musl cross-compilation); `--go` keeps the legacy pipeline.
+- Release CI (`.github/workflows/release.yml`): Rust worker cross-build +
+  checksums (same asset names), MCP build/test/clippy + Docker smoke, hub test
+  suite, and the legacy Go assets kept under `-go` suffixed checksums.
+
+### Changed
+- **Hub worker long-poll is now event-driven**: instead of re-checking the
+  queue every 0.5 s per waiting worker (2N queries/s at N workers idle), a
+  queued task now wakes only that VM's parked poll via a commit-scoped
+  notifier — task pickup latency **≤0.5 s → <200 ms**, idle DB load **~0**.
+  No API/schema change (same `/api/worker/tasks/next?wait=N`).
+- The MCP service in `deploy/docker-compose*.yml` now builds from `mcp-rs/`.
+  The Python server in `mcp/` remains as reference during the transition.
+
+
 ### Added
 - **Custom commands (admin-defined)**: admins can define commands in the
   dashboard (Commands page) that VMs run **without a shell** — **one full command
