@@ -6,7 +6,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict gWcfKh8TQh1sg48n7sOF55fM5qgzLyUzyf6USbb9XMMqQziubzVX5W1iqSwqc6f
 
 -- Dumped from database version 16.15
 -- Dumped by pg_dump version 16.15
@@ -16,7 +15,6 @@ SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
-SELECT pg_catalog.set_config('search_path', '', false);
 SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
@@ -856,9 +854,8 @@ ALTER TABLE ONLY public.webauthn_credentials
 -- PostgreSQL database dump complete
 --
 
-\unrestrict gWcfKh8TQh1sg48n7sOF55fM5qgzLyUzyf6USbb9XMMqQziubzVX5W1iqSwqc6f
 
 
 -- Stamp the alembic revision this schema corresponds to (Python/Rust coexistence).
-DELETE FROM alembic_version;
-INSERT INTO alembic_version (version_num) VALUES ('n4c5d6e7f8a9');
+DELETE FROM public.alembic_version;
+INSERT INTO public.alembic_version (version_num) VALUES ('n4c5d6e7f8a9');
