@@ -4,11 +4,13 @@
 //! Security primitives are parity-tested against the Python implementation
 //! (see security_vectors.json, generated from the Python code itself).
 
-mod config;
-mod db;
-mod error;
-mod models;
-mod security;
+pub mod config;
+pub mod db;
+pub mod error;
+pub mod models;
+pub mod routes;
+pub mod security;
+pub mod services;
 
 fn main() {
     println!("huginn-hub scaffold");
