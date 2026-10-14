@@ -128,45 +128,123 @@ impl Config {
             .collect();
         let get = |name: &str| envs.get(name).cloned();
 
-        if let Some(v) = get("HUGINN_ENV") { c.env = v; }
-        if let Some(v) = get("HUGINN_LOG_LEVEL") { c.log_level = v; }
-        if let Some(v) = get("HUGINN_DATABASE_URL") { c.database_url = v; }
-        if let Some(v) = get("HUGINN_DB_POOL_SIZE") { c.db_pool_size = v.parse().unwrap_or(c.db_pool_size); }
-        if let Some(v) = get("HUGINN_DB_MAX_OVERFLOW") { c.db_max_overflow = v.parse().unwrap_or(c.db_max_overflow); }
-        if let Some(v) = get("HUGINN_JWT_SECRET") { c.jwt_secret = v; }
-        if let Some(v) = get("HUGINN_JWT_ALGORITHM") { c.jwt_algorithm = v; }
-        if let Some(v) = get("HUGINN_ACCESS_TOKEN_TTL_MINUTES") { c.access_token_ttl_minutes = v.parse().unwrap_or(c.access_token_ttl_minutes); }
-        if let Some(v) = get("HUGINN_SECRET_HASH_KEY") { c.secret_hash_key = v; }
-        if let Some(v) = get("HUGINN_MCP_SERVICE_TOKEN") { c.mcp_service_token = v; }
-        if let Some(v) = get("HUGINN_MFA_ENCRYPTION_KEY") { c.mfa_encryption_key = v; }
-        if let Some(v) = get("HUGINN_MFA_CHALLENGE_TTL_MINUTES") { c.mfa_challenge_ttl_minutes = v.parse().unwrap_or(c.mfa_challenge_ttl_minutes); }
-        if let Some(v) = get("HUGINN_REQUIRE_ADMIN_MFA") { c.require_admin_mfa = parse_bool(&v, c.require_admin_mfa); }
-        if let Some(v) = get("HUGINN_ALLOW_PASSWORD_LOGIN") { c.allow_password_login = parse_bool(&v, c.allow_password_login); }
-        if let Some(v) = get("HUGINN_WEBAUTHN_RP_ID") { c.webauthn_rp_id = v; }
-        if let Some(v) = get("HUGINN_WEBAUTHN_RP_NAME") { c.webauthn_rp_name = v; }
-        if let Some(v) = get("HUGINN_WEBAUTHN_ORIGIN") { c.webauthn_origin = v; }
-        if let Some(v) = get("HUGINN_WEBAUTHN_USER_VERIFICATION") { c.webauthn_user_verification = v; }
-        if let Some(v) = get("HUGINN_REQUIRE_TLS") { c.require_tls = parse_bool(&v, c.require_tls); }
-        if let Some(v) = get("HUGINN_TRUST_FORWARDED_FOR") { c.trust_forwarded_for = parse_bool(&v, c.trust_forwarded_for); }
-        if let Some(v) = get("HUGINN_CORS_ORIGINS") { c.cors_origins_csv = v; }
-        if let Some(v) = get("HUGINN_BOOTSTRAP_ADMIN_USERNAME") { c.bootstrap_admin_username = v; }
-        if let Some(v) = get("HUGINN_BOOTSTRAP_ADMIN_PASSWORD") { c.bootstrap_admin_password = Some(v); }
-        if let Some(v) = get("HUGINN_OIDC_ENABLED") { c.oidc_enabled = parse_bool(&v, c.oidc_enabled); }
-        if let Some(v) = get("HUGINN_OIDC_PROVIDER_NAME") { c.oidc_provider_name = v; }
-        if let Some(v) = get("HUGINN_OIDC_ISSUER") { c.oidc_issuer = v; }
-        if let Some(v) = get("HUGINN_OIDC_CLIENT_ID") { c.oidc_client_id = v; }
-        if let Some(v) = get("HUGINN_OIDC_CLIENT_SECRET") { c.oidc_client_secret = v; }
-        if let Some(v) = get("HUGINN_OIDC_REDIRECT_URL") { c.oidc_redirect_url = v; }
-        if let Some(v) = get("HUGINN_OIDC_POST_LOGIN_REDIRECT") { c.oidc_post_login_redirect = v; }
-        if let Some(v) = get("HUGINN_MAX_BODY_BYTES") { c.max_body_bytes = v.parse().unwrap_or(c.max_body_bytes); }
-        if let Some(v) = get("HUGINN_MAX_OUTPUT_BYTES") { c.max_output_bytes = v.parse().unwrap_or(c.max_output_bytes); }
-        if let Some(v) = get("HUGINN_DEFAULT_TASK_TIMEOUT_SECONDS") { c.default_task_timeout_seconds = v.parse().unwrap_or(c.default_task_timeout_seconds); }
-        if let Some(v) = get("HUGINN_TASK_DEAD_LETTER_RETRIES") { c.task_dead_letter_retries = v.parse().unwrap_or(c.task_dead_letter_retries); }
-        if let Some(v) = get("HUGINN_RATE_LIMIT_EXEC_PER_MINUTE") { c.rate_limit_exec_per_minute = v.parse().unwrap_or(c.rate_limit_exec_per_minute); }
-        if let Some(v) = get("HUGINN_HEARTBEAT_OFFLINE_SECONDS") { c.heartbeat_offline_seconds = v.parse().unwrap_or(c.heartbeat_offline_seconds); }
-        if let Some(v) = get("HUGINN_TARGET_WORKER_VERSION") { c.target_worker_version = v; }
-        if let Some(v) = get("HUGINN_TARGET_RELEASE_REPO") { c.target_release_repo = v; }
-        if let Some(v) = get("HUGINN_ALLOWED_RELEASE_DOMAINS") { c.allowed_release_domains_csv = v; }
+        if let Some(v) = get("HUGINN_ENV") {
+            c.env = v;
+        }
+        if let Some(v) = get("HUGINN_LOG_LEVEL") {
+            c.log_level = v;
+        }
+        if let Some(v) = get("HUGINN_DATABASE_URL") {
+            c.database_url = v;
+        }
+        if let Some(v) = get("HUGINN_DB_POOL_SIZE") {
+            c.db_pool_size = v.parse().unwrap_or(c.db_pool_size);
+        }
+        if let Some(v) = get("HUGINN_DB_MAX_OVERFLOW") {
+            c.db_max_overflow = v.parse().unwrap_or(c.db_max_overflow);
+        }
+        if let Some(v) = get("HUGINN_JWT_SECRET") {
+            c.jwt_secret = v;
+        }
+        if let Some(v) = get("HUGINN_JWT_ALGORITHM") {
+            c.jwt_algorithm = v;
+        }
+        if let Some(v) = get("HUGINN_ACCESS_TOKEN_TTL_MINUTES") {
+            c.access_token_ttl_minutes = v.parse().unwrap_or(c.access_token_ttl_minutes);
+        }
+        if let Some(v) = get("HUGINN_SECRET_HASH_KEY") {
+            c.secret_hash_key = v;
+        }
+        if let Some(v) = get("HUGINN_MCP_SERVICE_TOKEN") {
+            c.mcp_service_token = v;
+        }
+        if let Some(v) = get("HUGINN_MFA_ENCRYPTION_KEY") {
+            c.mfa_encryption_key = v;
+        }
+        if let Some(v) = get("HUGINN_MFA_CHALLENGE_TTL_MINUTES") {
+            c.mfa_challenge_ttl_minutes = v.parse().unwrap_or(c.mfa_challenge_ttl_minutes);
+        }
+        if let Some(v) = get("HUGINN_REQUIRE_ADMIN_MFA") {
+            c.require_admin_mfa = parse_bool(&v, c.require_admin_mfa);
+        }
+        if let Some(v) = get("HUGINN_ALLOW_PASSWORD_LOGIN") {
+            c.allow_password_login = parse_bool(&v, c.allow_password_login);
+        }
+        if let Some(v) = get("HUGINN_WEBAUTHN_RP_ID") {
+            c.webauthn_rp_id = v;
+        }
+        if let Some(v) = get("HUGINN_WEBAUTHN_RP_NAME") {
+            c.webauthn_rp_name = v;
+        }
+        if let Some(v) = get("HUGINN_WEBAUTHN_ORIGIN") {
+            c.webauthn_origin = v;
+        }
+        if let Some(v) = get("HUGINN_WEBAUTHN_USER_VERIFICATION") {
+            c.webauthn_user_verification = v;
+        }
+        if let Some(v) = get("HUGINN_REQUIRE_TLS") {
+            c.require_tls = parse_bool(&v, c.require_tls);
+        }
+        if let Some(v) = get("HUGINN_TRUST_FORWARDED_FOR") {
+            c.trust_forwarded_for = parse_bool(&v, c.trust_forwarded_for);
+        }
+        if let Some(v) = get("HUGINN_CORS_ORIGINS") {
+            c.cors_origins_csv = v;
+        }
+        if let Some(v) = get("HUGINN_BOOTSTRAP_ADMIN_USERNAME") {
+            c.bootstrap_admin_username = v;
+        }
+        if let Some(v) = get("HUGINN_BOOTSTRAP_ADMIN_PASSWORD") {
+            c.bootstrap_admin_password = Some(v);
+        }
+        if let Some(v) = get("HUGINN_OIDC_ENABLED") {
+            c.oidc_enabled = parse_bool(&v, c.oidc_enabled);
+        }
+        if let Some(v) = get("HUGINN_OIDC_PROVIDER_NAME") {
+            c.oidc_provider_name = v;
+        }
+        if let Some(v) = get("HUGINN_OIDC_ISSUER") {
+            c.oidc_issuer = v;
+        }
+        if let Some(v) = get("HUGINN_OIDC_CLIENT_ID") {
+            c.oidc_client_id = v;
+        }
+        if let Some(v) = get("HUGINN_OIDC_CLIENT_SECRET") {
+            c.oidc_client_secret = v;
+        }
+        if let Some(v) = get("HUGINN_OIDC_REDIRECT_URL") {
+            c.oidc_redirect_url = v;
+        }
+        if let Some(v) = get("HUGINN_OIDC_POST_LOGIN_REDIRECT") {
+            c.oidc_post_login_redirect = v;
+        }
+        if let Some(v) = get("HUGINN_MAX_BODY_BYTES") {
+            c.max_body_bytes = v.parse().unwrap_or(c.max_body_bytes);
+        }
+        if let Some(v) = get("HUGINN_MAX_OUTPUT_BYTES") {
+            c.max_output_bytes = v.parse().unwrap_or(c.max_output_bytes);
+        }
+        if let Some(v) = get("HUGINN_DEFAULT_TASK_TIMEOUT_SECONDS") {
+            c.default_task_timeout_seconds = v.parse().unwrap_or(c.default_task_timeout_seconds);
+        }
+        if let Some(v) = get("HUGINN_TASK_DEAD_LETTER_RETRIES") {
+            c.task_dead_letter_retries = v.parse().unwrap_or(c.task_dead_letter_retries);
+        }
+        if let Some(v) = get("HUGINN_RATE_LIMIT_EXEC_PER_MINUTE") {
+            c.rate_limit_exec_per_minute = v.parse().unwrap_or(c.rate_limit_exec_per_minute);
+        }
+        if let Some(v) = get("HUGINN_HEARTBEAT_OFFLINE_SECONDS") {
+            c.heartbeat_offline_seconds = v.parse().unwrap_or(c.heartbeat_offline_seconds);
+        }
+        if let Some(v) = get("HUGINN_TARGET_WORKER_VERSION") {
+            c.target_worker_version = v;
+        }
+        if let Some(v) = get("HUGINN_TARGET_RELEASE_REPO") {
+            c.target_release_repo = v;
+        }
+        if let Some(v) = get("HUGINN_ALLOWED_RELEASE_DOMAINS") {
+            c.allowed_release_domains_csv = v;
+        }
         c
     }
 
@@ -239,8 +317,10 @@ mod tests {
 
     #[test]
     fn validate_for_prod_rejects_placeholders_and_short_secrets() {
-        let mut c = Config::default();
-        c.env = "prod".into();
+        let mut c = Config {
+            env: "prod".into(),
+            ..Default::default()
+        };
         let err = c.validate_for_prod().unwrap_err();
         assert!(err.contains("HUGINN_JWT_SECRET"));
         assert!(err.contains("change-me") || err.contains("openssl"));
