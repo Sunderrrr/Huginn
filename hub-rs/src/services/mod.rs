@@ -13,6 +13,6 @@
 pub mod task_events;
 
 pub use task_events::{PendingQueueWakes, QueueWaiter, TaskEvents, TaskWaiter};
-pub mod webauthn;
-pub mod oidc;
 pub mod ldap;
+pub mod oidc;
+pub mod webauthn;

@@ -580,7 +580,8 @@ async fn webauthn_login_finish(
     body: Result<Json<WebAuthnLoginFinishRequest>, JsonRejection>,
 ) -> Result<Json<TokenResponse>, ApiError> {
     let body = body.map_err(map_json_rejection)?.0;
-    let ip = client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
+    let ip =
+        client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
     webauthn_guard(&state, &headers, peer_addr(peer))?;
     let user = match webauthn::finish_login(&state.pool, &state.config, &body.credential).await {
         Ok(user) => user,
@@ -1087,7 +1088,9 @@ mod live_tests {
             &state.pool,
             UserNew {
                 username: username.into(),
-                password_hash: Some(crate::security::hash_password("correct horse battery").unwrap()),
+                password_hash: Some(
+                    crate::security::hash_password("correct horse battery").unwrap(),
+                ),
                 role: crate::models::enums::UserRole::Readonly,
                 is_active: true,
                 ..UserNew::default()
@@ -1210,7 +1213,9 @@ mod live_tests {
         assert_eq!(options["rp"], json!({"name": "Huginn", "id": RP_ID}));
         assert_eq!(
             options["user"]["id"],
-            json!(crate::services::webauthn::b64u_encode(user_id.to_string().as_bytes()))
+            json!(crate::services::webauthn::b64u_encode(
+                user_id.to_string().as_bytes()
+            ))
         );
         assert_eq!(
             options["pubKeyCredParams"],
@@ -1243,7 +1248,10 @@ mod live_tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["name"], json!("Test Key"));
         assert!(body["id"].is_string());
-        assert!(body.get("access_token").is_none(), "no login outside setup flow");
+        assert!(
+            body.get("access_token").is_none(),
+            "no login outside setup flow"
+        );
 
         // --- challenge reuse is rejected (single-use claim in SQL).
         let (status, body) = send(
@@ -1257,13 +1265,28 @@ mod live_tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body, json!({"detail": "unknown, used, or expired challenge"}));
+        assert_eq!(
+            body,
+            json!({"detail": "unknown, used, or expired challenge"})
+        );
 
         // --- wrong origin / wrong rp binding → generic verification failure.
+        // Each attempt gets a fresh ceremony: challenges are single-use.
         for (kind, cdj_origin, rp_id) in [
             ("origin", "https://evil.example.com", RP_ID),
             ("rp_id", ORIGIN, "other.example.com"),
         ] {
+            let (status, options) = send(
+                &state,
+                request(
+                    "POST",
+                    "/api/auth/mfa/webauthn/register/begin",
+                    json!({}),
+                    auth,
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{options}");
             let challenge = challenge_bytes(&options);
             let aaguid = [0x22u8; 16];
             let auth_data = auth_data_bytes(
@@ -1292,7 +1315,12 @@ mod live_tests {
         // --- login/begin (public, discoverable) → options without allowCredentials.
         let (status, options) = send(
             &state,
-            request("POST", "/api/auth/mfa/webauthn/login/begin", json!({}), None),
+            request(
+                "POST",
+                "/api/auth/mfa/webauthn/login/begin",
+                json!({}),
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{options}");
@@ -1333,7 +1361,12 @@ mod live_tests {
         // --- clone detection: a counter that does not advance is rejected.
         let (status, options) = send(
             &state,
-            request("POST", "/api/auth/mfa/webauthn/login/begin", json!({}), None),
+            request(
+                "POST",
+                "/api/auth/mfa/webauthn/login/begin",
+                json!({}),
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1355,7 +1388,12 @@ mod live_tests {
         // --- an advancing counter logs in again.
         let (status, options) = send(
             &state,
-            request("POST", "/api/auth/mfa/webauthn/login/begin", json!({}), None),
+            request(
+                "POST",
+                "/api/auth/mfa/webauthn/login/begin",
+                json!({}),
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1419,7 +1457,10 @@ mod live_tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body, json!({"detail": "challenge does not belong to this user"}));
+        assert_eq!(
+            body,
+            json!({"detail": "challenge does not belong to this user"})
+        );
     }
 
     #[tokio::test]
