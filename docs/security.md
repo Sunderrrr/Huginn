@@ -20,7 +20,7 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 
 ### Authentication & authorization
 - **Every** endpoint requires authentication. There is no unauthenticated
-  execution path. (`hub/app/api/deps.py`)
+  execution path. (`hub-rs/src/routes/` — auth extractors on every route group)
 - Users authenticate via local Argon2id login, OIDC (SSO), or LDAP/LDAPS;
   JWTs carry the role. The OIDC flow follows the standard authorization-code +
   JWKS-verified id_token spec, but has only been **tested against Authentik** —
@@ -59,19 +59,18 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 ### Secrets
 - Passwords are hashed with **Argon2id**. High-entropy secrets (enrollment
   tokens, per-worker secrets, TOTP backup codes) are stored as a **keyed
-  HMAC-SHA256**, never in plaintext. (`hub/app/core/security.py`)
-- TOTP secrets need to be reversible, so they are **encrypted at rest** with
-  Fernet under a dedicated `HUGINN_MFA_ENCRYPTION_KEY` — kept separate from the
-  JWT and HMAC keys so one key's compromise can't both forge tokens and decrypt
-  MFA seeds.
-- All secret/token comparisons are **timing-safe**: `hmac.compare_digest`
-  (Python) and `crypto/subtle.ConstantTimeCompare` (Go).
+  HMAC-SHA256**, never in plaintext. (`hub-rs/src/security/secret.rs`)
+- TOTP secrets need to be reversible, so they are **encrypted at rest** with a
+  Fernet-compatible AEAD under a dedicated `HUGINN_MFA_ENCRYPTION_KEY` — kept
+  separate from the JWT and HMAC keys so one key's compromise can't both forge
+  tokens and decrypt MFA seeds. (`hub-rs/src/security/fernet.rs`)
+- All secret/token comparisons are **timing-safe** (`subtle::ConstantTimeEq`).
 - The worker writes its credentials file with `0600` permissions.
 
 ### Command injection
-- Whitelisted actions map to **fixed argv vectors** executed with
-  `exec.CommandContext` — **never** `sh -c`, never string concatenation.
-  (`worker/internal/exec`, `worker/internal/whitelist`)
+- Whitelisted actions map to **fixed argv vectors** executed directly
+  (`Command::new(argv[0])` + separated args) — **never** `sh -c`, never string
+  concatenation. (`worker-rs/src/exec.rs`, `worker-rs/src/whitelist.rs`)
 - Action parameters are validated against a conservative pattern on **both** the
   hub and the worker before they are placed into a separate argv slot.
 - Free-form commands use a shell **by design**, but only in the explicit,

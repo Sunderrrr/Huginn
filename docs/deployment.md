@@ -24,8 +24,8 @@ cd deploy && docker compose up --build
 ```
 
 Brings up PostgreSQL, the hub (`:8000`), the dashboard (`:5173`), and the MCP
-server (`:9000`). The hub applies Alembic migrations on startup and bootstraps the
-first admin from `HUGINN_BOOTSTRAP_ADMIN_*`.
+server (`:9000`). The hub applies its embedded schema migrations on startup
+(idempotent) and bootstraps the first admin from `HUGINN_BOOTSTRAP_ADMIN_*`.
 
 ## Docker production (single host, Caddy + automatic HTTPS)
 
@@ -128,8 +128,10 @@ kubectl -n huginn apply -f deploy/k8s/ingress.example.yaml
 ```
 
 Notes:
-- The hub Deployment overrides the image entrypoint with the plain `uvicorn`
-  command, so replicas do **not** run migrations — the `huginn-migrate` Job owns that.
+- The hub image runs the Rust `huginn-hub` binary, which applies its embedded
+  migrations idempotently on start. The `huginn-migrate` Job remains the
+  canonical place to migrate before rolling out replicas, so schema changes are
+  applied deliberately on upgrade rather than as a side effect of a rollout.
 - The **dashboard** is a static SPA that calls the API **same-origin** by default
   (empty `VITE_HUB_URL` → relative `/api`). Route `/api` (and `/mcp`) to the hub
   on the same host the dashboard is served from (ingress path rules) and no CORS
@@ -150,7 +152,8 @@ Notes:
 Tagging `vX.Y.Z` triggers `.github/workflows/release.yml`, which cross-compiles the
 **Rust worker** (`worker-rs/`) into static musl binaries for `linux/amd64` and
 `linux/arm64` (via cargo-zigbuild), injects the version, generates
-`checksums.txt`, and attaches everything to the GitHub Release — plus the legacy
-Go binaries under `-go` checksums during the transition. `install.sh` and the
-self-updater consume these assets. Locally, `deploy/build-artifacts.sh` produces
-the same artifacts for the self-hosted `/dist` route.
+`checksums.txt`, and attaches everything to the GitHub Release. The same
+pipeline builds and smoke-tests the `hub-rs/` and `mcp-rs/` container images.
+`install.sh` and the self-updater consume the release assets. Locally,
+`deploy/build-artifacts.sh` produces the same artifacts for the self-hosted
+`/dist` route.
