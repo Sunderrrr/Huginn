@@ -809,7 +809,9 @@ mod tests {
             .route("/jwks", get(mock_jwks))
             .route("/token", post(mock_token))
             .with_state(state);
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
 
         let client = OidcClient::new(OidcConfig {
             enabled: true,

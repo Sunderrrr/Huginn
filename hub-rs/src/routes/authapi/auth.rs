@@ -987,4 +987,30 @@ mod tests {
             json!({"detail": "invalid token"})
         );
     }
+
+    // ---- OIDC callback state (CSRF) -------------------------------------
+
+    #[tokio::test]
+    async fn oidc_callback_rejects_a_missing_or_mismatched_state() {
+        // The state check runs before any database or network work, so this
+        // exercises the CSRF guard on the lazy pool. A cookie that does not
+        // match the query param (or no cookie at all) must be rejected.
+        for cookie in [None, Some("huginn_oidc_state=not-the-same")] {
+            let mut builder = axum::http::Request::builder()
+                .method("GET")
+                .uri("/api/auth/oidc/callback?code=abc&state=expected");
+            if let Some(cookie) = cookie {
+                builder = builder.header("cookie", cookie);
+            }
+            let response = router_with_state()
+                .oneshot(builder.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                body_json(response).await,
+                json!({"detail": "invalid OIDC state"})
+            );
+        }
+    }
 }
