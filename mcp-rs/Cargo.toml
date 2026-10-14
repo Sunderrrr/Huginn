@@ -1,0 +1,28 @@
+[package]
+name = "huginn-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Huginn MCP server (Rust port of mcp/) — façade over the hub REST API"
+license = "Apache-2.0"
+
+[[bin]]
+name = "huginn-mcp"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "net", "signal", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = "1"
+
+[dev-dependencies]
+wiremock = "0.6"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1

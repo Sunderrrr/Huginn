@@ -1,0 +1,13 @@
+/opt/huginn-mcp-rs/mcp-rs/target/debug/deps/rmcp_macros-df6f571c05ad4032.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/common.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt_handler.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt_router.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool_handler.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool_router.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/../README.md
+
+/opt/huginn-mcp-rs/mcp-rs/target/debug/deps/librmcp_macros-df6f571c05ad4032.so: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/common.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt_handler.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt_router.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool_handler.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool_router.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/../README.md
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/common.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt_handler.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/prompt_router.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool_handler.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/tool_router.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-macros-3.5.1/src/../README.md:
