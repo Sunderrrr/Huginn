@@ -25,6 +25,25 @@ pub const INSTRUCTIONS: &str = r#"Huginn — fleet control. How to use these too
 4. Every action is audited and attributed to your user. Stay within scope.
 "#;
 
+
+/// Strict identifier validation before any value is interpolated into a hub
+/// URL (defense in depth: task_id/vm_id are validated as UUIDs or conservative
+/// name tokens; `state` as a lowercase slug). Prevents path/query injection
+/// even though the hub re-validates.
+fn safe_id(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 128
+        && v
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+fn safe_slug(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 32
+        && v.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+}
+
 /// Structured tool error, matching the Python `{"error": {"status", "detail"}}`.
 pub fn tool_error(status: u16, detail: impl Into<String>) -> Value {
     json!({"error": {"status": status, "detail": detail.into()}})
@@ -109,6 +128,11 @@ pub async fn call_tool(
     match name {
         "list_vms" => {
             let state = args.get("state").and_then(Value::as_str);
+            if let Some(st) = state {
+                if !safe_slug(st) {
+                    return tool_error(400, "invalid state filter");
+                }
+            }
             let brief = args.get("brief").and_then(Value::as_bool).unwrap_or(false);
             match hub.list_vms(ctx, state).await {
                 Err(e) => from_hub_error(e),
@@ -257,6 +281,9 @@ pub async fn call_tool(
             let Some(task_id) = args.get("task_id").and_then(Value::as_str) else {
                 return tool_error(400, "task_id is required");
             };
+            if !safe_id(task_id) {
+                return tool_error(400, "invalid task_id");
+            }
             match hub.get_task(ctx, task_id).await {
                 Ok(v) => v,
                 Err(e) => from_hub_error(e),
@@ -269,7 +296,11 @@ pub async fn call_tool(
             let timeout = args
                 .get("timeout")
                 .and_then(Value::as_u64)
-                .unwrap_or(60);
+                .unwrap_or(60)
+                .min(3600);
+            if !safe_id(task_id) {
+                return tool_error(400, "invalid task_id");
+            }
             match hub.wait_task(ctx, task_id, timeout).await {
                 Ok(v) => v,
                 Err(e) => from_hub_error(e),
@@ -278,7 +309,21 @@ pub async fn call_tool(
         "get_audit_log" => {
             let vm_id = args.get("vm_id").and_then(Value::as_str);
             let event_type = args.get("event_type").and_then(Value::as_str);
-            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100);
+            if let Some(v) = vm_id {
+                if !safe_id(v) {
+                    return tool_error(400, "invalid vm_id");
+                }
+            }
+            if let Some(e) = event_type {
+                if !safe_slug(e) {
+                    return tool_error(400, "invalid event_type");
+                }
+            }
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(100)
+                .min(1000);
             match hub.get_audit_log(ctx, vm_id, event_type, limit).await {
                 Ok(v) => v,
                 Err(e) => from_hub_error(e),
@@ -397,6 +442,20 @@ mod tests {
 
     fn vm(id: &str, name: &str, state: &str) -> Value {
         json!({"id": id, "name": name, "state": state, "exec_mode": "whitelist"})
+    }
+
+    #[test]
+    fn identifier_guards_reject_injection() {
+        assert!(!safe_id("../api/admin"));
+        assert!(!safe_id("abc?x=1"));
+        assert!(!safe_id("abc&y=2"));
+        assert!(!safe_id(""));
+        assert!(!safe_id("a".repeat(200).as_str()));
+        assert!(safe_id("55555555-5555-5555-5555-555555555555"));
+        assert!(safe_id("web-01"));
+        assert!(!safe_slug("ACTIVE"));
+        assert!(!safe_slug("a&b"));
+        assert!(safe_slug("active"));
     }
 
     #[tokio::test]
