@@ -6,8 +6,8 @@ admin / operator / read-only RBAC and the same JWT session.
 | Method | First factor | Notes |
 |---|---|---|
 | Local password | Argon2id | Bootstrap admin + any local users. |
-| LDAP / LDAPS | directory bind | Admin-configured; local password tried first. |
-| OIDC / SSO | external IdP | Tested with Authentik; MFA delegated to the IdP. |
+| LDAP / LDAPS | directory bind | Admin-configured. Local password tried first. |
+| OIDC / SSO | external IdP | Tested with Authentik. MFA delegated to the IdP. |
 | Passkey (WebAuthn) | authenticator | **Passwordless** — possession + user verification. |
 
 Second factors (for **local** accounts) layer on top:
@@ -17,7 +17,7 @@ Second factors (for **local** accounts) layer on top:
 | TOTP | Authenticator app (Google Authenticator, Aegis, 1Password…) + single-use backup codes. |
 | Passkey | Also usable as a standalone passwordless login. |
 
-> OIDC/LDAP users get their MFA from the identity provider; Huginn's TOTP/passkey
+> OIDC/LDAP users get their MFA from the identity provider. Huginn's TOTP/passkey
 > 2FA applies to local password accounts.
 
 ## The login flow
@@ -56,12 +56,12 @@ button in the top-right header) lets a user:
 
 - update their email,
 - change their password,
-- enable/disable **TOTP** (QR + manual key; backup codes shown once),
+- enable/disable **TOTP** (QR + manual key, backup codes shown once),
 - regenerate backup codes,
 - register/remove **passkeys**.
 
 Admins can clear a locked-out user's factors from **Users → Reset 2FA**
-(`POST /api/users/{id}/mfa/reset`); this only ever *removes* factors, so it
+(`POST /api/users/{id}/mfa/reset`). This only ever *removes* factors, so it
 can't brick an account.
 
 ## Admin-MFA enforcement
@@ -88,7 +88,7 @@ available — you can never be locked out by this flag. The SPA reads
   `preferred` (default — works with the widest range of authenticators, e.g. a
   YubiKey with no PIN) or `required` (enforces a PIN/biometric, making the
   passkey a genuine multi-factor rather than mere possession).
-- Challenges are server-generated, single-use, and expiring; the signature
+- Challenges are server-generated, single-use, and expiring. The signature
   counter is persisted to detect cloned authenticators.
 
 ## Security properties
@@ -113,5 +113,5 @@ available — you can never be locked out by this flag. The SPA reads
 | `HUGINN_WEBAUTHN_ORIGIN` | `https://<domain>` | Expected origin for passkey ceremonies. |
 | `HUGINN_WEBAUTHN_USER_VERIFICATION` | `preferred` | `preferred` (widest compatibility) or `required` (enforce PIN/biometric). |
 
-OIDC and LDAP have their own settings (admin-editable in **Settings**); see
+OIDC and LDAP have their own settings (admin-editable in **Settings**). See
 [security.md](security.md).

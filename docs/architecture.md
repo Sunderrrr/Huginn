@@ -32,11 +32,12 @@ single source of truth:
 
 - **Inventory & lifecycle** — machines, their state
   (PENDING / ACTIVE / OFFLINE / REVOKED), and exec mode.
-- **Enrollment** — limited-use, revocable tokens; manual approval by default.
+- **Enrollment** — limited-use, revocable tokens. Approval is manual by default.
 - **AuthN/Z** — local (Argon2id), LDAP, and OIDC/SSO users with admin / operator
-  / read-only RBAC; optional 2FA (TOTP + WebAuthn); per-worker secrets.
-- **Task queue** — a DB-backed queue routes actions, commands, and updates to
-  workers.
+  / read-only RBAC. Optional 2FA (TOTP + WebAuthn) is supported, and each worker
+  gets its own secret.
+- **Task queue** — a DB-backed queue routes work to workers. It delivers the
+  actions and commands they run, plus the updates they install.
 - **Audit** — append-only, hash-chained log of every sensitive operation.
 - **Versioning** — the target worker version and the SSRF allowlist for releases.
 
@@ -64,10 +65,10 @@ React SPA (Vite + TypeScript). It calls the hub **same-origin** (relative
 
 The worker is the connection initiator:
 
-1. **Heartbeat** (`POST /api/worker/heartbeat`) — liveness and installed version;
-   the hub replies with the desired target version and the machine's exec mode.
+1. **Heartbeat** (`POST /api/worker/heartbeat`) — liveness and installed version.
+   The hub replies with the desired target version and the machine's exec mode.
 2. **Poll** (`GET /api/worker/tasks/next`) — claims the oldest pending task
-   (row-locked in PostgreSQL); returns `null` when idle.
+   (row-locked in PostgreSQL) and returns `null` when idle.
 3. **Result** (`POST /api/worker/tasks/{id}/result`) — submits the outcome
    (size-capped, idempotent).
 

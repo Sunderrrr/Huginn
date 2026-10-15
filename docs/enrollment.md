@@ -16,15 +16,15 @@ curl -X POST https://<hub>/api/enrollment-tokens \
 # => { "token": "<plaintext-shown-once>", ... }
 ```
 
-The plaintext token is shown **once**; only its HMAC is stored.
+The plaintext token is shown **once**. Only its HMAC is stored.
 
 Fields:
-- `ttl_seconds` — lifetime in seconds; **`0` = never expires**.
-- `max_uses` — how many VMs may enroll with it; **`0` = unlimited** (a reusable
+- `ttl_seconds` — lifetime in seconds. **`0` = never expires**.
+- `max_uses` — how many VMs may enroll with it. **`0` = unlimited** (a reusable
   *join key*).
 - `auto_approve` — when `true`, VMs enrolled with this token come up **ACTIVE**
   immediately instead of PENDING (skips step 3). Convenient for unattended /
-  bulk provisioning; the tradeoff is that anyone holding the token can add a live
+  bulk provisioning. The tradeoff is that anyone holding the token can add a live
   worker, so keep it secret and revoke it when the rollout is done.
 
 In the dashboard, **Fleet → Add a VM** exposes both as checkboxes ("Reusable
@@ -41,13 +41,14 @@ curl -X POST https://<hub>/api/enrollment-tokens \
   -d '{"label":"ansible","ttl_seconds":0,"max_uses":0,"auto_approve":true}'
 ```
 
-Then run the same one-liner on every host — no per-VM token, no manual approval:
+Then run the same one-liner on every host. No per-VM tokens and no manual
+approval are needed:
 
 ```bash
 curl -fsSLk https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
 ```
 
-The installer is idempotent-friendly: it writes `/etc/huginn/worker.json`, so in
+The installer is idempotent-friendly. It writes `/etc/huginn/worker.json`, so in
 an Ansible role gate the `shell`/`command` task on `creates: /etc/huginn/worker.json`
 (or `args.creates`) to skip already-enrolled hosts on re-runs. Set `NAME=<inventory_hostname>`
 to control the VM name (defaults to the host's hostname). Revoke the token
@@ -65,7 +66,7 @@ curl -fsSLk https://<hub>/install.sh | HUB_URL=https://<hub> TOKEN=<token> bash
 
 The installer detects the architecture, downloads and checksum-verifies the
 worker binary **from the hub** (`/dist`), bootstraps trust for a self-signed hub
-CA if needed, enrolls, and installs the systemd service.
+CA if needed. It then enrolls and installs the systemd service.
 
 ### What enrollment does
 - The worker calls `POST /api/worker/enroll` with the token and host metadata.
