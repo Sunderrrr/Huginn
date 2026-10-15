@@ -43,8 +43,17 @@
 	handle /healthz {
 		reverse_proxy hub:8000
 	}
-	# Prometheus scrape endpoint (internal — restrict at the firewall/VPN level
-	# if the hub is ever exposed beyond the trusted network).
+	# Prometheus scrape endpoint — not exposed on the public hostname (that is
+	# the externally reachable entry point), only on direct hosts (LAN/VPN IP,
+	# localhost). A local CDN tunnel cannot be distinguished by source IP, so
+	# the public hostname is what we gate on.
+	@metrics_public {
+		path /metrics
+		host {$HUGINN_DOMAIN}
+	}
+	handle @metrics_public {
+		respond 403
+	}
 	handle /metrics {
 		reverse_proxy hub:8000
 	}
