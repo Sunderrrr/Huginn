@@ -96,7 +96,13 @@ detect_arch() {
 }
 
 # Make the hub's TLS trusted. No-op for HTTP or an already-trusted cert; otherwise
-# fetch the hub's CA root (trust-on-first-use) and install it system-wide.
+# fetch the hub's CA root (trust-on-first-use) and install it into the system
+# trust store, handling the major distro families:
+#   Debian/Ubuntu  /usr/local/share/ca-certificates/  + update-ca-certificates
+#   RHEL/Fedora    /etc/pki/ca-trust/source/anchors/ + update-ca-trust
+#   SUSE           /etc/pki/trust/anchors/           + update-ca-certificates
+#   Arch           /etc/ca-certificates/trust-source/anchors/ + trust
+#   Alpine         /usr/local/share/ca-certificates/ + update-ca-certificates
 ensure_hub_trust() {
   case "$HUB_URL" in
     http://*) return 0 ;;
@@ -105,11 +111,32 @@ ensure_hub_trust() {
     return 0
   fi
   log "hub certificate not trusted; installing the hub CA (trust-on-first-use)"
-  require_cmd update-ca-certificates
-  local dst="/usr/local/share/ca-certificates/huginn-hub-ca.crt"
-  curl -fsSLk "${HUB_URL}/caddy-root.crt" -o "$dst" \
+
+  local ca_dst="" ca_cmd=""
+  if command -v update-ca-trust >/dev/null 2>&1; then
+    # RHEL, CentOS, Fedora, Rocky, Alma — also Arch (trust)
+    ca_dst="/etc/pki/ca-trust/source/anchors/huginn-hub-ca.crt"
+    ca_cmd="update-ca-trust extract"
+  elif [ -d /etc/pki/trust/anchors ] 2>/dev/null; then
+    # openSUSE / SLES
+    ca_dst="/etc/pki/trust/anchors/huginn-hub-ca.crt"
+    ca_cmd="update-ca-certificates"
+  elif [ -d /etc/ca-certificates/trust-source/anchors ] 2>/dev/null; then
+    # Arch / Manjaro (p11-kit)
+    ca_dst="/etc/ca-certificates/trust-source/anchors/huginn-hub-ca.crt"
+    ca_cmd="trust extract-compat"
+  elif command -v update-ca-certificates >/dev/null 2>&1; then
+    # Debian, Ubuntu, Alpine (all use the same tool)
+    ca_dst="/usr/local/share/ca-certificates/huginn-hub-ca.crt"
+    ca_cmd="update-ca-certificates"
+  else
+    err "no CA trust store found (tried update-ca-trust, /etc/pki/trust, /etc/ca-certificates, update-ca-certificates)"
+  fi
+
+  log "installing hub CA to ${ca_dst}"
+  curl -fsSLk "${HUB_URL}/caddy-root.crt" -o "${ca_dst}" \
     || err "could not fetch the hub CA from ${HUB_URL}/caddy-root.crt"
-  update-ca-certificates >/dev/null 2>&1 || true
+  ${ca_cmd} >/dev/null 2>&1 || true
   curl -fsS "${HUB_URL}/healthz" >/dev/null 2>&1 \
     || err "hub still not trusted after installing its CA"
 }
