@@ -1,8 +1,8 @@
 # MCP integration
 
 The MCP server exposes the hub's capabilities as tools for an external AI agent
-(e.g. "Hermes"). It is a thin façade over the hub REST API — no business logic is
-duplicated, and it never contacts workers directly.
+(that is, any MCP-capable client). It is a thin façade over the hub REST API — no
+business logic is duplicated, and it never contacts workers directly.
 
 ## Tools
 
@@ -123,7 +123,7 @@ per-user tokens validated against the hub.
 ## Connecting to other agents
 
 See [MCP Agent Integrations](mcp-agents.md) for detailed setup guides for
-Hermes, Claude Desktop, Claude Code, Cursor, Continue, OpenAI proxies, and more.
+Claude Desktop, Claude Code, Cursor, Continue, OpenAI proxies, and more.
 
 ## Security notes
 

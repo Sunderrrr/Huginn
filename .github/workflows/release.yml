@@ -70,9 +70,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build + push huginn-mcp
         run: |
-          docker build -t ghcr.io/example-website/huginn-mcp:${{ github.ref_name }} -t ghcr.io/example-website/huginn-mcp:latest mcp-rs
-          docker push ghcr.io/example-website/huginn-mcp:${{ github.ref_name }}
-          docker push ghcr.io/example-website/huginn-mcp:latest
+          docker build -t ghcr.io/${{ github.repository_owner }}/huginn-mcp:${{ github.ref_name }} -t ghcr.io/${{ github.repository_owner }}/huginn-mcp:latest mcp-rs
+          docker push ghcr.io/${{ github.repository_owner }}/huginn-mcp:${{ github.ref_name }}
+          docker push ghcr.io/${{ github.repository_owner }}/huginn-mcp:latest
 
   build-hub-rs:
     runs-on: ubuntu-latest
@@ -108,9 +108,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build + push huginn-hub
         run: |
-          docker build -t ghcr.io/example-website/huginn-hub:${{ github.ref_name }} -t ghcr.io/example-website/huginn-hub:latest hub-rs
-          docker push ghcr.io/example-website/huginn-hub:${{ github.ref_name }}
-          docker push ghcr.io/example-website/huginn-hub:latest
+          docker build -t ghcr.io/${{ github.repository_owner }}/huginn-hub:${{ github.ref_name }} -t ghcr.io/${{ github.repository_owner }}/huginn-hub:latest hub-rs
+          docker push ghcr.io/${{ github.repository_owner }}/huginn-hub:${{ github.ref_name }}
+          docker push ghcr.io/${{ github.repository_owner }}/huginn-hub:latest
       - name: Boot smoke (migrations + /healthz)
         run: |
           docker run -d --name hub --network host \
