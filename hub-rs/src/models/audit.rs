@@ -115,8 +115,9 @@ pub async fn chain_head(pool: &PgPool) -> Result<String, DbError> {
 ///
 /// When appending back-to-back, prefer [`append_chained`]: it holds the
 /// advisory lock while the hash is computed, so concurrent writers cannot fork
-/// the chain.
-pub async fn append(
+/// the chain. L-5: crate-visible only — production writers must go through
+/// the chained appends, never assemble a raw (non-locked) audit row.
+pub(crate) async fn append(
     pool: &PgPool,
     new: AuditNew,
     prev_hash: String,

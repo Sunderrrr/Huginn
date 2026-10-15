@@ -652,9 +652,7 @@ mod tests {
 
         Mock::given(method("HEAD"))
             .and(path("/backups/db/x.sql.gz"))
-            .respond_with(
-                ResponseTemplate::new(302).insert_header("Location", "/attacker-hoooks"),
-            )
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", "/attacker-hoooks"))
             .expect(1)
             .mount(&server)
             .await;

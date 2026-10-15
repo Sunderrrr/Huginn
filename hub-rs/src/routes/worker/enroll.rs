@@ -375,14 +375,9 @@ mod tests {
 
         // The chain contains exactly one enrollment entry with the expected
         // shape...
-        let entries = crate::models::audit::list_filtered(
-            &pool,
-            None,
-            Some("worker_enrolled"),
-            10,
-        )
-        .await
-        .unwrap();
+        let entries = crate::models::audit::list_filtered(&pool, None, Some("worker_enrolled"), 10)
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 1, "one worker_enrolled entry");
         let entry = &entries[0];
         assert_eq!(entry.actor_type, crate::models::ActorType::System);

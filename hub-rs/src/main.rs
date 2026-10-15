@@ -381,13 +381,19 @@ async fn run_due_schedules(
 ///   command, which requires `custom` or `unrestricted`
 ///   (`create_custom_action_task`);
 /// * built-in actions keep going through the normal action validation.
-fn schedule_allowed_on(sched: &models::scheduled_command::ScheduledCommand, vm: &models::vm::VM) -> bool {
+fn schedule_allowed_on(
+    sched: &models::scheduled_command::ScheduledCommand,
+    vm: &models::vm::VM,
+) -> bool {
     if sched.task_kind == "action" {
         let name = sched.action_name.as_deref().unwrap_or_default();
         if routes::fleet::tasks::action_spec(name).is_some() {
             return true; // built-in action: normal validation applies
         }
-        return matches!(vm.exec_mode, models::enums::ExecMode::Custom | models::enums::ExecMode::Unrestricted);
+        return matches!(
+            vm.exec_mode,
+            models::enums::ExecMode::Custom | models::enums::ExecMode::Unrestricted
+        );
     }
     vm.exec_mode == models::enums::ExecMode::Unrestricted
 }
@@ -502,19 +508,29 @@ mod tests {
             "a whitelist VM targeted by a schedule command gets no task"
         );
         assert!(!schedule_allowed_on(&command, &vm_with(ExecMode::Custom)));
-        assert!(schedule_allowed_on(&command, &vm_with(ExecMode::Unrestricted)));
+        assert!(schedule_allowed_on(
+            &command,
+            &vm_with(ExecMode::Unrestricted)
+        ));
 
         // Custom actions (outside the built-in catalog): custom or
         // unrestricted, the same policy as create_custom_action_task.
         let custom = schedule("action", Some("deploy_app"));
         assert!(!schedule_allowed_on(&custom, &vm_with(ExecMode::Whitelist)));
         assert!(schedule_allowed_on(&custom, &vm_with(ExecMode::Custom)));
-        assert!(schedule_allowed_on(&custom, &vm_with(ExecMode::Unrestricted)));
+        assert!(schedule_allowed_on(
+            &custom,
+            &vm_with(ExecMode::Unrestricted)
+        ));
 
         // Built-in actions run on any mode (the normal action validation
         // still applies).
         let builtin = schedule("action", Some("status"));
-        for mode in [ExecMode::Whitelist, ExecMode::Custom, ExecMode::Unrestricted] {
+        for mode in [
+            ExecMode::Whitelist,
+            ExecMode::Custom,
+            ExecMode::Unrestricted,
+        ] {
             assert!(schedule_allowed_on(&builtin, &vm_with(mode)), "{mode:?}");
         }
     }

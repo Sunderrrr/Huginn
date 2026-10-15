@@ -750,7 +750,9 @@ mod tests {
             is_active: true,
             ..Default::default()
         };
-        let solo = crate::models::user::create(&pool, make_admin("solo")).await.unwrap();
+        let solo = crate::models::user::create(&pool, make_admin("solo"))
+            .await
+            .unwrap();
         let token = state
             .security
             .jwt()
@@ -789,13 +791,13 @@ mod tests {
         }
 
         // One admin: self-demotion, self-deactivation via PUT are refused…
-        for body in [
-            json!({"role": "operator"}),
-            json!({"is_active": false}),
-        ] {
+        for body in [json!({"role": "operator"}), json!({"is_active": false})] {
             let (status, resp) = send(&state, request("PUT", solo.id, body)).await;
             assert_eq!(status, StatusCode::BAD_REQUEST);
-            assert_eq!(resp, json!({"detail": "cannot demote/deactivate the last admin"}));
+            assert_eq!(
+                resp,
+                json!({"detail": "cannot demote/deactivate the last admin"})
+            );
         }
         // …and the admin row is still an active admin.
         let still = crate::models::user::get_by_id(&pool, solo.id)
@@ -808,16 +810,24 @@ mod tests {
         let second = crate::models::user::create(&pool, make_admin("second"))
             .await
             .unwrap();
-        let (status, resp) = send(&state, request("PUT", second.id, json!({"role": "readonly"}))).await;
+        let (status, resp) = send(
+            &state,
+            request("PUT", second.id, json!({"role": "readonly"})),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{resp}");
         assert_eq!(resp["role"], json!("readonly"));
         let (status, _) = send(&state, request("DELETE", second.id, json!(null))).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
 
         // Back to one admin: the guard fires again.
-        let (status, resp) = send(&state, request("PUT", solo.id, json!({"role": "readonly"}))).await;
+        let (status, resp) =
+            send(&state, request("PUT", solo.id, json!({"role": "readonly"}))).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(resp, json!({"detail": "cannot demote/deactivate the last admin"}));
+        assert_eq!(
+            resp,
+            json!({"detail": "cannot demote/deactivate the last admin"})
+        );
 
         drop(guard);
     }
