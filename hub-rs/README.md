@@ -36,35 +36,91 @@ CI runs this gate on every PR touching `hub-rs/`. See `PARITY_HUB.md` and
 ## Module structure
 
 ```
-hub-rs/
-├── migrations/               # embedded SQL schema (idempotent, applied on start)
-├── tools/api_parity.py       # parity-gate capture/diff harness
-├── golden/{python,rust}/     # golden API responses for the parity gate
-├── API_SURFACE.json          # machine-readable list of endpoints
-└── src/
-    ├── main.rs               # app assembly: builds the router and serves
-    ├── config.rs             # env config + prod fail-closed validation
-    ├── db.rs                 # SQLx pool + migrations
-    ├── error.rs              # API error type -> HTTP responses
-    ├── models/               # DB row types & domain structs
-    │   ├── vm.rs, user.rs, task.rs, enrollment.rs
-    │   ├── audit.rs, mcp_token.rs, custom_action.rs
-    │   ├── scheduled_command.rs, setting.rs, tag.rs
-    │   ├── webauthn.rs, enums.rs
-    ├── routes/               # HTTP layer (axum routers)
-    │   ├── worker.rs         #   worker API: enroll / heartbeat / poll / result
-    │   ├── metrics.rs        #   Prometheus metrics
-    │   ├── authapi/          #   auth.rs, mfa.rs, users.rs
-    │   ├── fleet/            #   vms, tasks, execution, audit, events (SSE)
-    │   └── admin/            #   enrollment, mcp_tokens, custom_actions,
-    │                         #   schedules, settings, tags
-    ├── security/             # crypto primitives
-    │   ├── jwt.rs, password.rs, secret.rs
-    │   ├── fernet.rs, totp.rs, audit.rs
-    └── services/             # business logic behind the routes
-        ├── oidc.rs, ldap.rs, webauthn.rs
-        ├── metrics.rs, notifications.rs
-        ├── task_events.rs, versioning.rs
+- `bin/huginn-parity.rs`
+- `config.rs`
+- `db.rs`
+- `error.rs`
+- `main.rs`
+- `models/audit.rs`
+- `models/custom_action.rs`
+- `models/enrollment.rs`
+- `models/enums.rs`
+- `models/mcp_token.rs`
+- `models/mod.rs`
+- `models/scheduled_command.rs`
+- `models/setting.rs`
+- `models/tag.rs`
+- `models/task.rs`
+- `models/user.rs`
+- `models/vm.rs`
+- `models/webauthn.rs`
+- `routes/admin/custom_actions/mod.rs`
+- `routes/admin/custom_actions/shlex.rs`
+- `routes/admin/enrollment.rs`
+- `routes/admin/mcp_tokens.rs`
+- `routes/admin/mod.rs`
+- `routes/admin/schedules/cron.rs`
+- `routes/admin/schedules/mod.rs`
+- `routes/admin/schemas.rs`
+- `routes/admin/settings/mod.rs`
+- `routes/admin/settings/schemas.rs`
+- `routes/admin/store.rs`
+- `routes/admin/tags.rs`
+- `routes/admin/testing.rs`
+- `routes/authapi/auth/mod.rs`
+- `routes/authapi/auth/oidc.rs`
+- `routes/authapi/auth/schemas.rs`
+- `routes/authapi/mfa/backup_codes.rs`
+- `routes/authapi/mfa/live_tests.rs`
+- `routes/authapi/mfa/mod.rs`
+- `routes/authapi/mfa/totp.rs`
+- `routes/authapi/mfa/webauthn.rs`
+- `routes/authapi/middleware.rs`
+- `routes/authapi/mod.rs`
+- `routes/authapi/principal.rs`
+- `routes/authapi/schemas.rs`
+- `routes/authapi/service.rs`
+- `routes/authapi/users.rs`
+- `routes/fleet/audit.rs`
+- `routes/fleet/events.rs`
+- `routes/fleet/execution.rs`
+- `routes/fleet/mod.rs`
+- `routes/fleet/principal.rs`
+- `routes/fleet/tasks/actions.rs`
+- `routes/fleet/tasks/create.rs`
+- `routes/fleet/tasks/mod.rs`
+- `routes/fleet/tasks/release_urls.rs`
+- `routes/fleet/vms.rs`
+- `routes/metrics.rs`
+- `routes/mod.rs`
+- `routes/worker/enroll.rs`
+- `routes/worker/heartbeat.rs`
+- `routes/worker/longpoll.rs`
+- `routes/worker/mod.rs`
+- `routes/worker/results.rs`
+- `security/audit.rs`
+- `security/fernet.rs`
+- `security/jwt.rs`
+- `security/mod.rs`
+- `security/password.rs`
+- `security/secret.rs`
+- `security/totp.rs`
+- `services/ldap.rs`
+- `services/metrics.rs`
+- `services/mod.rs`
+- `services/notifications/discord.rs`
+- `services/notifications/mod.rs`
+- `services/notifications/webhook.rs`
+- `services/oidc/mod.rs`
+- `services/oidc/verify.rs`
+- `services/task_events.rs`
+- `services/versioning.rs`
+- `services/webauthn/assertion.rs`
+- `services/webauthn/attestation.rs`
+- `services/webauthn/helpers.rs`
+- `services/webauthn/mod.rs`
+- `services/webauthn/options.rs`
+- `services/webauthn/test_support.rs`
 ```
 
 ## API entry points
