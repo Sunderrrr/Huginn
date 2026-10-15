@@ -150,7 +150,7 @@ impl S3Config {
                 "backup_s3_endpoint must be a bare scheme://host[:port] URL".into(),
             ));
         }
-        if scheme == "http" && !is_loopback_host(host_of(rest)) {
+        if scheme == "http" && !crate::services::is_loopback_host(host_of(rest)) {
             return Err(BackupError::Config(
                 "insecure backup_s3_endpoint rejected: http:// is only allowed for \
                  loopback hosts (use https://)"
@@ -215,17 +215,6 @@ fn host_of(authority: &str) -> &str {
     match authority.rsplit_once(':') {
         Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => host,
         _ => authority,
-    }
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    match host.parse::<std::net::IpAddr>() {
-        Ok(ip) => ip.is_loopback(),
-        Err(_) => false,
     }
 }
 

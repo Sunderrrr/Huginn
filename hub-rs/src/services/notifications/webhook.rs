@@ -210,12 +210,11 @@ fn authority_host(url: &str) -> Option<&str> {
     Some(hostport.split(':').next().unwrap_or(hostport))
 }
 
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost") || host.starts_with("127.") || host == "[::1]"
-}
-
 /// Webhook URL policy: HTTPS everywhere, `http://` tolerated for loopback only
-/// (what the tests exercise). Returns the URL unchanged on success.
+/// (what the tests exercise — the loopback test uses the shared IP-parsing
+/// helper `crate::services::is_loopback_host`, L-1: `127.evil.com` is a DNS
+/// name, not an IP, and the old `starts_with("127.")` check would have
+/// tolerated it). Returns the URL unchanged on success.
 fn check_webhook_url(url: &str) -> Result<&str, RejectReason> {
     let Some((scheme, host)) = url
         .split_once("://")
@@ -227,7 +226,7 @@ fn check_webhook_url(url: &str) -> Result<&str, RejectReason> {
         return Ok(url);
     }
     if scheme.eq_ignore_ascii_case("http") {
-        return if is_loopback_host(host) {
+        return if crate::services::is_loopback_host(host) {
             Ok(url)
         } else {
             Err(RejectReason::InsecureHttp)
@@ -316,6 +315,16 @@ mod tests {
         assert!(check_webhook_url("http://127.0.0.1:9999/hook").is_ok());
         assert!(check_webhook_url("http://localhost:9999/hook").is_ok());
         assert!(check_webhook_url("http://[::1]:9999/hook").is_ok());
+        // L-1: a DNS name that merely LOOKS like an IP is not loopback — the
+        // host must parse as an IP literal, `127.evil.com` does not.
+        assert_eq!(
+            check_webhook_url("http://127.evil.com:9999/hook"),
+            Err(RejectReason::InsecureHttp)
+        );
+        assert_eq!(
+            check_webhook_url("http://127.0.0.1.evil.com:9999/hook"),
+            Err(RejectReason::InsecureHttp)
+        );
         // http:// anywhere else is refused (Python accepted it — deliberate
         // hardening).
         assert_eq!(
@@ -335,6 +344,18 @@ mod tests {
             check_webhook_url("discord.com/api/webhooks/1/tok"),
             Err(RejectReason::NotAUrl)
         );
+    }
+
+    #[test]
+    fn shared_loopback_helper_parses_ips_instead_of_prefixes() {
+        // The shared helper (services/mod.rs) backs both the webhook policy
+        // and the S3 endpoint validation (L-1).
+        for host in ["127.0.0.1", "127.255.0.1", "localhost", "LOCALHOST", "[::1]"] {
+            assert!(crate::services::is_loopback_host(host), "{host}");
+        }
+        for host in ["127.evil.com", "127.0.0.1.evil.com", "10.0.0.1", "evil.com", ""] {
+            assert!(!crate::services::is_loopback_host(host), "{host}");
+        }
     }
 
     #[test]
