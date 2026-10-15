@@ -1,18 +1,21 @@
 //! huginn-worker — the fleet worker daemon. Subcommands:
 //!
-//!     enroll          register this machine with the hub (used by install.sh)
-//!     run             run the agent loop (systemd ExecStart)
-//!     install-service write and enable the systemd unit
+//!     enroll          register this machine with the hub (used by install.sh
+//!                     on Linux / install.ps1 on Windows)
+//!     run             run the agent loop (systemd ExecStart / SCM service)
+//!     install-service write+enable the systemd unit (Linux) or create the
+//!                     Windows service (Windows)
 //!     healthcheck     exit 0 if this binary is runnable (used by self-update)
 //!     version         print the build version
 //!
-//! Rust port of the Go worker; identical CLI, wire protocol, and state file.
+//! Rust port of the Go worker; identical CLI, wire protocol, and state file
+//! on Linux and Windows.
 
 mod agent;
 mod config;
 mod exec;
 mod hubclient;
-mod systemd;
+mod service;
 mod update;
 mod whitelist;
 
@@ -20,6 +23,7 @@ use config::State;
 use hubclient::{Client, EnrollRequest, Options};
 use std::io::Write;
 use std::sync::Arc;
+use tokio::sync::watch;
 
 const USAGE: &str =
     "usage: huginn-worker <enroll|run|install-service|healthcheck|version> [--state-dir DIR]";
@@ -76,15 +80,37 @@ fn parse_state_dir(args: &[String], dir: &mut String) -> Vec<String> {
 }
 
 fn machine_hostname() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|s| s.trim().to_string())
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .unwrap_or_else(|| "localhost".into())
+    #[cfg(unix)]
+    {
+        std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .map(|s| s.trim().to_string())
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("HOSTNAME").ok())
+            .unwrap_or_else(|| "localhost".into())
+    }
+    #[cfg(windows)]
+    {
+        std::env::var("COMPUTERNAME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "localhost".into())
+    }
+}
+
+/// OS reported to the hub in os_info (and used for the enroll arch mapping).
+#[cfg(unix)]
+fn os_name() -> &'static str {
+    "linux"
+}
+#[cfg(windows)]
+fn os_name() -> &'static str {
+    "windows"
 }
 
 /// Go GOARCH names, which the hub stores as the VM architecture.
+/// `std::env::consts::ARCH` is portable: "x86_64"/"aarch64" on both Linux
+/// and Windows, mapped to the hub's "amd64"/"arm64".
 fn goarch() -> &'static str {
     match std::env::consts::ARCH {
         "x86_64" => "amd64",
@@ -125,7 +151,7 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
             hostname: hostname.clone(),
             ip_address: String::new(),
             arch: goarch().into(),
-            os_info: Some(serde_json::json!({"os": "linux", "arch": goarch()})),
+            os_info: Some(serde_json::json!({"os": os_name(), "arch": goarch()})),
             worker_version: config::VERSION.into(),
         })
         .await
@@ -154,28 +180,26 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
 }
 
 async fn cmd_run(state_dir: &str) -> i32 {
-    let state = match config::load(&config::state_path(state_dir)) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: load state (did you enroll?): {e}");
-            return 1;
+    #[cfg(windows)]
+    {
+        // When the SCM launched us, run under the service dispatcher (this
+        // blocks until the service stops); a console run falls through.
+        match service::run_as_service(state_dir) {
+            Ok(true) => return 0, // service ran and reported Stopped
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 1;
+            }
         }
-    };
-    let client = match Client::new(Options {
-        base_url: state.hub_url.clone(),
-        worker_id: state.worker_id.clone(),
-        worker_secret: state.worker_secret.clone(),
-        allow_insecure: state.allow_insecure_transport,
-    }) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
+    }
+    run_console(state_dir).await
+}
 
+/// Console mode: SIGINT/SIGTERM (ctrl-c on Windows) → clean shutdown.
+async fn run_console(state_dir: &str) -> i32 {
     // SIGINT/SIGTERM → clean shutdown so the loop can exit.
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
@@ -201,9 +225,36 @@ async fn cmd_run(state_dir: &str) -> i32 {
         let _ = shutdown_tx.send(());
     });
 
+    run_agent(state_dir, shutdown_rx).await
+}
+
+/// Loads the state, builds the hub client, and runs the agent loop until a
+/// clean shutdown or an applied update. Shared by console mode and the
+/// Windows service entry point. Returns the process exit code.
+async fn run_agent(state_dir: &str, shutdown_rx: watch::Receiver<()>) -> i32 {
+    let state = match config::load(&config::state_path(state_dir)) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: load state (did you enroll?): {e}");
+            return 1;
+        }
+    };
+    let client = match Client::new(Options {
+        base_url: state.hub_url.clone(),
+        worker_id: state.worker_id.clone(),
+        worker_secret: state.worker_secret.clone(),
+        allow_insecure: state.allow_insecure_transport,
+    }) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
     let a = Arc::new(agent::Agent::new(Arc::new(client), state, shutdown_rx));
     // A clean return means either a clean shutdown or an applied update; exit
-    // 0 so systemd relaunches the (possibly new) binary.
+    // 0 so the supervisor relaunches the (possibly new) binary.
     match a.run().await {
         Ok(()) => 0,
         Err(e) => {
@@ -218,12 +269,78 @@ async fn cmd_install_service(state_dir: &str, args: &[String]) -> i32 {
         .first()
         .cloned()
         .unwrap_or_else(|| config::DEFAULT_BINARY_PATH.to_string());
-    let unit_path = format!("/etc/systemd/system/{}.service", systemd::SERVICE_NAME);
-    match systemd::install(&unit_path, &binary_path, state_dir).await {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("error: {e}");
-            1
+    #[cfg(unix)]
+    {
+        let unit_path = format!("/etc/systemd/system/{}.service", service::SERVICE_NAME);
+        match service::install(&unit_path, &binary_path, state_dir).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("error: {e}");
+                1
+            }
         }
+    }
+    #[cfg(windows)]
+    {
+        match service::install(&binary_path, state_dir) {
+            Ok(()) => {
+                println!(
+                    "service {} installed (auto-start, LocalSystem)",
+                    service::SERVICE_NAME
+                );
+                0
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                1
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_goarch_maps_go_names() {
+        // Whatever this build's ARCH is, the mapping must be Go's GOARCH.
+        match std::env::consts::ARCH {
+            "x86_64" => assert_eq!(goarch(), "amd64"),
+            "aarch64" => assert_eq!(goarch(), "arm64"),
+            other => assert_eq!(goarch(), other),
+        }
+    }
+
+    #[test]
+    fn test_parse_state_dir_extracts_flag() {
+        let mut dir = config::DEFAULT_STATE_DIR.to_string();
+        let rest = parse_state_dir(
+            &[
+                "--state-dir".to_string(),
+                "/x".to_string(),
+                "extra".to_string(),
+            ],
+            &mut dir,
+        );
+        assert_eq!(dir, "/x");
+        assert_eq!(rest, vec!["extra".to_string()]);
+
+        // A dangling --state-dir is kept as a positional arg, not silently eaten.
+        let mut dir2 = String::new();
+        let rest2 = parse_state_dir(&["--state-dir".to_string()], &mut dir2);
+        assert_eq!(rest2, vec!["--state-dir".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_os_name_is_linux() {
+        assert_eq!(os_name(), "linux");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_os_name_is_windows() {
+        assert_eq!(os_name(), "windows");
     }
 }

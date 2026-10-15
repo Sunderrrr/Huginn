@@ -439,6 +439,8 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "windows-service",
+ "windows-sys 0.52.0",
  "wiremock",
 ]
 
@@ -1499,10 +1501,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
 name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-service"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d24d6bcc7f734a4091ecf8d7a64c5f7d7066f45585c1861eba06449909609c8a"
+dependencies = [
+ "bitflags",
+ "widestring",
+ "windows-sys 0.52.0",
+]
 
 [[package]]
 name = "windows-sys"

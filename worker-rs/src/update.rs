@@ -6,6 +6,7 @@
 //
 // Rust port of worker/internal/update.
 use std::fmt;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -142,6 +143,9 @@ impl Updater {
                 "checksum mismatch: got {sum} want {expected}"
             )));
         }
+        // On Unix the staged file needs the executable bit; on Windows
+        // executability is not a permission bit.
+        #[cfg(unix)]
         tokio::fs::set_permissions(tmp, std::fs::Permissions::from_mode(0o755))
             .await
             .map_err(|e| Error::msg(e.to_string()))?;
@@ -157,11 +161,30 @@ impl Updater {
         {
             return Err(Error::msg("backup path is a symlink; refusing"));
         }
+        // Windows: a running image can be RENAMED but not replaced in place
+        // (the swap rename would have to delete the locked target first),
+        // so move the current binary out of the way — that doubles as the
+        // backup. If the move fails (unexpected), fall back to a copy.
+        #[cfg(windows)]
+        let moved_old = tokio::fs::rename(&binary_path, &backup).await.is_ok();
+        #[cfg(windows)]
+        if !moved_old {
+            copy_file(&binary_path, &backup)
+                .await
+                .map_err(|e| Error::msg(format!("backup current binary: {e}")))?;
+        }
+        #[cfg(unix)]
         copy_file(&binary_path, &backup)
             .await
             .map_err(|e| Error::msg(format!("backup current binary: {e}")))?;
 
         if let Err(e) = tokio::fs::rename(&tmp, &binary_path).await {
+            // On Windows the move-away above can leave the target path
+            // missing — put the old binary back before failing.
+            #[cfg(windows)]
+            if moved_old {
+                let _ = tokio::fs::rename(&backup, &binary_path).await;
+            }
             return Err(Error::msg(format!("atomic swap: {e}")));
         }
 
@@ -180,6 +203,9 @@ impl Updater {
             )));
         }
 
+        // On Windows with a moved-out old image, this .bak may still be the
+        // running image (deleting a live exe fails) — best-effort removal,
+        // it disappears after the service restarts onto the new binary.
         let _ = tokio::fs::remove_file(&backup).await;
         Ok(())
     }
@@ -223,10 +249,19 @@ impl Updater {
         }
         // create_new (O_EXCL): never write through a pre-placed symlink, and
         // never silently truncate an existing file we did not create.
+        // 0600 on Unix; inherited ACLs on Windows.
+        #[cfg(unix)]
         let mut out = tokio::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .mode(0o600)
+            .open(dest)
+            .await
+            .map_err(|e| Error::msg(e.to_string()))?;
+        #[cfg(windows)]
+        let mut out = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
             .open(dest)
             .await
             .map_err(|e| Error::msg(e.to_string()))?;
@@ -358,11 +393,21 @@ async fn file_sha256(path: &Path) -> std::io::Result<String> {
 
 async fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
     let mut input = tokio::fs::File::open(src).await?;
+    // 0755 on Unix (the backup keeps being executable); inherited ACLs on
+    // Windows.
+    #[cfg(unix)]
     let mut out = tokio::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .mode(0o755)
+        .open(dst)
+        .await?;
+    #[cfg(windows)]
+    let mut out = tokio::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
         .open(dst)
         .await?;
     let mut buf = vec![0u8; 64 * 1024];

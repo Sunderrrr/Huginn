@@ -19,7 +19,22 @@ thiserror = "2"
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
+
+# Platform-specific dependencies: a Linux build pulls none of the Windows
+# crates, and a Windows build pulls no libc.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Windows service (SCM) management + the service dispatcher.
+windows-service = "0.7"
+# Job Objects: kill a timed-out command's whole descendant tree (the Windows
+# equivalent of the Unix process-group kill).
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 wiremock = "0.6"
