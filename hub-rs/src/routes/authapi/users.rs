@@ -279,6 +279,10 @@ async fn update_user(
     let user_id = parse_user_id(&user_id)?;
     let body = body.map_err(map_json_rejection)?.0;
     let user = get_user_or_404(&state, user_id).await?;
+    // M-5: demoting or deactivating the last admin would lock the fleet out.
+    if strips_admin(&user, &body) {
+        ensure_not_last_admin(&state).await?;
+    }
     let (patch, detail) = user_update_effect(&user, &body);
     let user = crate::models::user::update(&state.pool, user.id, patch)
         .await
@@ -310,6 +314,11 @@ async fn deactivate_user(
     let user = get_user_or_404(&state, user_id).await?;
     if user.id.to_string() == principal.actor_id {
         return Err(ApiError::bad_request("cannot deactivate yourself"));
+    }
+    // M-5: deactivating the last admin would lock the fleet out (defense in
+    // depth — the self-check above already covers the single-admin case).
+    if user.role == UserRole::Admin {
+        ensure_not_last_admin(&state).await?;
     }
     crate::models::user::update(
         &state.pool,
@@ -481,6 +490,33 @@ async fn get_user_or_404(state: &AuthState, user_id: Uuid) -> Result<User, ApiEr
 }
 
 // ---------------------------------------------------------------------------
+// M-5: last-admin guard
+// ---------------------------------------------------------------------------
+
+/// Whether this update strips the target's admin capability — a role drop to
+/// operator/readonly or a deactivation (`is_active: false`).
+fn strips_admin(user: &User, body: &UserUpdate) -> bool {
+    user.role == UserRole::Admin
+        && (body.role.is_some_and(|r| r != UserRole::Admin) || body.is_active == Some(false))
+}
+
+/// Refuse to demote or deactivate the only admin — the fleet would be locked
+/// out of every admin operation (user management, settings, enrollment).
+/// `count_admins` counts every admin row, so more than one must remain for
+/// the change to go through.
+async fn ensure_not_last_admin(state: &AuthState) -> Result<(), ApiError> {
+    let admins = crate::models::user::count_admins(&state.pool)
+        .await
+        .map_err(db_err)?;
+    if admins <= 1 {
+        return Err(ApiError::bad_request(
+            "cannot demote/deactivate the last admin",
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -623,5 +659,166 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ---- M-5: last-admin guard ---------------------------------------------
+
+    #[test]
+    fn strips_admin_covers_role_drop_and_deactivation() {
+        let admin = sample_user(UserRole::Admin);
+
+        // Nothing changes → no guard.
+        assert!(!strips_admin(
+            &admin,
+            &UserUpdate {
+                role: None,
+                is_active: None,
+                email: None
+            }
+        ));
+        assert!(!strips_admin(
+            &admin,
+            &UserUpdate {
+                role: Some(UserRole::Admin),
+                is_active: Some(true),
+                email: None
+            }
+        ));
+        // Role drop or deactivation of an admin → guard.
+        assert!(strips_admin(
+            &admin,
+            &UserUpdate {
+                role: Some(UserRole::Operator),
+                is_active: None,
+                email: None
+            }
+        ));
+        assert!(strips_admin(
+            &admin,
+            &UserUpdate {
+                role: Some(UserRole::Readonly),
+                is_active: None,
+                email: None
+            }
+        ));
+        assert!(strips_admin(
+            &admin,
+            &UserUpdate {
+                role: None,
+                is_active: Some(false),
+                email: None
+            }
+        ));
+        // Non-admin targets never trip the guard.
+        let operator = sample_user(UserRole::Operator);
+        assert!(!strips_admin(
+            &operator,
+            &UserUpdate {
+                role: Some(UserRole::Readonly),
+                is_active: Some(false),
+                email: None
+            }
+        ));
+    }
+
+    /// End-to-end exercise of the M-5 guard against a live PostgreSQL
+    /// (skipped unless `HUGINN_TEST_DATABASE_URL` is set).
+    #[tokio::test]
+    async fn the_last_admin_cannot_be_demoted_or_deactivated() {
+        let Ok(url) = std::env::var("HUGINN_TEST_DATABASE_URL") else {
+            eprintln!("skipped: HUGINN_TEST_DATABASE_URL not set");
+            return;
+        };
+        let guard = crate::db::LIVE_DB_GUARD.lock().await;
+        let pool = crate::db::connect(&url, 4).await.expect("connect");
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        crate::db::run_migrations(&pool).await.expect("migrations");
+
+        // The route state shares the migrated pool.
+        let state = AuthState::new(pool.clone(), crate::config::Config::default());
+        let make_admin = |username: &str| crate::models::user::UserNew {
+            username: username.into(),
+            password_hash: Some("h".into()),
+            role: UserRole::Admin,
+            is_active: true,
+            ..Default::default()
+        };
+        let solo = crate::models::user::create(&pool, make_admin("solo")).await.unwrap();
+        let token = state
+            .security
+            .jwt()
+            .create_access_token(&solo.id.to_string(), "admin", 60)
+            .unwrap();
+        let request = |method: &str, user_id: uuid::Uuid, body: serde_json::Value| {
+            axum::http::Request::builder()
+                .method(method)
+                .uri(format!("/api/users/{user_id}"))
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(if body.is_null() {
+                    String::new()
+                } else {
+                    body.to_string()
+                }))
+                .unwrap()
+        };
+        async fn send(
+            state: &AuthState,
+            request: axum::http::Request<Body>,
+        ) -> (StatusCode, serde_json::Value) {
+            let response = crate::routes::authapi::router(state.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or(json!(null)),
+            )
+        }
+
+        // One admin: self-demotion, self-deactivation via PUT are refused…
+        for body in [
+            json!({"role": "operator"}),
+            json!({"is_active": false}),
+        ] {
+            let (status, resp) = send(&state, request("PUT", solo.id, body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(resp, json!({"detail": "cannot demote/deactivate the last admin"}));
+        }
+        // …and the admin row is still an active admin.
+        let still = crate::models::user::get_by_id(&pool, solo.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(still.is_admin() && still.is_active);
+
+        // A second admin: demotion and deactivation now go through.
+        let second = crate::models::user::create(&pool, make_admin("second"))
+            .await
+            .unwrap();
+        let (status, resp) = send(&state, request("PUT", second.id, json!({"role": "readonly"}))).await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+        assert_eq!(resp["role"], json!("readonly"));
+        let (status, _) = send(&state, request("DELETE", second.id, json!(null))).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        // Back to one admin: the guard fires again.
+        let (status, resp) = send(&state, request("PUT", solo.id, json!({"role": "readonly"}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(resp, json!({"detail": "cannot demote/deactivate the last admin"}));
+
+        drop(guard);
     }
 }
