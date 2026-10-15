@@ -23,7 +23,8 @@ spec:
         runAsUser: 101 # nginx unprivileged user
       containers:
         - name: dashboard
-          image: ghcr.io/cronos-website/huginn-dashboard:latest
+          # Substitute <owner> with your registry namespace.
+        image: ghcr.io/<owner>/huginn-dashboard:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80

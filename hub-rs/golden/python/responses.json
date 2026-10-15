@@ -18,7 +18,7 @@
     "exit_code": null,
     "id": 1,
     "result_status": null,
-    "source_ip": "10.89.19.1",
+    "source_ip": "<IP>",
     "ts": "<TS>",
     "vm_id": null
    }
@@ -63,7 +63,7 @@
    "label": "",
    "max_uses": 1,
    "revoked_at": null,
-   "token": "Sd-Q-eu5X0BC3952sdxjwotelnfIOttvGIzUvL5T9xc",
+   "token": "<TOKEN>",
    "uses_count": 0
   },
   "method": "POST",
@@ -187,7 +187,7 @@
    "color": "#ff0000",
    "created_at": "<TS>",
    "id": "<UUID>",
-   "name": "parity-1791996849"
+   "name": "parity-<N>"
   },
   "method": "POST",
   "path": "/api/tags",
@@ -204,7 +204,7 @@
    "color": "#00ff00",
    "created_at": "<TS>",
    "id": "<UUID>",
-   "name": "parity-1791996849"
+   "name": "parity-<N>"
   },
   "method": "PUT",
   "path": "/api/tags/<UUID>",
@@ -259,7 +259,7 @@
   "body": {
    "state": "pending",
    "worker_id": "<UUID>",
-   "worker_secret": "mo-Fv1zZKH9p4aufobNSUnQzgWaGko7x1D3yB_E2UcI"
+   "worker_secret": "<TOKEN>"
   },
   "method": "POST",
   "path": "/api/worker/enroll",

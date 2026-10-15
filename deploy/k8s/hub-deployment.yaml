@@ -21,7 +21,8 @@ spec:
         fsGroup: 10001
       containers:
         - name: hub
-          image: ghcr.io/cronos-website/huginn-hub:latest
+          # Substitute <owner> with your registry namespace.
+        image: ghcr.io/<owner>/huginn-hub:latest
           imagePullPolicy: IfNotPresent
           # `command` overrides the image entrypoint (which would otherwise run
           # migrations per-pod) — migrations are handled by huginn-migrate Job.

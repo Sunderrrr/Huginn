@@ -15,7 +15,7 @@ hub↔worker ni la sécurité. Branche de référence : `main` (aee4be6).
 
 ## Steps
 
-### Step 1 — Worker Rust (branche `rust-worker`, worktree `/opt/huginn-worker-rs`)
+### Step 1 — Worker Rust (branche `rust-worker`, worktree `<worktree>/worker-rs-work`)
 Portage intégral de `worker/` (Go, 1 400 lignes) vers `worker-rs/` (Rust, tokio).
 Parité stricte : CLI (`enroll|run|install-service|healthcheck|version`, `--state-dir`),
 env (`HUB_URL, TOKEN, NAME, HUGINN_ALLOW_INSECURE`), state `worker.json` (0600, atomique),
@@ -30,7 +30,7 @@ refuser localhost/.local/.internal/169.254.169.254…).
 Tests : port de tous les `*_test.go` + clippy clean. Sortie : `cargo test` vert.
 Vérif : `cargo build --release && ./target/release/huginn-worker version`
 
-### Step 2 — MCP Rust (branche `rust-mcp`, worktree `/opt/huginn-mcp-rs`) — PARALLÈLE au Step 1
+### Step 2 — MCP Rust (branche `rust-mcp`, worktree `<worktree>/mcp-rs-work`) — PARALLÈLE au Step 1
 Portage de `mcp/` (Python, 533 lignes) vers `mcp-rs/` avec le SDK officiel `rmcp`.
 Contrat strict : 9 tools identiques (list_vms/brief, get_vm_status, list_actions,
 execute_action, execute_command, trigger_update, get_task, wait_for_task,
@@ -41,7 +41,7 @@ forwarding OBO sur chaque call, extraction IP X-Real-IP→XFF→peer, instructio
 identiques, env `HUGINN_MCP_HUB_URL/SERVICE_TOKEN/TRANSPORT/HOST/PORT`.
 Sortie : `cargo test` vert (tests resolve_vm + cache avec serveur mock).
 
-### Step 3 — Hub : long-poll event-driven (branche `hub-longpoll-events`, worktree `/opt/huginn-hub-perf`) — PARALLÈLE
+### Step 3 — Hub : long-poll event-driven (branche `hub-longpoll-events`, worktree `<worktree>/hub-perf-work`) — PARALLÈLE
 `hub/app/api/routes/worker.py::next_task` : remplacer le re-poll aveugle de 0,5 s par
 une attente réveillée par `task_events` (déjà notifié dans submit_result). Cap 25 s et
 commit-entre-checks conservés. Gain : latence de pickup ≤0,5 s → <10 ms ; charge idle

@@ -14,7 +14,7 @@
 	default_sni {$HUGINN_DOMAIN}
 }
 
-huginn.cronos.website, 100.73.17.140, 10.0.0.75, localhost, ampere-free-tier {
+{$HUGINN_DOMAIN}, localhost, :443 {
 	# Locally generated cert (see ./certs/ and the header comment above).
 	tls /etc/caddy/certs/huginn.crt /etc/caddy/certs/huginn.key
 	encode gzip
@@ -33,10 +33,10 @@ huginn.cronos.website, 100.73.17.140, 10.0.0.75, localhost, ampere-free-tier {
 	# Hub REST API + health.
 	handle /api/* {
 		reverse_proxy hub:8000 {
-			# The Cloudflare origin lands here via a local tunnel (podman
-			# bridge): trust its forwarded client IP instead of the bridge
-			# gateway. Direct connections (Netbird/LAN) keep their real source
-			# — only local proxy hops are trusted.
+			# Trust container-internal proxy hops (docker/podman bridges, loopback)
+			# so the real client IP survives local tunnels in X-Forwarded-For.
+			# Direct connections keep their real source — only local proxy
+			# ranges are trusted. Adjust to your container runtime's ranges.
 			trusted_proxies 10.88.0.0/16 10.89.0.0/16 127.0.0.0/8 172.16.0.0/12
 		}
 	}
