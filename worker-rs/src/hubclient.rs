@@ -264,16 +264,29 @@ pub struct HeartbeatResponse {
     pub allowed_release_domains: Vec<String>,
 }
 
+/// A JSON `null` (or a missing value) decodes to the type's default. Go's
+/// encoding/json silently accepted null into plain fields; serde rejects it —
+/// command tasks carry `action_name: null` and MUST parse (regression found
+/// twice by security review: without this, every free command is invisible to
+/// the worker and re-queued forever).
+fn null_to_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    T: Default + serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::<T>::deserialize(d).map(|o| o.unwrap_or_default())
+}
+
 /// Task is a unit of work handed to the worker.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Task {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub id: String,
-    #[serde(default, rename = "type")]
+    #[serde(default, rename = "type", deserialize_with = "null_to_default")]
     pub task_type: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub action_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub payload: serde_json::Map<String, Value>,
 }
 
@@ -418,5 +431,39 @@ mod tests {
             other => panic!("expected 401 APIError, got {other}"),
         }
         assert_eq!(err.to_string(), "hub returned 401: {\"detail\":\"nope\"}");
+    }
+}
+
+
+#[cfg(test)]
+mod task_parity_tests {
+    use super::*;
+
+    /// The hub sends `action_name: null` for command tasks — Go's
+    /// encoding/json silently accepted null into plain string fields; serde
+    /// must too or every command task is invisible (claim loop, dead-letter).
+    #[test]
+    fn command_task_with_null_action_name_parses() {
+        let json = r#"{"id":"t1","type":"command","action_name":null,"payload":{"command":"apt update","timeout":60}}"#;
+        let task: Task = serde_json::from_str(json).expect("command task must parse");
+        assert_eq!(task.task_type, "command");
+        assert_eq!(task.action_name, "");
+        assert_eq!(task.payload["command"], "apt update");
+    }
+
+    #[test]
+    fn null_fields_everywhere_fall_back_to_defaults() {
+        let json = r#"{"id":null,"type":null,"action_name":null,"payload":null}"#;
+        let task: Task = serde_json::from_str(json).expect("all-null task must parse");
+        assert_eq!(task.id, "");
+        assert_eq!(task.task_type, "");
+        assert!(task.payload.is_empty());
+    }
+
+    #[test]
+    fn action_task_still_parses() {
+        let json = r#"{"id":"t2","type":"action","action_name":"status","payload":{}}"#;
+        let task: Task = serde_json::from_str(json).unwrap();
+        assert_eq!(task.action_name, "status");
     }
 }
