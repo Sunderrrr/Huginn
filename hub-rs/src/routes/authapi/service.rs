@@ -14,8 +14,13 @@ use super::AuthState;
 // Service helpers (app/services/{users,mfa}.py)
 // ---------------------------------------------------------------------------
 
+/// Data-layer failures surface as a bare 500 (L-2): the sqlx detail can
+/// quote user data, SQL text and constraint names, so it goes to the server
+/// log only — the client just gets "internal error". Callers that owe the
+/// client a specific status map their DbError variant *before* this.
 pub(crate) fn db_err(err: DbError) -> ApiError {
-    ApiError::internal(err.to_string())
+    tracing::warn!(error = %err, "database error");
+    ApiError::internal("internal error")
 }
 
 /// Verify credentials. Always spends Argon2 work (even for unknown users or
@@ -220,6 +225,16 @@ pub(crate) fn backup_code_hash(state: &AuthState, code: &str) -> String {
 mod tests {
     use super::*;
     use crate::routes::authapi::support;
+
+    #[test]
+    fn db_err_never_leaks_the_sqlx_detail() {
+        // L-2: the client gets a bare 500 "internal error"; the sqlx detail
+        // goes to the server log only.
+        let err = db_err(DbError::Conflict("secret constraint detail".into()));
+        assert_eq!(err.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.detail(), "internal error");
+        assert!(!err.detail().contains("secret"));
+    }
 
     // ---- backup codes -----------------------------------------------------
 
