@@ -23,7 +23,6 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use axum::extract::{rejection::JsonRejection, DefaultBodyLimit};
 use axum::http::{HeaderMap, StatusCode, Uri};
@@ -243,18 +242,13 @@ fn enforce_body_size(headers: &HeaderMap, max_body_bytes: usize) -> Result<(), A
 }
 
 /// Best-effort real client IP (`deps.client_ip`): when `trust_forwarded_for`
-/// is set the first hop of `X-Forwarded-For` (the original client), otherwise
-/// the peer address. The header is only honoured when explicitly trusted,
-/// since clients could otherwise spoof it.
+/// is set the LAST hop of `X-Forwarded-For` (the one the trusted proxy
+/// appended — see the bundled Caddyfile's `header_up`), otherwise the peer
+/// address. The header is only honoured when explicitly trusted, since
+/// clients could otherwise spoof it. Delegates to the single shared
+/// implementation in [`crate::routes::authapi::client_ip`] (H-1).
 fn client_ip(headers: &HeaderMap, config: &Config, peer: Option<SocketAddr>) -> Option<String> {
-    if config.trust_forwarded_for {
-        if let Some(forwarded) = header_str(headers, "x-forwarded-for") {
-            if let Some(first) = forwarded.split(',').map(str::trim).find(|s| !s.is_empty()) {
-                return Some(first.to_owned());
-            }
-        }
-    }
-    peer.map(|p| p.ip().to_string())
+    crate::routes::authapi::client_ip(headers, config, peer)
 }
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -280,43 +274,12 @@ fn db_err(err: DbError) -> ApiError {
 // Minimal rate limiter (app/core/ratelimit.py)
 // ---------------------------------------------------------------------------
 
-/// In-process fixed-window rate limiter. Sufficient for a single hub instance;
-/// for a horizontally-scaled deployment back this with Redis.
-type BucketMap =
-    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, (Instant, u32)>>>;
-
-#[derive(Debug, Clone)]
-pub struct RateLimiter {
-    max_per_window: u32,
-    window: Duration,
-    buckets: BucketMap,
-}
-
-impl RateLimiter {
-    pub fn new(max_per_minute: u32) -> Self {
-        Self {
-            max_per_window: max_per_minute,
-            window: Duration::from_secs(60),
-            buckets: Arc::default(),
-        }
-    }
-
-    /// Consume one slot for `key`; false when the window's budget is spent.
-    pub fn allow(&self, key: &str) -> bool {
-        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
-        let (start, count) = buckets.entry(key.to_owned()).or_insert((now, 0));
-        if now.duration_since(*start) >= self.window {
-            *start = now;
-            *count = 0;
-        }
-        if *count >= self.max_per_window {
-            return false;
-        }
-        *count += 1;
-        true
-    }
-}
+/// In-process fixed-window rate limiter — the single shared implementation
+/// (`app/core/ratelimit.py`): fixed windows with expiry reset and eviction of
+/// expired windows past the cap (H-1), so every router throttles identically.
+/// Re-exported from `routes::authapi` (which owns it in `middleware`); for a
+/// horizontally-scaled deployment back this with Redis.
+pub use crate::routes::authapi::RateLimiter;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -423,9 +386,11 @@ mod tests {
         let peer: SocketAddr = "10.0.0.1:4321".parse().unwrap();
 
         config.trust_forwarded_for = true;
+        // H-1: the LAST hop (the proxy-appended one) wins, never the
+        // client-controlled first entry.
         assert_eq!(
             client_ip(&headers, &config, Some(peer)).as_deref(),
-            Some("203.0.113.7")
+            Some("172.16.0.2")
         );
         config.trust_forwarded_for = false;
         assert_eq!(

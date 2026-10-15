@@ -91,25 +91,18 @@ impl Principal {
 }
 
 /// Best-effort real client IP (`deps.client_ip`): behind the bundled reverse
-/// proxy the peer address is the proxy's, so the first hop of a trusted
-/// `X-Forwarded-For` is used. The header is only honoured when explicitly
-/// trusted, since clients could otherwise spoof it.
+/// proxy the peer address is the proxy's, so the LAST hop of a trusted
+/// `X-Forwarded-For` is used — the entry the proxy appended (the bundled
+/// Caddyfile overwrites the header), never the client-controlled entries to
+/// its left (H-1). The header is only honoured when explicitly trusted, since
+/// clients could otherwise spoof it. Delegates to the single shared
+/// implementation in [`crate::routes::authapi::client_ip`].
 pub fn client_ip(
     headers: &HeaderMap,
     config: &Config,
     peer: Option<std::net::SocketAddr>,
 ) -> Option<String> {
-    if config.trust_forwarded_for {
-        if let Some(forwarded) = header_str(headers, "x-forwarded-for") {
-            if let Some(first) = forwarded.split(',').next() {
-                let first = first.trim();
-                if !first.is_empty() {
-                    return Some(first.to_owned());
-                }
-            }
-        }
-    }
-    peer.map(|addr| addr.ip().to_string())
+    crate::routes::authapi::client_ip(headers, config, peer)
 }
 
 /// The peer address as axum's `ConnectInfo` layer provides it (absent when no

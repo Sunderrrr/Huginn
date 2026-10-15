@@ -16,17 +16,30 @@ use super::AuthState;
 
 /// Best-effort real client IP (`deps.client_ip`). Behind the bundled reverse
 /// proxy `peer` is the proxy's address, so when `trust_forwarded_for` is set we
-/// take the first hop in `X-Forwarded-For` (the original client). The header is
-/// only honoured when explicitly trusted, since clients could spoof it.
+/// read `X-Forwarded-For` — taking the LAST hop, i.e. the entry appended by
+/// the trusted proxy (the bundled Caddyfile overwrites the header with
+/// `header_up X-Forwarded-For {remote_host}`). The left-hand entries are
+/// client-controlled and forgeable, so they are never trusted (H-1: they used
+/// to drive rate limiting and audit attribution). The header is only honoured
+/// when explicitly trusted.
 pub fn client_ip(headers: &HeaderMap, config: &Config, peer: Option<SocketAddr>) -> Option<String> {
     if config.trust_forwarded_for {
         if let Some(forwarded) = header_str(headers, "x-forwarded-for") {
-            if let Some(first) = forwarded.split(',').map(str::trim).find(|s| !s.is_empty()) {
-                return Some(first.to_owned());
+            if let Some(last) = forwarded_for_last(forwarded) {
+                return Some(last.to_owned());
             }
         }
     }
     peer.map(|p| p.ip().to_string())
+}
+
+/// The right-most non-empty entry of an `X-Forwarded-For` list — the hop the
+/// trusted proxy closest to us appended. Everything to its left can be set
+/// freely by the client (`X-Forwarded-For: 1.2.3.4, <real>`, or worse), so the
+/// last entry is the only one that may be believed (H-1). This is the single
+/// shared implementation the per-router `client_ip` wrappers delegate to.
+pub(crate) fn forwarded_for_last(forwarded: &str) -> Option<&str> {
+    forwarded.rsplit(',').map(str::trim).find(|s| !s.is_empty())
 }
 
 pub fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -62,6 +75,11 @@ pub fn rate_limit_exec(state: &AuthState, principal: &Principal) -> Result<(), A
 type BucketMap =
     std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, (Instant, u32)>>>;
 
+/// Above this many tracked keys, [`RateLimiter::allow`] first purges the
+/// windows that have already expired. Keys are client-controlled (IPs), so
+/// without eviction a sybil flood would grow the map without bound (H-1).
+pub(crate) const MAX_TRACKED_BUCKETS: usize = 100_000;
+
 #[derive(Debug, Clone)]
 pub struct RateLimiter {
     max_per_window: u32,
@@ -71,9 +89,16 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     pub fn new(max_per_minute: u32) -> Self {
+        Self::new_with_window(max_per_minute, Duration::from_secs(60))
+    }
+
+    /// A limiter with an explicit window — production always wants the
+    /// 60-second fixed window of `app/core/ratelimit.py`; the millisecond
+    /// windows exist so tests can exercise expiry without sleeping.
+    pub(crate) fn new_with_window(max_per_window: u32, window: Duration) -> Self {
         Self {
-            max_per_window: max_per_minute,
-            window: Duration::from_secs(60),
+            max_per_window,
+            window,
             buckets: BucketMap::default(),
         }
     }
@@ -82,8 +107,15 @@ impl RateLimiter {
     pub fn allow(&self, key: &str) -> bool {
         let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
+        // Eviction (H-1): past the cap, drop the windows that have already
+        // expired — they limit nobody and are pure dead weight.
+        if buckets.len() > MAX_TRACKED_BUCKETS {
+            buckets.retain(|_, (start, _)| now.duration_since(*start) < self.window);
+        }
         let (start, count) = buckets.entry(key.to_owned()).or_insert((now, 0));
         if now.duration_since(*start) >= self.window {
+            // An expired window never counts as active: reset, don't
+            // increment (H-1).
             *start = now;
             *count = 0;
         }
@@ -105,6 +137,12 @@ impl RateLimiter {
             }
             _ => true,
         }
+    }
+
+    /// Number of tracked windows (tests only — asserts the eviction cap).
+    #[cfg(test)]
+    pub(crate) fn bucket_count(&self) -> usize {
+        self.buckets.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 
@@ -144,7 +182,7 @@ mod tests {
         config.trust_forwarded_for = true;
         assert_eq!(
             client_ip(&headers, &config, Some(peer)).as_deref(),
-            Some("203.0.113.7")
+            Some("172.16.0.2")
         );
         config.trust_forwarded_for = false;
         assert_eq!(
@@ -152,6 +190,38 @@ mod tests {
             Some("10.0.0.1")
         );
         assert_eq!(client_ip(&headers, &config, None), None);
+    }
+
+    #[test]
+    fn client_ip_takes_the_last_forwarded_hop_not_the_client_controlled_one() {
+        // H-1: the client controls every entry of X-Forwarded-For except the
+        // one the trusted proxy appends; only that last hop may be believed.
+        let config = Config {
+            trust_forwarded_for: true,
+            ..Config::default()
+        };
+        let peer: SocketAddr = "10.0.0.1:4321".parse().unwrap();
+        let ip = |forwarded: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-forwarded-for", forwarded.parse().unwrap());
+            client_ip(&headers, &config, Some(peer))
+        };
+
+        assert_eq!(ip("1.2.3.4, 5.6.7.8").as_deref(), Some("5.6.7.8"));
+        // The proxy-appended hop is the last non-empty entry, even with
+        // trailing separators/empties.
+        assert_eq!(ip("1.2.3.4, 5.6.7.8, ").as_deref(), Some("5.6.7.8"));
+        assert_eq!(ip(" , , 9.9.9.9").as_deref(), Some("9.9.9.9"));
+        // A fully client-controlled list still answers the LAST entry —
+        // behind the bundled proxy that value is the overwritten one.
+        assert_eq!(ip("1.2.3.4").as_deref(), Some("1.2.3.4"));
+        // Only empty entries → no usable hop → the peer address.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", " , ".parse().unwrap());
+        assert_eq!(
+            client_ip(&headers, &config, Some(peer)).as_deref(),
+            Some("10.0.0.1")
+        );
     }
 
     // ---- rate limiter (app/core/ratelimit.py) -----------------------------
@@ -166,6 +236,39 @@ mod tests {
         assert!(!limiter.check("k"), "budget spent");
         assert!(!limiter.allow("k"), "budget spent");
         assert!(limiter.allow("other"), "budgets are per key");
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_resets_an_expired_window_instead_of_counting_it() {
+        let limiter = RateLimiter::new_with_window(2, Duration::from_millis(5));
+        assert!(limiter.allow("k"));
+        assert!(limiter.allow("k"));
+        assert!(!limiter.allow("k"), "budget spent");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        // The window expired → it no longer counts as active: the next call
+        // starts a fresh window rather than staying throttled (H-1).
+        assert!(limiter.allow("k"), "expired window resets");
+        assert!(limiter.allow("k"));
+        assert!(!limiter.allow("k"));
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_purges_expired_windows_past_the_eviction_cap() {
+        let limiter = RateLimiter::new_with_window(1, Duration::from_millis(5));
+        // Push past the cap with distinct (client-controlled) keys.
+        for i in 0..=MAX_TRACKED_BUCKETS {
+            assert!(limiter.allow(&format!("ip:{i}")));
+        }
+        assert!(limiter.bucket_count() > MAX_TRACKED_BUCKETS);
+        // Let every window expire, then touch one more key: the purge on the
+        // way in must drop all the expired windows (H-1).
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(limiter.allow("fresh"));
+        assert_eq!(limiter.bucket_count(), 1, "expired windows were purged");
+        // A fresh (unexpired) window survives the purge.
+        assert!(limiter.allow("fresh:2"));
+        assert!(limiter.allow("fresh:3"));
+        assert_eq!(limiter.bucket_count(), 3);
     }
 
     #[tokio::test]

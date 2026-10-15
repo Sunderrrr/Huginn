@@ -180,6 +180,7 @@ mod tests {
     use super::super::router;
     use super::super::testing::*;
     use super::*;
+    use crate::config::Config;
     use serde_json::json;
     use tower::ServiceExt;
 
@@ -278,9 +279,19 @@ mod tests {
 
     #[tokio::test]
     async fn enroll_rate_limits_per_client_ip() {
-        let state = test_state(false);
-        state.enroll_limiter.allow("198.51.100.9");
-        while state.enroll_limiter.allow("198.51.100.9") {}
+        // H-1: the throttle keys on the LAST forwarded hop — the one the
+        // trusted proxy appended — never the client-controlled first entry.
+        let pool = crate::db::pool_options(1)
+            .connect_lazy("postgres://huginn@localhost/huginn_test")
+            .unwrap();
+        let config = Config {
+            require_tls: false,
+            trust_forwarded_for: true,
+            ..Config::default()
+        };
+        let state = WorkerState::new(pool, config);
+        state.enroll_limiter.allow("172.16.0.2");
+        while state.enroll_limiter.allow("172.16.0.2") {}
         let app = router(state);
         let mut request = json_request(
             "POST",

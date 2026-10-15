@@ -38,6 +38,14 @@ pub struct Config {
 
     // TLS policy for hub<->worker
     pub require_tls: bool,
+    /// Trust `X-Forwarded-For` for the client IP (rate-limit keys, audit
+    /// attribution, MCP token allow-lists). Fail-closed default (H-1): OFF
+    /// unless explicitly enabled AND the deployment sits behind a reverse
+    /// proxy that OVERWRITES the header — the bundled `deploy/Caddyfile`
+    /// stamps `header_up X-Forwarded-For {remote_host}` on `/api/*`, so the
+    /// value the hub reads is the proxy-appended (last) hop, which the client
+    /// cannot forge. With the header merely *appended* by an untrusted hop,
+    /// every list entry would be client-controlled.
     pub trust_forwarded_for: bool,
 
     // CORS: comma-separated origins. Empty disables CORS.
@@ -93,7 +101,9 @@ impl Default for Config {
             webauthn_origin: String::new(),
             webauthn_user_verification: "preferred".into(),
             require_tls: true,
-            trust_forwarded_for: true,
+            // H-1: fail-closed. Enable (HUGINN_TRUST_FORWARDED_FOR=true) only
+            // behind a proxy that overwrites the header — see the field docs.
+            trust_forwarded_for: false,
             cors_origins_csv: String::new(),
             bootstrap_admin_username: "admin".into(),
             bootstrap_admin_password: None,
