@@ -111,6 +111,8 @@ impl Default for Config {
             rate_limit_exec_per_minute: 30,
             heartbeat_offline_seconds: 120,
             target_worker_version: "v1.0.0".into(),
+            // Upstream repository — the default release source for worker
+            // self-updates; override with HUGINN_TARGET_RELEASE_REPO.
             target_release_repo: "Sunderrrr/Huginn".into(),
             allowed_release_domains_csv: "github.com,objects.githubusercontent.com".into(),
         }

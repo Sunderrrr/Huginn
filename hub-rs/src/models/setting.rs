@@ -266,7 +266,7 @@ mod tests {
         let s = Setting {
             id: 1,
             target_worker_version: "v1.0.0".into(),
-            target_release_repo: "Sunderrrr/Huginn".into(),
+            target_release_repo: "example/huginn".into(),
             allowed_release_domains: serde_json::json!([
                 "github.com",
                 "objects.githubusercontent.com"

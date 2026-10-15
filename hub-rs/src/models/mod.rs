@@ -78,7 +78,7 @@ mod live_tests {
             &pool,
             setting::SettingValues {
                 target_worker_version: "v1.4.0".into(),
-                target_release_repo: "Sunderrrr/Huginn".into(),
+                target_release_repo: "example/huginn".into(),
                 allowed_release_domains: serde_json::json!(["github.com"]),
                 ..Default::default()
             },

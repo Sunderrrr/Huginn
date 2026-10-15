@@ -197,7 +197,7 @@ mod tests {
     fn release_urls_match_the_python_builder() {
         let domains = vec!["github.com".into(), "objects.githubusercontent.com".into()];
         let urls = crate::services::versioning::build_release_urls(
-            "Sunderrrr/Huginn",
+            "example/huginn",
             "v1.2.3",
             WorkerArch::Amd64,
             &domains,
@@ -205,11 +205,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             urls["binary_url"],
-            "https://github.com/Sunderrrr/Huginn/releases/download/v1.2.3/huginn-worker-linux-amd64"
+            "https://github.com/example/huginn/releases/download/v1.2.3/huginn-worker-linux-amd64"
         );
         assert_eq!(
             urls["checksums_url"],
-            "https://github.com/Sunderrrr/Huginn/releases/download/v1.2.3/checksums.txt"
+            "https://github.com/example/huginn/releases/download/v1.2.3/checksums.txt"
         );
         assert_eq!(urls["asset_name"], "huginn-worker-linux-amd64");
         assert_eq!(urls["version"], "v1.2.3");
@@ -235,7 +235,7 @@ mod tests {
     fn release_urls_enforce_the_allowlist_and_shapes() {
         let domains = vec!["github.com".into()];
         assert!(crate::services::versioning::build_release_urls(
-            "Sunderrrr/Huginn",
+            "example/huginn",
             "v1.2.3",
             WorkerArch::Amd64,
             &domains
@@ -243,7 +243,7 @@ mod tests {
         .is_ok());
         assert!(
             crate::services::versioning::build_release_urls(
-                "Sunderrrr/Huginn",
+                "example/huginn",
                 "v1.2.3;rm -rf",
                 WorkerArch::Amd64,
                 &domains
@@ -273,7 +273,7 @@ mod tests {
         );
         assert!(
             crate::services::versioning::build_release_urls(
-                "Sunderrrr/Huginn",
+                "example/huginn",
                 "v1",
                 WorkerArch::Amd64,
                 &[]

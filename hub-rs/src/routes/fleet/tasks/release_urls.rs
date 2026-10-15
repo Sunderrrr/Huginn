@@ -155,12 +155,12 @@ mod tests {
             "objects.githubusercontent.com".to_string(),
         ];
         let urls =
-            build_release_urls("Sunderrrr/Huginn", "v1.2.3", WorkerArch::Amd64, &domains).unwrap();
+            build_release_urls("example/huginn", "v1.2.3", WorkerArch::Amd64, &domains).unwrap();
         assert_eq!(
             urls,
             json!({
-                "binary_url": "https://github.com/Sunderrrr/Huginn/releases/download/v1.2.3/huginn-worker-linux-amd64",
-                "checksums_url": "https://github.com/Sunderrrr/Huginn/releases/download/v1.2.3/checksums.txt",
+                "binary_url": "https://github.com/example/huginn/releases/download/v1.2.3/huginn-worker-linux-amd64",
+                "checksums_url": "https://github.com/example/huginn/releases/download/v1.2.3/checksums.txt",
                 "asset_name": "huginn-worker-linux-amd64",
                 "version": "v1.2.3",
             })
@@ -184,7 +184,7 @@ mod tests {
     fn release_urls_are_ssrf_gated() {
         let domains = vec!["github.com".to_string()];
         assert_eq!(
-            build_release_urls("Sunderrrr/Huginn", "v1;rm -rf", WorkerArch::Amd64, &domains)
+            build_release_urls("example/huginn", "v1;rm -rf", WorkerArch::Amd64, &domains)
                 .unwrap_err(),
             "invalid version: 'v1;rm -rf'"
         );
@@ -203,7 +203,7 @@ mod tests {
             "release host 'evil.example.com' not in allowlist"
         );
         assert!(
-            build_release_urls("Sunderrrr/Huginn", "v1", WorkerArch::Amd64, &[]).is_err(),
+            build_release_urls("example/huginn", "v1", WorkerArch::Amd64, &[]).is_err(),
             "an empty allowlist rejects everything"
         );
     }
