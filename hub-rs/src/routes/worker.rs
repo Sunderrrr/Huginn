@@ -439,6 +439,9 @@ async fn heartbeat(
 
     // Recover from OFFLINE on a fresh heartbeat.
     let recovered = vm.state == VMState::Offline;
+    if recovered {
+        crate::services::notifications::notify_vm_recovered(&state.pool, &vm).await;
+    }
 
     crate::models::vm::update_heartbeat(&state.pool, vm.id, Utc::now())
         .await
@@ -633,8 +636,16 @@ async fn submit_task_result(
         state.events.notify_queue_on_commit(&vm.id.to_string());
     }
     // Push a live hint to connected dashboards (events.publish({"type":
-    // "tasks"}) in Python). External failure notifications are not ported yet.
+    // "tasks"}) in Python) and notify external integrations on failure.
     state.bus.publish_hint("tasks");
+    if matches!(
+        task.status,
+        crate::models::enums::TaskStatus::Failed
+            | crate::models::enums::TaskStatus::Timeout
+            | crate::models::enums::TaskStatus::DeadLetter
+    ) {
+        crate::services::notifications::notify_task_failure(&state.pool, &vm, &task).await;
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

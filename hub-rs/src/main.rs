@@ -29,7 +29,9 @@ use models::vm::VmListFilter;
 use routes::admin::{schedules as admin_schedules, AdminState};
 use routes::authapi::AuthState;
 use routes::fleet::{events::EventBus, FleetState};
+use routes::metrics::{MetricsLayer, MetricsState};
 use routes::worker::WorkerState;
+use services::metrics::Metrics;
 use services::task_events::TaskEvents;
 
 /// `GET /healthz` (meta endpoint of the Python hub).
@@ -80,6 +82,14 @@ async fn main() {
         FleetState::with_events(pool.clone(), config.clone(), events.clone(), bus.clone());
     let admin_state = AdminState::new(pool.clone(), config.clone());
 
+    // Prometheus metrics: one registry, exposed at GET /metrics, fed by the
+    // tower layer below plus live gauges (pool, long-polls, active workers).
+    let metrics = Arc::new(Metrics::new());
+    let metrics_state = MetricsState::new(metrics.clone())
+        .with_pool(pool.clone())
+        .with_events(events.clone())
+        .workers_window(config.heartbeat_offline_seconds);
+
     tokio::spawn(sweeper(
         pool.clone(),
         config.clone(),
@@ -91,7 +101,9 @@ async fn main() {
         .merge(routes::authapi::router(auth_state))
         .merge(routes::fleet::router(fleet_state))
         .merge(routes::admin::router(admin_state))
-        .route("/healthz", get(healthz));
+        .merge(routes::metrics::router(metrics_state))
+        .route("/healthz", get(healthz))
+        .layer(MetricsLayer::new(metrics.clone()));
 
     let port: u16 = std::env::var("HUGINN_PORT")
         .ok()
