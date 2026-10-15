@@ -204,9 +204,14 @@ pub fn map_path_rejection(err: impl std::fmt::Display) -> RouteError {
     ApiError::unprocessable_entity(err.to_string()).into()
 }
 
-/// Data-layer failures surface as 500 (the Python handler lets them bubble).
+/// Data-layer failures surface as a bare 500 (L-2): the sqlx detail can
+/// quote user data, SQL text and constraint names, so it goes to the server
+/// log only — the client just gets "internal error". Callers that owe the
+/// client a specific status (vms.rs's Invalid/NotFound handling, tasks'
+/// Conflict) map their DbError variant *before* this.
 pub fn db_err(err: DbError) -> RouteError {
-    ApiError::internal(err.to_string()).into()
+    tracing::warn!(error = %err, "database error");
+    ApiError::internal("internal error").into()
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +478,16 @@ mod tests {
     fn route_error_renders_the_fastapi_detail_shape() {
         let response = RouteError::from(ApiError::not_found("VM not found")).into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn db_err_never_leaks_the_sqlx_detail() {
+        // L-2: the client gets a bare 500 "internal error"; the sqlx detail
+        // goes to the server log only.
+        let err = db_err(DbError::Conflict("secret constraint detail".into()));
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.detail(), "internal error");
+        assert!(!err.detail().contains("secret"));
     }
 
     #[tokio::test]
