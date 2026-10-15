@@ -61,6 +61,7 @@ const NAV = [
   { to: "/commands", label: "Commands", admin: true },
   { to: "/audit", label: "Logs" },
   { to: "/users", label: "Users", admin: true },
+  { to: "/backups", label: "Backups", admin: true },
   { to: "/account", label: "Account" },
   { to: "/settings", label: "Settings" },
 ];

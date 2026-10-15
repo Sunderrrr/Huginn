@@ -5,6 +5,8 @@ import {
 } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
+  BackupList,
+  BackupRunResult,
   CustomAction,
   AuditEntry,
   AuthConfig,
@@ -222,9 +224,38 @@ export function useRevokeToken() {
 }
 
 export function useUpdateSettings() {
-  const invalidate = useInvalidate(["settings", "audit"]);
+  // "backups" too: the S3 target lives in settings, so saving it can flip
+  // s3_configured on the Backups page.
+  const invalidate = useInvalidate(["settings", "audit", "backups"]);
   return useMutation({
     mutationFn: (vars: Partial<Settings>) => api.put<Settings>("/api/settings", vars),
+    onSuccess: invalidate,
+  });
+}
+
+// --- S3 backups ---
+
+export function useBackups() {
+  return useQuery({
+    queryKey: ["backups"],
+    queryFn: () => api.get<BackupList>("/api/backups"),
+    // Backups also land on a schedule — poll so the list picks them up.
+    refetchInterval: 30_000,
+  });
+}
+
+export function useCreateBackup() {
+  const invalidate = useInvalidate(["backups", "audit"]);
+  return useMutation({
+    mutationFn: () => api.post<BackupRunResult>("/api/backups"),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteBackup() {
+  const invalidate = useInvalidate(["backups", "audit"]);
+  return useMutation({
+    mutationFn: (name: string) => api.del<void>(`/api/backups/${encodeURIComponent(name)}`),
     onSuccess: invalidate,
   });
 }
