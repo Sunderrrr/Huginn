@@ -350,10 +350,22 @@ mod tests {
     fn shared_loopback_helper_parses_ips_instead_of_prefixes() {
         // The shared helper (services/mod.rs) backs both the webhook policy
         // and the S3 endpoint validation (L-1).
-        for host in ["127.0.0.1", "127.255.0.1", "localhost", "LOCALHOST", "[::1]"] {
+        for host in [
+            "127.0.0.1",
+            "127.255.0.1",
+            "localhost",
+            "LOCALHOST",
+            "[::1]",
+        ] {
             assert!(crate::services::is_loopback_host(host), "{host}");
         }
-        for host in ["127.evil.com", "127.0.0.1.evil.com", "10.0.0.1", "evil.com", ""] {
+        for host in [
+            "127.evil.com",
+            "127.0.0.1.evil.com",
+            "10.0.0.1",
+            "evil.com",
+            "",
+        ] {
             assert!(!crate::services::is_loopback_host(host), "{host}");
         }
     }

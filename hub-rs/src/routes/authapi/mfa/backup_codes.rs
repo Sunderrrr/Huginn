@@ -15,8 +15,8 @@ use crate::models::user::User;
 
 use super::totp::TotpEnrollFinishRequest;
 use super::{
-    client_ip, db_err, decrypt_totp_secret, enrolling_actor, generate_backup_codes, map_json_rejection,
-    mfa_throttle, now_unix, peer_addr, record_audit, AuthState,
+    client_ip, db_err, decrypt_totp_secret, enrolling_actor, generate_backup_codes,
+    map_json_rejection, mfa_throttle, now_unix, peer_addr, record_audit, AuthState,
 };
 
 /// `BackupCodesResponse`.

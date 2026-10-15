@@ -594,10 +594,7 @@ mod tests {
             }),
         };
         async fn redirect_to_token() -> impl axum::response::IntoResponse {
-            (
-                axum::http::StatusCode::FOUND,
-                [("location", "/token")],
-            )
+            (axum::http::StatusCode::FOUND, [("location", "/token")])
         }
         let app = axum::Router::new()
             .route("/.well-known/openid-configuration", get(mock_discovery))
@@ -621,7 +618,10 @@ mod tests {
         // The 302 surfaces as the typed token-endpoint error — it is NOT
         // followed to /token (where the exchange would otherwise succeed and
         // the client_secret would have been re-sent).
-        let err = client.exchange_code("the-code", Some("nonce-1")).await.unwrap_err();
+        let err = client
+            .exchange_code("the-code", Some("nonce-1"))
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, OidcError::TokenEndpoint(302)),
             "typed 3xx error, got {err:?}"
@@ -662,7 +662,10 @@ mod tests {
         );
         existing.password_hash = None;
         existing.role = UserRole::Operator;
-        assert!(!auto_link_allowed(&existing), "operator must not be adopted");
+        assert!(
+            !auto_link_allowed(&existing),
+            "operator must not be adopted"
+        );
         existing.role = UserRole::Admin;
         assert!(!auto_link_allowed(&existing), "admin must never be adopted");
     }
@@ -786,14 +789,10 @@ mod tests {
                 .unwrap_err(),
             ReconcileError::UsernameTaken
         ));
-        let linked = crate::services::ldap::upsert_ldap_user(
-            &pool,
-            "uid=carol,dc=x",
-            "carol",
-            None,
-        )
-        .await
-        .unwrap();
+        let linked =
+            crate::services::ldap::upsert_ldap_user(&pool, "uid=carol,dc=x", "carol", None)
+                .await
+                .unwrap();
         assert_eq!(linked.id, bare.id);
         assert_eq!(linked.ldap_dn.as_deref(), Some("uid=carol,dc=x"));
 

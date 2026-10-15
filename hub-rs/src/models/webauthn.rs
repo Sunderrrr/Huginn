@@ -451,23 +451,31 @@ mod live_tests {
         let bare = make_user(&pool, "bare", None).await;
         let only = add_passkey(&pool, &bare, "only").await;
         assert!(
-            !delete_credential_guarded(&pool, only.id, bare.id).await.unwrap(),
+            !delete_credential_guarded(&pool, only.id, bare.id)
+                .await
+                .unwrap(),
             "the last passkey of a passwordless user is refused"
         );
         assert_eq!(count_credentials(&pool, bare.id).await.unwrap(), 1);
 
         // With a second passkey both can go — until only one remains.
         let second = add_passkey(&pool, &bare, "second").await;
-        assert!(delete_credential_guarded(&pool, only.id, bare.id).await.unwrap());
+        assert!(delete_credential_guarded(&pool, only.id, bare.id)
+            .await
+            .unwrap());
         assert!(
-            !delete_credential_guarded(&pool, second.id, bare.id).await.unwrap(),
+            !delete_credential_guarded(&pool, second.id, bare.id)
+                .await
+                .unwrap(),
             "back to one passkey, the last one is refused again"
         );
 
         // A local password OR active TOTP lifts the guard.
         let with_password = make_user(&pool, "pw", Some("hash-of-password")).await;
         let key = add_passkey(&pool, &with_password, "key").await;
-        assert!(delete_credential_guarded(&pool, key.id, with_password.id).await.unwrap());
+        assert!(delete_credential_guarded(&pool, key.id, with_password.id)
+            .await
+            .unwrap());
 
         let with_totp = make_user(&pool, "totp", None).await;
         crate::models::user::set_mfa(&pool, with_totp.id, "enc-secret", Utc::now())
@@ -475,7 +483,9 @@ mod live_tests {
             .unwrap()
             .unwrap();
         let key = add_passkey(&pool, &with_totp, "key").await;
-        assert!(delete_credential_guarded(&pool, key.id, with_totp.id).await.unwrap());
+        assert!(delete_credential_guarded(&pool, key.id, with_totp.id)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

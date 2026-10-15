@@ -26,12 +26,12 @@ use crate::models::task::Task;
 use crate::models::vm;
 
 use super::audit::{entry, record};
+use super::principal::Principal;
 use super::tasks::{self, ExecError, TaskOut};
 use super::{
     client_ip, db_err, enforce_body_size, load_vm, map_json_rejection, map_path_rejection,
     peer_addr, principal_can_access_vm, rate_limit_exec, FleetState, Peer, RouteError,
 };
-use super::principal::Principal;
 
 /// How long `wait=true` blocks for a terminal result (`execution._WAIT_MAX_SECONDS`).
 const WAIT_MAX_SECONDS: u64 = 30;
@@ -493,21 +493,21 @@ mod tests {
         .unwrap();
         crate::models::vm::approve(&pool, vm.id, None)
             .await
-        .unwrap()
-        .unwrap();
-        let make_operator = |username: &str| {
-            crate::models::user::UserNew {
-                username: username.into(),
-                password_hash: Some("h".into()),
-                role: crate::models::UserRole::Operator,
-                is_active: true,
-                ..Default::default()
-            }
+            .unwrap()
+            .unwrap();
+        let make_operator = |username: &str| crate::models::user::UserNew {
+            username: username.into(),
+            password_hash: Some("h".into()),
+            role: crate::models::UserRole::Operator,
+            is_active: true,
+            ..Default::default()
         };
-        let ungranted =
-            crate::models::user::create(&pool, make_operator("no-grant")).await.unwrap();
-        let granted =
-            crate::models::user::create(&pool, make_operator("has-grant")).await.unwrap();
+        let ungranted = crate::models::user::create(&pool, make_operator("no-grant"))
+            .await
+            .unwrap();
+        let granted = crate::models::user::create(&pool, make_operator("has-grant"))
+            .await
+            .unwrap();
         crate::models::user::replace_vm_access(&pool, granted.id, &[vm.id])
             .await
             .unwrap();
