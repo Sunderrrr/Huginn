@@ -65,11 +65,14 @@ const BASELINE_ALEMBIC_REV: &str = "n4c5d6e7f8a9";
 /// Coexistence with the Python hub: a database already initialized by Alembic
 /// at the baseline revision has the *identical* schema, so the baseline is
 /// recorded as applied (with the exact checksum sqlx would store) instead of
-/// replaying DDL against existing tables. Fresh databases run normally.
+/// replaying DDL against existing tables. Migrations *after* the baseline
+/// (0002+, the hub-rs extensions Alembic does not know about) then run on top.
+/// Fresh databases run normally.
 pub async fn run_migrations(pool: &PgPool) -> Result<(), DbError> {
     if alembic_at_baseline(pool).await? {
         // Idempotent: CREATE IF NOT EXISTS + INSERT ON CONFLICT DO NOTHING.
-        return record_baseline_applied(pool).await;
+        record_baseline_applied(pool).await?;
+        return MIGRATIONS.run(pool).await.map_err(Into::into);
     }
     MIGRATIONS.run(pool).await?;
     Ok(())

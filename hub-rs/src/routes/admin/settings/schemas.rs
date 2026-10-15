@@ -49,6 +49,17 @@ pub struct SettingsOut {
     pub notify_vm_offline: bool,
     pub notify_vm_recovered: bool,
     pub notify_task_failure: bool,
+
+    // Database backups (S3-compatible) — `backup_s3_secret_key` is write-only
+    // and therefore only ever exposed as a boolean.
+    pub backup_s3_enabled: bool,
+    pub backup_s3_endpoint: String,
+    pub backup_s3_region: String,
+    pub backup_s3_bucket: String,
+    pub backup_s3_prefix: String,
+    pub backup_s3_access_key: String,
+    pub backup_s3_secret_key_configured: bool,
+    pub backup_s3_retention_days: i32,
 }
 
 impl SettingsOut {
@@ -83,6 +94,14 @@ impl SettingsOut {
             notify_vm_offline: row.notify_vm_offline,
             notify_vm_recovered: row.notify_vm_recovered,
             notify_task_failure: row.notify_task_failure,
+            backup_s3_enabled: row.backup_s3_enabled,
+            backup_s3_endpoint: row.backup_s3_endpoint.clone(),
+            backup_s3_region: row.backup_s3_region.clone(),
+            backup_s3_bucket: row.backup_s3_bucket.clone(),
+            backup_s3_prefix: row.backup_s3_prefix.clone(),
+            backup_s3_access_key: row.backup_s3_access_key.clone(),
+            backup_s3_secret_key_configured: row.backup_s3_secret_configured(),
+            backup_s3_retention_days: row.backup_s3_retention_days,
         }
     }
 }
@@ -152,6 +171,18 @@ pub struct SettingsUpdate {
     pub notify_vm_offline: Option<bool>,
     pub notify_vm_recovered: Option<bool>,
     pub notify_task_failure: Option<bool>,
+
+    // Database backups (S3-compatible storage). `backup_s3_secret_key` is
+    // write-only (like `ldap_bind_password`): sending it stores it, it is never
+    // returned and never written to the audit log in clear.
+    pub backup_s3_enabled: Option<bool>,
+    pub backup_s3_endpoint: Option<String>,
+    pub backup_s3_region: Option<String>,
+    pub backup_s3_bucket: Option<String>,
+    pub backup_s3_prefix: Option<String>,
+    pub backup_s3_access_key: Option<String>,
+    pub backup_s3_secret_key: Option<String>,
+    pub backup_s3_retention_days: Option<i32>,
 }
 
 impl SettingsUpdate {
@@ -188,6 +219,12 @@ impl SettingsUpdate {
             ),
             ("discord_webhook_url", &self.discord_webhook_url, 512),
             ("generic_webhook_url", &self.generic_webhook_url, 512),
+            ("backup_s3_endpoint", &self.backup_s3_endpoint, 512),
+            ("backup_s3_region", &self.backup_s3_region, 64),
+            ("backup_s3_bucket", &self.backup_s3_bucket, 255),
+            ("backup_s3_prefix", &self.backup_s3_prefix, 255),
+            ("backup_s3_access_key", &self.backup_s3_access_key, 255),
+            ("backup_s3_secret_key", &self.backup_s3_secret_key, 512),
         ] {
             if let Some(value) = value {
                 if value.chars().count() > max {
@@ -197,13 +234,25 @@ impl SettingsUpdate {
                 }
             }
         }
+        // Retention is a day count: never negative (0 = keep forever).
+        if let Some(days) = self.backup_s3_retention_days {
+            if !(0..=3650).contains(&days) {
+                return Err(RouteError::unprocessable_entity(
+                    "backup_s3_retention_days must be between 0 and 3650",
+                ));
+            }
+        }
         Ok(())
     }
 
     /// The audit `detail` dict: every non-null field of the request, with the
     /// secret values masked (`settings.py` never writes secrets to the log).
     pub fn audit_detail(&self) -> serde_json::Value {
-        let secret_keys = ["ldap_bind_password", "oidc_client_secret"];
+        let secret_keys = [
+            "ldap_bind_password",
+            "oidc_client_secret",
+            "backup_s3_secret_key",
+        ];
         let mut detail = serde_json::Map::new();
         let mut push = |key: &str, value: serde_json::Value| {
             let value = if secret_keys.contains(&key) {
@@ -303,6 +352,30 @@ impl SettingsUpdate {
         if let Some(v) = self.notify_task_failure {
             push("notify_task_failure", v.into());
         }
+        if let Some(v) = self.backup_s3_enabled {
+            push("backup_s3_enabled", v.into());
+        }
+        if let Some(v) = &self.backup_s3_endpoint {
+            push("backup_s3_endpoint", v.clone().into());
+        }
+        if let Some(v) = &self.backup_s3_region {
+            push("backup_s3_region", v.clone().into());
+        }
+        if let Some(v) = &self.backup_s3_bucket {
+            push("backup_s3_bucket", v.clone().into());
+        }
+        if let Some(v) = &self.backup_s3_prefix {
+            push("backup_s3_prefix", v.clone().into());
+        }
+        if let Some(v) = &self.backup_s3_access_key {
+            push("backup_s3_access_key", v.clone().into());
+        }
+        if let Some(v) = &self.backup_s3_secret_key {
+            push("backup_s3_secret_key", v.clone().into());
+        }
+        if let Some(v) = self.backup_s3_retention_days {
+            push("backup_s3_retention_days", v.into());
+        }
         serde_json::Value::Object(detail)
     }
 }
@@ -342,6 +415,14 @@ pub fn values_from(row: &Setting) -> SettingValues {
         webauthn_rp_id: row.webauthn_rp_id.clone(),
         webauthn_rp_name: row.webauthn_rp_name.clone(),
         webauthn_origin: row.webauthn_origin.clone(),
+        backup_s3_enabled: row.backup_s3_enabled,
+        backup_s3_endpoint: row.backup_s3_endpoint.clone(),
+        backup_s3_region: row.backup_s3_region.clone(),
+        backup_s3_bucket: row.backup_s3_bucket.clone(),
+        backup_s3_prefix: row.backup_s3_prefix.clone(),
+        backup_s3_access_key: row.backup_s3_access_key.clone(),
+        backup_s3_secret_key: row.backup_s3_secret_key.clone(),
+        backup_s3_retention_days: row.backup_s3_retention_days,
     }
 }
 
@@ -382,5 +463,13 @@ pub fn setting_row(values: SettingValues, updated_at: DateTime<Utc>) -> Setting 
         webauthn_rp_id: values.webauthn_rp_id,
         webauthn_rp_name: values.webauthn_rp_name,
         webauthn_origin: values.webauthn_origin,
+        backup_s3_enabled: values.backup_s3_enabled,
+        backup_s3_endpoint: values.backup_s3_endpoint,
+        backup_s3_region: values.backup_s3_region,
+        backup_s3_bucket: values.backup_s3_bucket,
+        backup_s3_prefix: values.backup_s3_prefix,
+        backup_s3_access_key: values.backup_s3_access_key,
+        backup_s3_secret_key: values.backup_s3_secret_key,
+        backup_s3_retention_days: values.backup_s3_retention_days,
     }
 }

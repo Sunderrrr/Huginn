@@ -59,10 +59,17 @@ jsonwebtoken = { version = "11", default-features = false, features = ["rust_cry
 # LDAP/LDAPS fallback (port of hub/app/core/ldap.py). rustls-based TLS avoids an
 # OpenSSL/pkg-config build dependency.
 ldap3 = { version = "0.12", default-features = false, features = ["sync", "tls-rustls-ring"] }
+# Database backups to S3-compatible storage (services/backup/): gzip streaming
+# compression of the SQL export (flate2 is pure Rust, no zlib C build). The S3
+# client itself is hand-rolled on reqwest + SigV4 (hmac/sha2 above) — no AWS SDK.
+flate2 = "1"
 
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+# Fake S3 server for the backup storage tests (services/backup/s3.rs): PUT /
+# LIST / HEAD / DELETE round-trips without a real bucket.
+wiremock = "0.6"
 # Self-signed X.509 leaf certificates for the WebAuthn `x5c` attestation tests.
 rcgen = "0.13"
 

@@ -8,6 +8,11 @@ use uuid::Uuid;
 
 use crate::db::DbError;
 
+/// Column default of `backup_s3_retention_days` (`migrations/0002`).
+fn default_backup_retention_days() -> i32 {
+    30
+}
+
 /// The settings row is a singleton (parity with `SETTINGS_SINGLETON_ID`).
 pub const SETTINGS_SINGLETON_ID: i32 = 1;
 
@@ -20,7 +25,10 @@ const COLUMNS: &str = "id, target_worker_version, target_release_repo, allowed_r
                       generic_webhook_url, notify_vm_offline, notify_vm_recovered, \
                       notify_task_failure, auto_update_enabled, oidc_provider_name, \
                       require_admin_mfa, allow_password_login, webauthn_rp_id, \
-                      webauthn_rp_name, webauthn_origin";
+                      webauthn_rp_name, webauthn_origin, backup_s3_enabled, \
+                      backup_s3_endpoint, backup_s3_region, backup_s3_bucket, \
+                      backup_s3_prefix, backup_s3_access_key, backup_s3_secret_key, \
+                      backup_s3_retention_days";
 
 /// Fleet-wide configuration (one row).
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -59,6 +67,29 @@ pub struct Setting {
     pub webauthn_rp_id: String,
     pub webauthn_rp_name: String,
     pub webauthn_origin: String,
+    /// Automatic database backups to S3-compatible storage (`migrations/0002`).
+    /// `serde(default)`: fixtures/rows captured before 0002 keep decoding.
+    #[serde(default)]
+    pub backup_s3_enabled: bool,
+    /// S3-compatible endpoint URL (`https://…`); empty = AWS S3.
+    #[serde(default)]
+    pub backup_s3_endpoint: String,
+    #[serde(default)]
+    pub backup_s3_region: String,
+    #[serde(default)]
+    pub backup_s3_bucket: String,
+    /// Object-key prefix the backups live under.
+    #[serde(default)]
+    pub backup_s3_prefix: String,
+    #[serde(default)]
+    pub backup_s3_access_key: String,
+    /// **Write-only** — never serialized back by any API (like
+    /// `ldap_bind_password`).
+    #[serde(default)]
+    pub backup_s3_secret_key: Option<String>,
+    /// Delete backup objects older than this many days (0 = keep forever).
+    #[serde(default = "default_backup_retention_days")]
+    pub backup_s3_retention_days: i32,
 }
 
 impl Setting {
@@ -71,6 +102,11 @@ impl Setting {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// True when a secret key is stored (the value itself is never returned).
+    pub fn backup_s3_secret_configured(&self) -> bool {
+        self.backup_s3_secret_key.is_some()
     }
 }
 
@@ -108,6 +144,14 @@ pub struct SettingValues {
     pub webauthn_rp_id: String,
     pub webauthn_rp_name: String,
     pub webauthn_origin: String,
+    pub backup_s3_enabled: bool,
+    pub backup_s3_endpoint: String,
+    pub backup_s3_region: String,
+    pub backup_s3_bucket: String,
+    pub backup_s3_prefix: String,
+    pub backup_s3_access_key: String,
+    pub backup_s3_secret_key: Option<String>,
+    pub backup_s3_retention_days: i32,
 }
 
 /// Defaults mirror the SQLAlchemy column defaults.
@@ -145,6 +189,14 @@ impl Default for SettingValues {
             webauthn_rp_id: String::new(),
             webauthn_rp_name: "Huginn".into(),
             webauthn_origin: String::new(),
+            backup_s3_enabled: false,
+            backup_s3_endpoint: String::new(),
+            backup_s3_region: String::new(),
+            backup_s3_bucket: String::new(),
+            backup_s3_prefix: String::new(),
+            backup_s3_access_key: String::new(),
+            backup_s3_secret_key: None,
+            backup_s3_retention_days: 30,
         }
     }
 }
@@ -169,9 +221,12 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
          ldap_user_search_filter, ldap_start_tls, ldap_use_ldaps, notifications_enabled, \
          discord_webhook_url, generic_webhook_url, notify_vm_offline, notify_vm_recovered, \
          notify_task_failure, auto_update_enabled, oidc_provider_name, require_admin_mfa, \
-         allow_password_login, webauthn_rp_id, webauthn_rp_name, webauthn_origin) \
+         allow_password_login, webauthn_rp_id, webauthn_rp_name, webauthn_origin, \
+         backup_s3_enabled, backup_s3_endpoint, backup_s3_region, backup_s3_bucket, \
+         backup_s3_prefix, backup_s3_access_key, backup_s3_secret_key, backup_s3_retention_days) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
-         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33) \
+         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, \
+         $35, $36, $37, $38, $39, $40, $41) \
          ON CONFLICT (id) DO UPDATE SET \
          target_worker_version = EXCLUDED.target_worker_version, \
          target_release_repo = EXCLUDED.target_release_repo, \
@@ -204,7 +259,15 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
          allow_password_login = EXCLUDED.allow_password_login, \
          webauthn_rp_id = EXCLUDED.webauthn_rp_id, \
          webauthn_rp_name = EXCLUDED.webauthn_rp_name, \
-         webauthn_origin = EXCLUDED.webauthn_origin \
+         webauthn_origin = EXCLUDED.webauthn_origin, \
+         backup_s3_enabled = EXCLUDED.backup_s3_enabled, \
+         backup_s3_endpoint = EXCLUDED.backup_s3_endpoint, \
+         backup_s3_region = EXCLUDED.backup_s3_region, \
+         backup_s3_bucket = EXCLUDED.backup_s3_bucket, \
+         backup_s3_prefix = EXCLUDED.backup_s3_prefix, \
+         backup_s3_access_key = EXCLUDED.backup_s3_access_key, \
+         backup_s3_secret_key = EXCLUDED.backup_s3_secret_key, \
+         backup_s3_retention_days = EXCLUDED.backup_s3_retention_days \
          RETURNING {COLUMNS}"
     ))
     .bind(SETTINGS_SINGLETON_ID)
@@ -240,6 +303,14 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
     .bind(&values.webauthn_rp_id)
     .bind(&values.webauthn_rp_name)
     .bind(&values.webauthn_origin)
+    .bind(values.backup_s3_enabled)
+    .bind(&values.backup_s3_endpoint)
+    .bind(&values.backup_s3_region)
+    .bind(&values.backup_s3_bucket)
+    .bind(&values.backup_s3_prefix)
+    .bind(&values.backup_s3_access_key)
+    .bind(&values.backup_s3_secret_key)
+    .bind(values.backup_s3_retention_days)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -259,6 +330,11 @@ mod tests {
         assert!(!d.notify_vm_recovered);
         assert!(!d.allow_password_login);
         assert!(!d.auto_update_enabled);
+        // Backup columns (migrations/0002): disabled by default, 30-day
+        // retention, no secret.
+        assert!(!d.backup_s3_enabled);
+        assert_eq!(d.backup_s3_retention_days, 30);
+        assert!(d.backup_s3_secret_key.is_none());
     }
 
     #[test]
@@ -300,6 +376,14 @@ mod tests {
             webauthn_rp_id: String::new(),
             webauthn_rp_name: "Huginn".into(),
             webauthn_origin: String::new(),
+            backup_s3_enabled: false,
+            backup_s3_endpoint: String::new(),
+            backup_s3_region: String::new(),
+            backup_s3_bucket: String::new(),
+            backup_s3_prefix: String::new(),
+            backup_s3_access_key: String::new(),
+            backup_s3_secret_key: None,
+            backup_s3_retention_days: 30,
         };
         assert_eq!(
             s.allowed_release_domains_vec(),

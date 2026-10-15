@@ -237,6 +237,32 @@ async fn update_settings_endpoint(
     if let Some(v) = body.notify_task_failure {
         values.notify_task_failure = v;
     }
+    if let Some(v) = body.backup_s3_enabled {
+        values.backup_s3_enabled = v;
+    }
+    if let Some(v) = &body.backup_s3_endpoint {
+        values.backup_s3_endpoint = v.clone();
+    }
+    if let Some(v) = &body.backup_s3_region {
+        values.backup_s3_region = v.clone();
+    }
+    if let Some(v) = &body.backup_s3_bucket {
+        values.backup_s3_bucket = v.clone();
+    }
+    if let Some(v) = &body.backup_s3_prefix {
+        values.backup_s3_prefix = v.clone();
+    }
+    if let Some(v) = &body.backup_s3_access_key {
+        values.backup_s3_access_key = v.clone();
+    }
+    // Write-only secret (like `ldap_bind_password`): a new value replaces the
+    // stored one; an absent/null value leaves it untouched.
+    if let Some(v) = &body.backup_s3_secret_key {
+        values.backup_s3_secret_key = Some(v.clone());
+    }
+    if let Some(v) = body.backup_s3_retention_days {
+        values.backup_s3_retention_days = v;
+    }
     // `row.updated_by = principal.user.id` when a real user is behind it.
     values.updated_by = caller.principal.user.as_ref().map(|u| u.id);
     // Never write secrets into the audit log.
@@ -498,5 +524,104 @@ mod tests {
         // Nothing was written.
         assert_eq!(store.db.lock().unwrap().audit.len(), 0);
         let _ = admin;
+    }
+
+    #[tokio::test]
+    async fn put_settings_treats_backup_s3_secret_key_as_write_only() {
+        let (store, state, admin) = setup();
+        let app = router(state.clone());
+        let request = json_request_with(
+            "PUT",
+            "/api/settings",
+            json!({
+                "backup_s3_enabled": true,
+                "backup_s3_endpoint": "https://minio.example.com",
+                "backup_s3_region": "eu-west-1",
+                "backup_s3_bucket": "huginn-backups",
+                "backup_s3_prefix": "db",
+                "backup_s3_access_key": "AKIDEXAMPLE",
+                "backup_s3_secret_key": "super-secret-value",
+                "backup_s3_retention_days": 14,
+            }),
+            &[(
+                "authorization",
+                format!("Bearer {}", bearer(&state, &admin)),
+            )],
+        );
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        // The secret is stored but never serialized back — only a boolean.
+        assert!(body.get("backup_s3_secret_key").is_none());
+        assert_eq!(body["backup_s3_secret_key_configured"], json!(true));
+        assert_eq!(body["backup_s3_enabled"], json!(true));
+        assert_eq!(
+            body["backup_s3_endpoint"],
+            json!("https://minio.example.com")
+        );
+        assert_eq!(body["backup_s3_bucket"], json!("huginn-backups"));
+        assert_eq!(body["backup_s3_prefix"], json!("db"));
+        assert_eq!(body["backup_s3_retention_days"], json!(14));
+
+        // GET /api/settings never leaks it either (admin view included).
+        let app = router(state.clone());
+        let request = json_request_with(
+            "GET",
+            "/api/settings",
+            serde_json::Value::Null,
+            &[(
+                "authorization",
+                format!("Bearer {}", bearer(&state, &admin)),
+            )],
+        );
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        let body = body_json(response).await;
+        let rendered = serde_json::to_string(&body).unwrap();
+        assert!(!rendered.contains("super-secret-value"), "{rendered}");
+        assert!(body.get("backup_s3_secret_key").is_none());
+        assert_eq!(body["backup_s3_secret_key_configured"], json!(true));
+
+        // Audit masks the value like the other secrets.
+        let db = store.db.lock().unwrap();
+        let entry = db.audit.last().unwrap();
+        assert_eq!(entry.event_type, "settings_update");
+        assert_eq!(entry.detail["backup_s3_secret_key"], json!("***"));
+        assert_eq!(entry.detail["backup_s3_enabled"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn put_settings_validates_backup_retention_days() {
+        let (_store, state, admin) = setup();
+        for days in [-1, 3651] {
+            let app = router(state.clone());
+            let request = json_request_with(
+                "PUT",
+                "/api/settings",
+                json!({"backup_s3_retention_days": days}),
+                &[(
+                    "authorization",
+                    format!("Bearer {}", bearer(&state, &admin)),
+                )],
+            );
+            let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "days={days}"
+            );
+        }
+        // 0 means "keep forever" and is accepted.
+        let app = router(state.clone());
+        let request = json_request_with(
+            "PUT",
+            "/api/settings",
+            json!({"backup_s3_retention_days": 0}),
+            &[(
+                "authorization",
+                format!("Bearer {}", bearer(&state, &admin)),
+            )],
+        );
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

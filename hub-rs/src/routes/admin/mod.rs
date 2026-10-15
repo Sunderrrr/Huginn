@@ -45,6 +45,7 @@ use crate::models::audit::AuditNew;
 
 use self::schemas::{Caller, Principal};
 
+pub mod backups;
 pub mod custom_actions;
 pub mod enrollment;
 pub mod mcp_tokens;
@@ -77,6 +78,7 @@ pub fn router(state: AdminState) -> Router {
     let global_cap = state.global_body_cap();
     Router::new()
         .merge(settings::routes())
+        .merge(backups::routes())
         .merge(mcp_tokens::routes())
         .merge(tags::routes())
         .merge(schedules::routes())
