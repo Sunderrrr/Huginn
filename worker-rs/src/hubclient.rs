@@ -364,7 +364,6 @@ mod tests {
             worker_id: "vm-1".into(),
             worker_secret: "sekret".into(),
             allow_insecure: true,
-            ..Default::default()
         })
         .expect("client");
 
@@ -433,7 +432,6 @@ mod tests {
         assert_eq!(err.to_string(), "hub returned 401: {\"detail\":\"nope\"}");
     }
 }
-
 
 #[cfg(test)]
 mod task_parity_tests {
