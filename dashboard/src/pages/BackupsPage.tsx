@@ -52,7 +52,7 @@ export function BackupsPage() {
     );
     // The secret is write-only: the API only tells us whether one is stored.
     setSecretSet(
-      settings.backup_s3_secret_key_set ?? !!settings.backup_s3_secret_key,
+      settings.backup_s3_secret_key_configured ?? !!settings.backup_s3_secret_key,
     );
   }, [settings]);
 
@@ -108,7 +108,7 @@ export function BackupsPage() {
     }
   }
 
-  const s3Configured = backups?.s3_configured ?? false;
+  const s3Configured = backups?.configured ?? false;
 
   return (
     <div>
@@ -253,7 +253,7 @@ export function BackupsPage() {
               </div>
               <div className="muted tiny" style={{ marginTop: 2 }}>
                 {s3Configured
-                  ? `${backups?.items.length ?? 0} backup${backups?.items.length === 1 ? "" : "s"} in ${bucket || "the bucket"}`
+                  ? `${backups?.backups.length ?? 0} backup${backups?.backups.length === 1 ? "" : "s"} in ${bucket || "the bucket"}`
                   : "database dumps in S3"}
               </div>
             </div>
@@ -330,11 +330,11 @@ export function BackupsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {backups?.items.map((b) => (
+                  {backups?.backups.map((b) => (
                     <tr key={b.name} style={{ cursor: "default" }}>
                       <td style={{ fontWeight: 600 }}>{b.name}</td>
                       <td className="muted tiny">{fmtBytes(b.size)}</td>
-                      <td className="muted tiny">{fmtTime(b.modified_at)}</td>
+                      <td className="muted tiny">{fmtTime(b.last_modified)}</td>
                       <td style={{ textAlign: "right" }}>
                         {isAdmin && (
                           <button
@@ -350,7 +350,7 @@ export function BackupsPage() {
                   ))}
                 </tbody>
               </table>
-              {backups?.items.length === 0 && (
+              {backups?.backups.length === 0 && (
                 <div style={{ padding: 32 }} className="muted tiny">
                   No backups stored yet — use <b>Back up now</b> to create the first one.
                 </div>

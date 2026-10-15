@@ -225,7 +225,7 @@ export function useRevokeToken() {
 
 export function useUpdateSettings() {
   // "backups" too: the S3 target lives in settings, so saving it can flip
-  // s3_configured on the Backups page.
+  // configured on the Backups page.
   const invalidate = useInvalidate(["settings", "audit", "backups"]);
   return useMutation({
     mutationFn: (vars: Partial<Settings>) => api.put<Settings>("/api/settings", vars),
