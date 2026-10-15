@@ -12,6 +12,8 @@ pub const PROTOCOL_VERSION: &str = "2025-03-26";
 pub struct AppState {
     pub hub: Arc<HubClient>,
     pub validator: Arc<crate::auth::TokenValidator>,
+    /// Forwarded-IP headers are honored only behind a stamping edge proxy.
+    pub trust_proxy: bool,
 }
 
 fn error_obj(id: Value, code: i64, message: &str) -> Value {
@@ -104,6 +106,16 @@ pub async fn handle_message(state: &AppState, ctx: &CallCtx, msg: &Value) -> Opt
 pub async fn handle_body(state: &AppState, ctx: &CallCtx, body: &Value) -> Option<Value> {
     match body {
         Value::Array(items) => {
+            // A 4 MiB body can pack ~40k messages; each may hit the hub
+            // (slow tools, 300s waits) — bound the batch.
+            const MAX_BATCH: usize = 32;
+            if items.len() > MAX_BATCH {
+                return Some(error_obj(
+                    Value::Null,
+                    -32600,
+                    &format!("batch too large: {} items (max {MAX_BATCH})", items.len()),
+                ));
+            }
             let mut responses = Vec::new();
             for item in items {
                 if let Some(resp) = handle_message(state, ctx, item).await {
@@ -131,12 +143,14 @@ mod tests {
             transport: "stdio".into(),
             host: "127.0.0.1".into(),
             port: 0,
+            trust_proxy: false,
         };
         AppState {
             hub: Arc::new(HubClient::new(&settings)),
             validator: Arc::new(crate::auth::TokenValidator::new(Arc::new(HubClient::new(
                 &settings,
             )))),
+            trust_proxy: false,
         }
     }
 

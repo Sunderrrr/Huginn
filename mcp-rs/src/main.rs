@@ -32,11 +32,17 @@ async fn main() {
     let state = Arc::new(AppState {
         hub: hub.clone(),
         validator: Arc::new(TokenValidator::new(hub)),
+        trust_proxy: settings.trust_proxy,
     });
 
     if settings.transport == "streamable-http" {
         run_http(state, &settings).await;
     } else {
+        // stdio has no per-user auth: whoever can write to this process's
+        // stdin acts as the anonymous agent on the hub (full execution, no
+        // attribution). Treat the host's access to the process as the trust
+        // boundary — see mcp-rs/PARITY_HUB.md.
+        eprintln!("huginn-mcp: stdio transport — unauthenticated local mode (no per-user attribution on the hub)");
         run_stdio(state).await;
     }
 }
@@ -107,15 +113,19 @@ async fn mcp_get() -> Response {
 }
 
 async fn mcp_post(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body) -> Response {
-    // Client IP: X-Real-IP (stamped by the trusted edge proxy — always present
-    // behind Caddy) → first X-Forwarded-For hop → peer. The direct peer is not
+    // Client IP: behind a stamping edge proxy (trust_proxy on), the forwarded
+    // headers; otherwise only the direct peer — never client-supplied headers. The direct peer is not
     // extracted here (axum 0.8: ConnectInfo is not an optional part
     // extractor); behind the bundled Caddy the stamped header is authoritative.
-    let ip = auth::client_ip(
-        header_value(&headers, "x-real-ip"),
-        header_value(&headers, "x-forwarded-for"),
-        None,
-    );
+    let ip = if state.trust_proxy {
+        auth::client_ip(
+            header_value(&headers, "x-real-ip"),
+            header_value(&headers, "x-forwarded-for"),
+            None,
+        )
+    } else {
+        None
+    };
     let auth_header = header_value(&headers, "authorization").unwrap_or("");
     let presented = auth_header
         .strip_prefix("Bearer ")
@@ -170,11 +180,14 @@ mod e2e_tests {
             transport: "streamable-http".into(),
             host: "127.0.0.1".into(),
             port: 0,
+            trust_proxy: false,
         };
         let hub = Arc::new(HubClient::new(&settings));
         Arc::new(AppState {
             hub: hub.clone(),
             validator: Arc::new(TokenValidator::new(hub)),
+            // The e2e suite exercises the behind-Caddy flow (stamped headers).
+            trust_proxy: true,
         })
     }
 

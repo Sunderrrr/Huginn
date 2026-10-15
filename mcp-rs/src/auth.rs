@@ -18,6 +18,9 @@ const MAX_ENTRIES: usize = 1024;
 
 pub struct TokenValidator {
     cache: Mutex<HashMap<(String, String), (bool, Instant)>>,
+    /// Insertion order for FIFO eviction — `clear()` on cap let an attacker
+    /// flush every valid entry with a burst of bogus bearers.
+    order: Mutex<Vec<(String, String)>>,
     client: Arc<HubClient>,
 }
 
@@ -25,6 +28,7 @@ impl TokenValidator {
     pub fn new(client: Arc<HubClient>) -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
+            order: Mutex::new(Vec::new()),
             client,
         }
     }
@@ -47,11 +51,29 @@ impl TokenValidator {
             Err(e) if e.status_code == 0 => false, // hub unreachable → deny
             Err(_) => false,
         };
+        // Negative results get a short TTL: a flood of distinct bogus bearers
+        // must not evict valid entries (and each bogus hit costs a whoami
+        // round-trip anyway, so the cache barely helps them).
+        let ttl = if ok {
+            CACHE_TTL
+        } else {
+            Duration::from_secs(5)
+        };
         let mut cache = self.cache.lock().await;
+        let mut order = self.order.lock().await;
         if cache.len() >= MAX_ENTRIES {
-            cache.clear(); // cheap bound; entries are short-lived anyway
+            while cache.len() >= MAX_ENTRIES {
+                let Some(oldest) = order.first().cloned() else {
+                    break;
+                };
+                order.remove(0);
+                cache.remove(&oldest);
+            }
         }
-        cache.insert(key, (ok, Instant::now()));
+        if !cache.contains_key(&key) {
+            order.push(key.clone());
+        }
+        cache.insert(key, (ok, Instant::now() - (CACHE_TTL - ttl)));
         ok
     }
 }
@@ -119,6 +141,7 @@ mod tests {
             transport: "stdio".into(),
             host: "127.0.0.1".into(),
             port: 0,
+            trust_proxy: false,
         };
         let validator = TokenValidator::new(Arc::new(HubClient::new(&settings)));
 
