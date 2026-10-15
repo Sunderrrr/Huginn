@@ -130,18 +130,14 @@ pub fn py_repr(value: &str) -> String {
     out
 }
 
-/// Best-effort real client IP (`deps.client_ip`): the first hop of
-/// `X-Forwarded-For` when `trust_forwarded_for` is explicitly set, otherwise
-/// the peer address.
+/// Best-effort real client IP (`deps.client_ip`): the LAST hop of
+/// `X-Forwarded-For` when `trust_forwarded_for` is explicitly set (the entry
+/// the trusted proxy appended — see the bundled Caddyfile's `header_up`),
+/// otherwise the peer address (H-1: the client-controlled entries to the
+/// left are never believed). Delegates to the single shared implementation
+/// in [`crate::routes::authapi::client_ip`].
 pub fn client_ip(headers: &HeaderMap, config: &Config, peer: Option<SocketAddr>) -> Option<String> {
-    if config.trust_forwarded_for {
-        if let Some(forwarded) = header_str(headers, "x-forwarded-for") {
-            if let Some(first) = forwarded.split(',').map(str::trim).find(|s| !s.is_empty()) {
-                return Some(first.to_owned());
-            }
-        }
-    }
-    peer.map(|p| p.ip().to_string())
+    crate::routes::authapi::client_ip(headers, config, peer)
 }
 
 /// `app/main.py`'s global body cap, checked before authentication exactly like

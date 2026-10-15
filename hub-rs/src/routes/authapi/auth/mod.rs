@@ -556,7 +556,10 @@ mod tests {
 
     #[tokio::test]
     async fn login_throttles_after_five_failed_attempts() {
-        let state = test_state();
+        let mut state = test_state();
+        // The deployment trusts the proxy-written X-Forwarded-For (H-1: the
+        // fail-closed default is off, so the test opts in explicitly).
+        state.config.trust_forwarded_for = true;
         // Five failed attempts already accumulated for this IP (the limiter is
         // only consumed on failure — `auth.login`).
         for _ in 0..5 {

@@ -38,6 +38,12 @@
 			# Direct connections keep their real source — only local proxy
 			# ranges are trusted. Adjust to your container runtime's ranges.
 			trusted_proxies 10.88.0.0/16 10.89.0.0/16 127.0.0.0/8 172.16.0.0/12
+			# Stamp the real client IP + scheme into headers the client cannot
+			# forge (overwrites any client-supplied value, like the /mcp* block
+			# below). The hub's trust_forwarded_for then reads the proxy-written
+			# value — never a client-controlled list entry.
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
 		}
 	}
 	handle /healthz {
