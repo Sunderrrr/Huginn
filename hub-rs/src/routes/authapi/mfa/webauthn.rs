@@ -34,7 +34,6 @@ impl WebAuthnRegisterFinishRequest {
     }
 }
 
-
 /// `WebAuthnRenameRequest`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WebAuthnRenameRequest {
@@ -65,13 +64,11 @@ impl WebAuthnLoginBeginRequest {
     }
 }
 
-
 /// `WebAuthnLoginFinishRequest`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WebAuthnLoginFinishRequest {
     pub credential: serde_json::Value,
 }
-
 
 /// `WebAuthnCredentialOut`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,11 +92,10 @@ impl From<crate::models::webauthn::WebAuthnCredential> for WebAuthnCredentialOut
     }
 }
 
-/// `TotpEnrollFinishRequest`'s dict response: `backup_codes`, plus
-
+/// `WebAuthnRegisterFinishRequest`'s dict response: `id` and `name`, plus
 /// `access_token` when the setup flow logged the admin in (same key order).
 #[derive(Debug, Clone, Serialize)]
-struct WebAuthnRegisterFinishResponse {
+pub(super) struct WebAuthnRegisterFinishResponse {
     id: String,
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -343,12 +339,10 @@ mod tests {
     use super::super::support::*;
     use super::*;
     use axum::body::Body;
-    use http_body_util::BodyExt;
     use serde_json::json;
     use tower::ServiceExt;
 
     use crate::routes::authapi::support::test_state;
-
 
     #[test]
     fn webauthn_credential_out_shape() {

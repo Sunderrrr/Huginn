@@ -25,7 +25,6 @@ pub struct BackupCodesResponse {
     pub backup_codes: Vec<String>,
 }
 
-
 // ---------------------------------------------------------------------------
 // POST /api/auth/mfa/totp/backup-codes/regenerate
 // ---------------------------------------------------------------------------
@@ -69,7 +68,6 @@ pub(super) async fn regenerate_backup_codes(
     }))
 }
 
-
 /// `mfa.store_backup_codes`: replace the user's codes with fresh HMAC hashes.
 pub(super) async fn store_backup_codes(
     state: &AuthState,
@@ -85,4 +83,3 @@ pub(super) async fn store_backup_codes(
         .map_err(db_err)?;
     Ok(())
 }
-

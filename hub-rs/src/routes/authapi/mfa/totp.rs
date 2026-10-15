@@ -8,7 +8,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::error::ApiError;
 use crate::models::audit::AuditNew;
@@ -41,7 +40,6 @@ impl TotpEnrollFinishRequest {
     }
 }
 
-
 /// `TotpDisableRequest` — re-authentication with a current second factor.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TotpDisableRequest {
@@ -58,16 +56,14 @@ impl TotpDisableRequest {
     }
 }
 
-
+/// `TotpEnrollFinishRequest`'s dict response: `backup_codes`, plus
 /// `access_token` when the setup flow logged the admin in.
 #[derive(Debug, Clone, Serialize)]
-struct TotpEnrollFinishResponse {
+pub(super) struct TotpEnrollFinishResponse {
     backup_codes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_token: Option<String>,
 }
-
-/// `WebAuthnRegisterFinishRequest`'s dict response: `id` and `name`, plus
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/mfa/totp/enroll/begin
@@ -214,15 +210,9 @@ async fn disable_totp(state: &AuthState, user: &User) -> Result<(), ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::support::*;
     use super::*;
-    use axum::body::Body;
-    use http_body_util::BodyExt;
-    use serde_json::json;
-    use tower::ServiceExt;
 
     use crate::routes::authapi::support::test_state;
-
 
     // ---- TOTP verification at a frozen time -------------------------------
 
