@@ -111,16 +111,32 @@ secrets.
 ../scripts/backup-db.sh     # DB dump
 ```
 
-Enrolling a VM (token comes from the dashboard) — works on `amd64` and
-`arm64`, detected automatically:
+Enrolling a VM (token comes from the dashboard) — works on **Linux**
+(`amd64`/`arm64`) and **Windows** (`amd64`), detected automatically:
+
+### Linux
 
 ```bash
 curl -fsSLk https://<HUGINN_DOMAIN>/install.sh | HUB_URL=https://<HUGINN_DOMAIN> TOKEN=<token> bash
 ```
 
 The installer detects the architecture (`uname -m` → amd64/arm64), downloads the
-matching static binary from the hub, verifies its SHA-256, installs a systemd
-unit, and enrolls. The worker self-updates toward
-`HUGINN_TARGET_WORKER_VERSION`; artifacts are served by the hub itself at
-`/dist` (see `../scripts/build-artifacts.sh`, which cross-compiles both
-architectures).
+matching static musl binary from the hub, verifies its SHA-256, installs a
+systemd unit, and enrolls.
+
+### Windows (PowerShell, as Administrator)
+
+```powershell
+irm https://<HUGINN_DOMAIN>/install.ps1 | iex   # or download and:
+.\install.ps1 -HUB_URL "https://<HUGINN_DOMAIN>" -Token "<token>"
+```
+
+The PowerShell installer detects the architecture, downloads the matching
+`.exe`, verifies its SHA-256, installs a **Windows Service** ("HuginnWorker",
+auto-start), and enrolls. Free commands run through PowerShell (`unrestricted`
+mode), whitelisted actions use OS-specific commands (`Get-CimInstance`,
+`Restart-Service` instead of `uname`/`systemctl`).
+
+The worker self-updates toward `HUGINN_TARGET_WORKER_VERSION`; artifacts are
+served by the hub itself at `/dist` (see `deploy/build-artifacts.sh`, which
+cross-compiles all three: linux/amd64, linux/arm64, windows/amd64).

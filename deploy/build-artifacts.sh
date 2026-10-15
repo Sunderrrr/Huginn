@@ -33,15 +33,24 @@ build_rust() {
   command -v cargo-zigbuild >/dev/null || { echo "cargo-zigbuild not found (cargo install cargo-zigbuild)" >&2; exit 1; }
 
   mkdir -p "$out"
-  for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+  for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu; do
     case "$target" in
-      x86_64-*) arch=amd64 ;;
-      aarch64-*) arch=arm64 ;;
+      x86_64-unknown-linux-*) os=linux; arch=amd64 ;;
+      aarch64-unknown-linux-*) os=linux; arch=arm64 ;;
+      x86_64-pc-windows-*)   os=windows; arch=amd64 ;;
     esac
-    ( cd "$rust_dir" && \
-      HUGINN_WORKER_VERSION="$VERSION" cargo zigbuild --release --locked --target "$target" )
-    cp "${rust_dir}/target/${target}/release/huginn-worker" "${out}/huginn-worker-linux-${arch}"
-    chmod 0755 "${out}/huginn-worker-linux-${arch}"
+    if [ "$os" = "windows" ]; then
+      # mingw-w64 linker (not zig) for the Windows target
+      ( cd "$rust_dir" && \
+        HUGINN_WORKER_VERSION="$VERSION" cargo build --release --locked --target "$target" )
+      cp "${rust_dir}/target/${target}/release/huginn-worker.exe" "${out}/huginn-worker-windows-${arch}.exe"
+      chmod 0755 "${out}/huginn-worker-windows-${arch}.exe"
+    else
+      ( cd "$rust_dir" && \
+        HUGINN_WORKER_VERSION="$VERSION" cargo zigbuild --release --locked --target "$target" )
+      cp "${rust_dir}/target/${target}/release/huginn-worker" "${out}/huginn-worker-${os}-${arch}"
+      chmod 0755 "${out}/huginn-worker-${os}-${arch}"
+    fi
   done
 }
 

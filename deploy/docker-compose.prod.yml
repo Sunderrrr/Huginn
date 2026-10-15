@@ -147,6 +147,7 @@ services:
       - ./certs:/etc/caddy/certs:ro
       # Self-hosted worker artifacts served at /install.sh and /dist/*.
       - ../scripts/install.sh:/srv/install.sh:ro
+      - ../scripts/install.ps1:/srv/install.ps1:ro
       - ./artifacts:/srv/dist:ro
       - caddy_data:/data
       - caddy_config:/config
