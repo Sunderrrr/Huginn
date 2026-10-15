@@ -291,11 +291,7 @@ mod hang_tests {
     async fn background_child_holding_pipe_does_not_hang() {
         let start = std::time::Instant::now();
         let res = run_command(
-            vec![
-                "sh".into(),
-                "-c".into(),
-                "echo fast & sleep 300".into(),
-            ],
+            vec!["sh".into(), "-c".into(), "echo fast & sleep 300".into()],
             Duration::from_millis(300),
             1024,
         )
@@ -313,7 +309,11 @@ mod hang_tests {
     #[tokio::test]
     async fn capture_with_grace_still_returns_output() {
         let res = run_command(
-            vec!["sh".into(), "-c".into(), "echo before; sleep 0.2; echo after".into()],
+            vec![
+                "sh".into(),
+                "-c".into(),
+                "echo before; sleep 0.2; echo after".into(),
+            ],
             Duration::from_secs(5),
             1024,
         )
