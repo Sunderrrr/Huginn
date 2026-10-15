@@ -315,6 +315,20 @@ impl OidcClient {
 // User reconciliation (`users_service.upsert_oidc_user`)
 // ---------------------------------------------------------------------------
 
+/// Why a reconciled SSO/LDAP login could not produce a user
+/// (`upsert_oidc_user` / `upsert_ldap_user`).
+#[derive(Debug, thiserror::Error)]
+pub enum ReconcileError {
+    /// H-2 username-takeover guard: the existing local account with this
+    /// username is not a bare password-less read-only account, so the SSO/LDAP
+    /// identity must not adopt it — an admin has to link it manually.
+    #[error("an account with this username already exists; ask an admin to link it manually")]
+    UsernameTaken,
+    /// Data-layer failure.
+    #[error(transparent)]
+    Db(#[from] crate::db::DbError),
+}
+
 /// How to reconcile a verified OIDC identity with the local user table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Reconcile {
@@ -342,16 +356,29 @@ pub(crate) fn decide_reconcile(
     }
 }
 
+/// H-2 takeover guard: an existing local account may be *automatically* linked
+/// to a verified SSO/LDAP identity only when it is a bare, password-less,
+/// read-only account (one a previous SSO login created). An account with a
+/// password or an elevated role — admin included — must be linked by an admin;
+/// matching on username alone must never adopt it, or anyone controlling a
+/// directory username could take over the local account.
+pub(crate) fn auto_link_allowed(existing: &User) -> bool {
+    existing.role == crate::models::enums::UserRole::Readonly && existing.password_hash.is_none()
+}
+
 /// Find or create a user from OIDC claims (`upsert_oidc_user`): match on
-/// `oidc_subject`, else an existing local user with the same `username` adopts
-/// the subject, else create a read-only password-less account. Always bumps
-/// `last_login_at`.
+/// `oidc_subject`, else a *bare* existing local user with the same `username`
+/// adopts the subject, else create a read-only password-less account. Always
+/// bumps `last_login_at`.
+///
+/// H-2: the username branch refuses accounts that are not bare read-only
+/// ones (see [`auto_link_allowed`]) — the caller surfaces that as 403.
 pub async fn upsert_oidc_user(
     pool: &sqlx::PgPool,
     subject: &str,
     username: &str,
     email: Option<&str>,
-) -> Result<User, crate::db::DbError> {
+) -> Result<User, ReconcileError> {
     let by_subject = user::get_by_oidc_subject(pool, subject).await?;
     let by_username = if by_subject.is_none() {
         user::get_by_username(pool, username).await?
@@ -362,6 +389,9 @@ pub async fn upsert_oidc_user(
         Reconcile::Reuse => by_subject.expect("reuse implies a subject match"),
         Reconcile::Link => {
             let existing = by_username.expect("link implies a username match");
+            if !auto_link_allowed(&existing) {
+                return Err(ReconcileError::UsernameTaken);
+            }
             user::set_oidc_subject(pool, existing.id, subject)
                 .await?
                 .unwrap_or(existing)
@@ -541,6 +571,36 @@ mod tests {
         assert_eq!(decide_reconcile(None, None), Reconcile::Create);
     }
 
+    // ---- H-2: username-takeover guard ------------------------------------
+
+    #[test]
+    fn auto_link_only_accepts_bare_readonly_accounts() {
+        let mut existing = sample();
+        assert!(
+            auto_link_allowed(&existing),
+            "a bare read-only account (SSO-created) auto-links"
+        );
+        existing.password_hash = Some("argon2id:...".into());
+        assert!(
+            !auto_link_allowed(&existing),
+            "an account with a local password must be linked by an admin"
+        );
+        existing.password_hash = None;
+        existing.role = UserRole::Operator;
+        assert!(!auto_link_allowed(&existing), "operator must not be adopted");
+        existing.role = UserRole::Admin;
+        assert!(!auto_link_allowed(&existing), "admin must never be adopted");
+    }
+
+    #[test]
+    fn username_taken_error_is_explicit() {
+        // The caller surfaces this message verbatim as a 403.
+        assert_eq!(
+            ReconcileError::UsernameTaken.to_string(),
+            "an account with this username already exists; ask an admin to link it manually"
+        );
+    }
+
     fn sample() -> User {
         User {
             id: uuid::Uuid::new_v4(),
@@ -559,6 +619,110 @@ mod tests {
             totp_confirmed_at: None,
             totp_last_step: None,
         }
+    }
+
+    /// End-to-end exercise of the Link guard against a live PostgreSQL
+    /// (skipped unless `HUGINN_TEST_DATABASE_URL` is set — `cargo test` stays
+    /// green without a database, like `models::live_tests`).
+    #[tokio::test]
+    async fn upsert_link_guard_refuses_to_adopt_real_accounts() {
+        let Ok(url) = std::env::var("HUGINN_TEST_DATABASE_URL") else {
+            eprintln!("skipped: HUGINN_TEST_DATABASE_URL not set");
+            return;
+        };
+        let guard = crate::db::LIVE_DB_GUARD.lock().await;
+        let pool = crate::db::connect(&url, 4).await.expect("connect");
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        crate::db::run_migrations(&pool).await.expect("migrations");
+
+        // An SSO identity whose username matches a local ADMIN must be
+        // refused — it may not adopt the account (H-2).
+        let admin = user::create(
+            &pool,
+            UserNew {
+                username: "admin".into(),
+                password_hash: Some("h".into()),
+                role: UserRole::Admin,
+                is_active: true,
+                ..UserNew::default()
+            },
+        )
+        .await
+        .unwrap();
+        let err = upsert_oidc_user(&pool, "sub-admin", "admin", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ReconcileError::UsernameTaken), "{err:?}");
+        // The admin account was left untouched.
+        let still = user::get_by_id(&pool, admin.id).await.unwrap().unwrap();
+        assert!(still.oidc_subject.is_none());
+        assert!(still.ldap_dn.is_none());
+
+        // A read-only account WITH a local password is refused too.
+        user::create(
+            &pool,
+            UserNew {
+                username: "bob".into(),
+                password_hash: Some("h".into()),
+                role: UserRole::Readonly,
+                is_active: true,
+                ..UserNew::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            upsert_oidc_user(&pool, "sub-bob", "bob", None)
+                .await
+                .unwrap_err(),
+            ReconcileError::UsernameTaken
+        ));
+
+        // A bare read-only account (no password) IS auto-linked.
+        let bare = user::create(
+            &pool,
+            UserNew {
+                username: "carol".into(),
+                password_hash: None,
+                role: UserRole::Readonly,
+                is_active: true,
+                ..UserNew::default()
+            },
+        )
+        .await
+        .unwrap();
+        let linked = upsert_oidc_user(&pool, "sub-carol", "carol", None)
+            .await
+            .unwrap();
+        assert_eq!(linked.id, bare.id, "the existing account is reused");
+        assert_eq!(linked.oidc_subject.as_deref(), Some("sub-carol"));
+
+        // The same policy governs the LDAP fallback.
+        assert!(matches!(
+            crate::services::ldap::upsert_ldap_user(&pool, "uid=bob,dc=x", "bob", None)
+                .await
+                .unwrap_err(),
+            ReconcileError::UsernameTaken
+        ));
+        let linked = crate::services::ldap::upsert_ldap_user(
+            &pool,
+            "uid=carol,dc=x",
+            "carol",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(linked.id, bare.id);
+        assert_eq!(linked.ldap_dn.as_deref(), Some("uid=carol,dc=x"));
+
+        drop(guard);
     }
 
     // ---- encoding --------------------------------------------------------

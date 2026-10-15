@@ -173,7 +173,12 @@ pub(super) async fn oidc_callback(
         claims.email.as_deref(),
     )
     .await
-    .map_err(db_err)?;
+    .map_err(|e| match e {
+        // H-2: the SSO username matches a local account that must not be
+        // auto-adopted → explicit 403, not a 500.
+        oidc::ReconcileError::UsernameTaken => ApiError::forbidden(e.to_string()),
+        oidc::ReconcileError::Db(err) => db_err(err),
+    })?;
     record_audit(
         &state,
         {

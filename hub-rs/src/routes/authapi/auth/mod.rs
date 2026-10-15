@@ -190,7 +190,14 @@ async fn login(
                     claims.email.as_deref(),
                 )
                 .await
-                .map_err(db_err)?,
+                .map_err(|e| match e {
+                    // H-2: the directory username matches a local account
+                    // that must not be auto-adopted → explicit 403, not a 500.
+                    crate::services::oidc::ReconcileError::UsernameTaken => {
+                        ApiError::forbidden(e.to_string())
+                    }
+                    crate::services::oidc::ReconcileError::Db(err) => db_err(err),
+                })?,
             );
         }
     }

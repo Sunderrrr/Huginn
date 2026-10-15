@@ -249,16 +249,21 @@ fn to_ldaps(url: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Find or create a user from LDAP attributes (`upsert_ldap_user`): match on
-/// `ldap_dn`, else an existing local user with the same `username` adopts the
-/// DN, else create a read-only password-less account. Always bumps
+/// `ldap_dn`, else a *bare* existing local user with the same `username`
+/// adopts the DN, else create a read-only password-less account. Always bumps
 /// `last_login_at`.
+///
+/// H-2: the username branch refuses accounts that are not bare read-only ones
+/// (see [`super::oidc::auto_link_allowed`]) — a directory user whose username
+/// collides with a local admin must never adopt it. The caller surfaces that
+/// as 403.
 pub async fn upsert_ldap_user(
     pool: &sqlx::PgPool,
     dn: &str,
     username: &str,
     email: Option<&str>,
-) -> Result<User, DbError> {
-    use super::oidc::{decide_reconcile, Reconcile};
+) -> Result<User, super::oidc::ReconcileError> {
+    use super::oidc::{auto_link_allowed, decide_reconcile, Reconcile};
     let by_dn = user::get_by_ldap_dn(pool, dn).await?;
     let by_username = if by_dn.is_none() {
         user::get_by_username(pool, username).await?
@@ -269,6 +274,9 @@ pub async fn upsert_ldap_user(
         Reconcile::Reuse => by_dn.expect("reuse implies a dn match"),
         Reconcile::Link => {
             let existing = by_username.expect("link implies a username match");
+            if !auto_link_allowed(&existing) {
+                return Err(super::oidc::ReconcileError::UsernameTaken);
+            }
             user::set_ldap_dn(pool, existing.id, dn)
                 .await?
                 .unwrap_or(existing)
