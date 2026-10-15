@@ -1,4 +1,3 @@
-
 //! A virtual authenticator for tests: registration and authentication
 //! payloads are built byte-for-byte like a real one would (COSE keys,
 //! authenticatorData, clientDataJSON, real signatures), so the verifiers
