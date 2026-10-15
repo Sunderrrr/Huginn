@@ -43,6 +43,11 @@ huginn.cronos.website, 100.73.17.140, 10.0.0.75, localhost, ampere-free-tier {
 	handle /healthz {
 		reverse_proxy hub:8000
 	}
+	# Prometheus scrape endpoint (internal — restrict at the firewall/VPN level
+	# if the hub is ever exposed beyond the trusted network).
+	handle /metrics {
+		reverse_proxy hub:8000
+	}
 
 	# MCP server (streamable HTTP).
 	handle /mcp* {
