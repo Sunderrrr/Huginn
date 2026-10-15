@@ -106,8 +106,36 @@ async fn main() {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    // Graceful shutdown: on SIGTERM/SIGINT stop accepting, let in-flight
+    // requests (worker long-polls included) finish, then exit — instead of
+    // cutting every connection at deploy time.
+    .with_graceful_shutdown(shutdown_signal())
     .await
     .expect("serve");
+}
+
+/// Resolves on SIGTERM or SIGINT (systemd stop / docker stop / Ctrl-C).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+    tracing::info!("shutdown signal received — draining connections");
 }
 
 /// Port of `users_service.ensure_bootstrap_admin` (called from `lifespan`):
