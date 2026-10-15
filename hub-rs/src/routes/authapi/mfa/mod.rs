@@ -26,6 +26,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::error::ApiError;
 use crate::models::audit::AuditNew;
@@ -92,6 +93,20 @@ fn now_unix() -> u64 {
     Utc::now().timestamp().max(0) as u64
 }
 
+/// The shared throttle of every code-checking second-factor endpoint
+/// (`mfa._verify_limiter`): one window per client IP *and* one per user —
+/// 429 when either is spent. Applied to /verify (as before) and, since M-2,
+/// to TOTP enroll finish, TOTP disable and backup-code regeneration too, so
+/// none of them can be brute-forced.
+pub(super) fn mfa_throttle(state: &AuthState, ip: &str, user_id: Uuid) -> Result<(), ApiError> {
+    if !state.verify_limiter.allow(&format!("mfa:{ip}"))
+        || !state.verify_limiter.allow(&format!("mfa:{user_id}"))
+    {
+        return Err(ApiError::too_many_requests("too many attempts; slow down"));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Wire schemas (app/schemas/auth.py)
 // ---------------------------------------------------------------------------
@@ -149,11 +164,7 @@ async fn verify_mfa(
     let ip =
         client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
     let user = challenge_user(&state, &headers, MFA_SCOPE).await?;
-    if !state.verify_limiter.allow(&format!("mfa:{ip}"))
-        || !state.verify_limiter.allow(&format!("mfa:{}", user.id))
-    {
-        return Err(ApiError::too_many_requests("too many attempts; slow down"));
-    }
+    mfa_throttle(&state, &ip, user.id)?;
     if !user.totp_enabled || user.totp_secret_enc.is_none() {
         return Err(ApiError::bad_request("TOTP not enabled"));
     }
@@ -267,6 +278,31 @@ mod tests {
     }
 
     // ---- HTTP-level (no database needed) ----------------------------------
+
+    #[tokio::test]
+    async fn mfa_throttle_kicks_in_on_the_eleventh_call() {
+        // M-2: the double window (10/minute, per IP and per user) that /verify,
+        // TOTP enroll finish, TOTP disable and backup-code regeneration share.
+        let state = test_state();
+        let user = Uuid::new_v4();
+        for _ in 0..10 {
+            assert!(
+                mfa_throttle(&state, "198.51.100.9", user).is_ok(),
+                "first ten calls pass"
+            );
+        }
+        let err = mfa_throttle(&state, "198.51.100.9", user).unwrap_err();
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.detail(), "too many attempts; slow down");
+        // The per-USER window is spent too — a fresh IP does not reset it.
+        let err = mfa_throttle(&state, "198.51.100.10", user).unwrap_err();
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        // The per-IP window is spent independently of the user.
+        let err = mfa_throttle(&state, "198.51.100.9", Uuid::new_v4()).unwrap_err();
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        // A fresh user from a fresh IP still has budget.
+        assert!(mfa_throttle(&state, "198.51.100.11", Uuid::new_v4()).is_ok());
+    }
 
     #[tokio::test]
     async fn verify_requires_a_challenge_token() {
