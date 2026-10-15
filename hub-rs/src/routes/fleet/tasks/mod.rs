@@ -62,6 +62,11 @@ pub use create::{
     create_action_task, create_command_task, create_uninstall_task, create_update_task, ExecError,
 };
 
+/// Whether `name` is one of the built-in whitelisted actions (`actions.py`'s
+/// catalog). Used by the scheduler to tell a built-in action from an
+/// admin-defined custom command (which carries its own exec-mode gate).
+pub(crate) use actions::action_spec;
+
 // ---------------------------------------------------------------------------
 // Waiting (services/tasks.wait_for_terminal, event-driven)
 // ---------------------------------------------------------------------------

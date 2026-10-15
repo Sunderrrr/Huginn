@@ -290,6 +290,18 @@ async fn run_due_schedules(
         }
         let targets = resolve_schedule_targets(pool, &sched).await;
         for vm in targets {
+            // M-4: the scheduler must not bypass the exec-mode gate the API
+            // enforces (routes/fleet/tasks/create.rs) — skip this VM.
+            if !schedule_allowed_on(&sched, &vm) {
+                tracing::warn!(
+                    "schedule {} skipped for VM {}: exec mode {:?} forbids {}",
+                    sched.name,
+                    vm.id,
+                    vm.exec_mode,
+                    sched.task_kind
+                );
+                continue;
+            }
             let created = if sched.task_kind == "action" {
                 models::task::create_action_task(
                     pool,
@@ -360,6 +372,26 @@ async fn run_due_schedules(
     }
 }
 
+/// M-4: whether a due schedule may create its task on `vm` — the scheduler
+/// must not bypass the exec-mode gate the API enforces
+/// (`routes/fleet/tasks/create.rs`):
+///
+/// * a free command requires `unrestricted` mode (`create_command_task`);
+/// * an action outside the built-in catalog is an admin-defined custom
+///   command, which requires `custom` or `unrestricted`
+///   (`create_custom_action_task`);
+/// * built-in actions keep going through the normal action validation.
+fn schedule_allowed_on(sched: &models::scheduled_command::ScheduledCommand, vm: &models::vm::VM) -> bool {
+    if sched.task_kind == "action" {
+        let name = sched.action_name.as_deref().unwrap_or_default();
+        if routes::fleet::tasks::action_spec(name).is_some() {
+            return true; // built-in action: normal validation applies
+        }
+        return matches!(vm.exec_mode, models::enums::ExecMode::Custom | models::enums::ExecMode::Unrestricted);
+    }
+    vm.exec_mode == models::enums::ExecMode::Unrestricted
+}
+
 /// Active VMs a schedule targets (port of `_resolve_targets`).
 async fn resolve_schedule_targets(
     pool: &sqlx::PgPool,
@@ -406,5 +438,84 @@ async fn resolve_schedule_targets(
         .await
         .unwrap_or_default(),
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use models::enums::{ExecMode, VMState, WorkerArch};
+    use models::scheduled_command::ScheduledCommand;
+    use uuid::Uuid;
+
+    fn vm_with(mode: ExecMode) -> models::vm::VM {
+        models::vm::VM {
+            id: Uuid::new_v4(),
+            name: "worker-1".into(),
+            hostname: None,
+            ip_address: None,
+            arch: WorkerArch::Amd64,
+            os_info: json!({}),
+            state: VMState::Active,
+            exec_mode: mode,
+            worker_version: None,
+            worker_secret_hash: None,
+            enrollment_token_id: None,
+            approved_by: None,
+            last_heartbeat_at: None,
+            enrolled_at: None,
+            approved_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn schedule(task_kind: &str, action: Option<&str>) -> ScheduledCommand {
+        ScheduledCommand {
+            id: Uuid::new_v4(),
+            name: "nightly".into(),
+            enabled: true,
+            target_kind: "vm".into(),
+            target_vm_id: Some(Uuid::new_v4()),
+            target_tag_id: None,
+            task_kind: task_kind.into(),
+            action_name: action.map(str::to_owned),
+            params: json!({}),
+            command: Some("ls".into()),
+            cron_expression: "0 3 * * *".into(),
+            last_run_at: None,
+            created_by: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// M-4: the scheduler must not bypass the exec-mode gate the API
+    /// enforces — a whitelist VM targeted by a schedule *command* gets NO
+    /// task created, and custom actions need custom/unrestricted mode.
+    #[test]
+    fn scheduler_honours_the_exec_mode_gate() {
+        // Free commands: unrestricted only — whitelist and custom are skipped.
+        let command = schedule("command", None);
+        assert!(
+            !schedule_allowed_on(&command, &vm_with(ExecMode::Whitelist)),
+            "a whitelist VM targeted by a schedule command gets no task"
+        );
+        assert!(!schedule_allowed_on(&command, &vm_with(ExecMode::Custom)));
+        assert!(schedule_allowed_on(&command, &vm_with(ExecMode::Unrestricted)));
+
+        // Custom actions (outside the built-in catalog): custom or
+        // unrestricted, the same policy as create_custom_action_task.
+        let custom = schedule("action", Some("deploy_app"));
+        assert!(!schedule_allowed_on(&custom, &vm_with(ExecMode::Whitelist)));
+        assert!(schedule_allowed_on(&custom, &vm_with(ExecMode::Custom)));
+        assert!(schedule_allowed_on(&custom, &vm_with(ExecMode::Unrestricted)));
+
+        // Built-in actions run on any mode (the normal action validation
+        // still applies).
+        let builtin = schedule("action", Some("status"));
+        for mode in [ExecMode::Whitelist, ExecMode::Custom, ExecMode::Unrestricted] {
+            assert!(schedule_allowed_on(&builtin, &vm_with(mode)), "{mode:?}");
+        }
     }
 }
