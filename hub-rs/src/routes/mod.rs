@@ -17,4 +17,5 @@
 pub mod admin;
 pub mod authapi;
 pub mod fleet;
+pub mod metrics;
 pub mod worker;
