@@ -11,9 +11,10 @@ use uuid::Uuid;
 
 use crate::db::DbError;
 use crate::error::ApiError;
+use crate::models::audit::AuditNew;
 use crate::models::enrollment::EnrollVmParams;
 use crate::models::task::ActionTaskNew;
-use crate::models::{VMState, WorkerArch};
+use crate::models::{ActorType, VMState, WorkerArch};
 
 use super::{
     client_ip, db_err, enforce_body_size, enforce_tls, map_json_rejection, validate_ip_literal,
@@ -102,7 +103,7 @@ pub(super) async fn enroll(
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
 
-    let ip_address = body.ip_address.clone().or(ip);
+    let ip_address = body.ip_address.clone().or_else(|| ip.clone());
     let worker_secret = crate::security::generate_secret();
     let params = EnrollVmParams {
         name: body.name.clone(),
@@ -131,17 +132,24 @@ pub(super) async fn enroll(
     let vm = outcome.vm;
     let auto_approved = vm.state == VMState::Active;
 
-    // audit.record(...) lands with the audit module; log the same detail until
-    // then (see INTEGRATION_NOTES.md).
-    tracing::info!(
-        target: "huginn.hub.audit",
-        event_type = "enroll",
-        vm_id = %vm.id,
-        name = %vm.name,
-        arch = vm.arch.as_str(),
-        auto_approved,
-        "worker enrolled"
-    );
+    // L-4: a worker joining the fleet is a security-relevant event — record it
+    // on the tamper-evident audit chain like every other writer (this used to
+    // be a tracing-only placeholder, so enrollments never showed up in
+    // GET /api/audit).
+    let mut new = AuditNew::new(ActorType::System, "enrollment", "worker_enrolled");
+    new.vm_id = Some(vm.id);
+    new.detail = serde_json::json!({
+        "name": vm.name,
+        "arch": vm.arch.as_str(),
+        "auto_approved": auto_approved,
+    });
+    new.source_ip = ip;
+    // Best-effort: the VM is registered and the one-time worker secret was
+    // already generated — failing the request here would strand the worker.
+    // The sweeper's audit appends are logged-not-raised for the same reason.
+    if let Err(e) = crate::routes::fleet::audit::record(&state.pool, new).await {
+        tracing::warn!("enroll audit append failed: {e}");
+    }
 
     // An auto-approved VM is active right away; queue a status + metrics refresh
     // so the dashboard shows live telemetry as soon as the worker starts
@@ -308,5 +316,89 @@ mod tests {
             body_json(response).await,
             json!({"detail": "rate limit exceeded; slow down"})
         );
+    }
+
+    /// L-4: a successful enrollment lands on the tamper-evident audit chain
+    /// (skipped unless `HUGINN_TEST_DATABASE_URL` is set).
+    #[tokio::test]
+    async fn enrollment_is_audited_on_the_hash_chain() {
+        let Ok(url) = std::env::var("HUGINN_TEST_DATABASE_URL") else {
+            eprintln!("skipped: HUGINN_TEST_DATABASE_URL not set");
+            return;
+        };
+        let guard = crate::db::LIVE_DB_GUARD.lock().await;
+        let pool = crate::db::connect(&url, 4).await.expect("connect");
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        crate::db::run_migrations(&pool).await.expect("migrations");
+
+        let config = Config {
+            require_tls: false,
+            ..Config::default()
+        };
+        let state = WorkerState::new(pool.clone(), config);
+        let app = router(state.clone());
+
+        // A usable auto-approving enrollment token.
+        let plaintext = "join-me";
+        crate::models::enrollment::create_token(
+            &pool,
+            crate::models::enrollment::EnrollmentTokenNew {
+                token_hash: state.security.hash_secret(plaintext),
+                label: "test".into(),
+                created_by: Uuid::new_v4(),
+                ttl_seconds: 3600,
+                max_uses: 1,
+                auto_approve: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(json_request(
+                "POST",
+                "/api/worker/enroll",
+                json!({"token": plaintext, "name": "w1", "arch": "amd64"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = body_json(response).await;
+        let vm_id: Uuid = body["worker_id"].as_str().unwrap().parse().unwrap();
+
+        // The chain contains exactly one enrollment entry with the expected
+        // shape...
+        let entries = crate::models::audit::list_filtered(
+            &pool,
+            None,
+            Some("worker_enrolled"),
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(entries.len(), 1, "one worker_enrolled entry");
+        let entry = &entries[0];
+        assert_eq!(entry.actor_type, crate::models::ActorType::System);
+        assert_eq!(entry.actor_id, "enrollment");
+        assert_eq!(entry.vm_id, Some(vm_id));
+        assert_eq!(entry.detail["name"], json!("w1"));
+        assert_eq!(entry.detail["arch"], json!("amd64"));
+        assert_eq!(entry.detail["auto_approved"], json!(true));
+        // ...and the whole chain still verifies end to end.
+        assert!(
+            crate::routes::fleet::audit::verify_chain(&pool)
+                .await
+                .unwrap(),
+            "verify_chain stays true"
+        );
+
+        drop(guard);
     }
 }
