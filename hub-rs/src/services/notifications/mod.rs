@@ -509,6 +509,14 @@ pub(crate) mod testing {
             webauthn_rp_id: String::new(),
             webauthn_rp_name: "Huginn".into(),
             webauthn_origin: String::new(),
+            backup_s3_enabled: false,
+            backup_s3_endpoint: String::new(),
+            backup_s3_region: String::new(),
+            backup_s3_bucket: String::new(),
+            backup_s3_prefix: String::new(),
+            backup_s3_access_key: String::new(),
+            backup_s3_secret_key: None,
+            backup_s3_retention_days: 30,
         }
     }
 }
