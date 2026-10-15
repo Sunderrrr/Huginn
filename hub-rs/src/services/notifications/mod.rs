@@ -71,11 +71,10 @@
 //! (see [`describe_url`]) and `reqwest` errors are stripped of their URL with
 //! `without_url()` before being formatted.
 
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::PgPool;
 use tracing::warn;
 
@@ -83,16 +82,22 @@ use crate::models::setting::{self, Setting};
 use crate::models::task::Task;
 use crate::models::vm::VM;
 
+use self::discord::{discord_payload, message};
+use self::webhook::{
+    configured, deliver, generic_payload, http_client, DeliveryOutcome, Destination,
+};
+
+// ---------------------------------------------------------------------------
+// Submodules — one per destination format
+// ---------------------------------------------------------------------------
+
+mod discord;
+mod webhook;
+
 /// Hard wall-clock budget for one notification call: settings read + every
 /// delivery (the destinations are posted concurrently). Best-effort means the
 /// caller is never held longer than this.
 const NOTIFY_BUDGET: Duration = Duration::from_secs(5);
-
-/// Discord hard limit for `content` (characters).
-const DISCORD_CONTENT_LIMIT: usize = 2000;
-
-/// How much of a task `error` is quoted in the human message.
-const ERROR_EXCERPT_CHARS: usize = 200;
 
 /// Log target (matches the Python logger `huginn.hub.notifications`).
 const LOG_TARGET: &str = "huginn.hub.notifications";
@@ -224,86 +229,6 @@ async fn notify(pool: &PgPool, event: FleetEvent<'_>) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Delivery
-// ---------------------------------------------------------------------------
-
-/// Which configured webhook a delivery went to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Destination {
-    Discord,
-    Generic,
-}
-
-impl Destination {
-    fn as_str(self) -> &'static str {
-        match self {
-            Destination::Discord => "discord",
-            Destination::Generic => "generic",
-        }
-    }
-}
-
-/// Why a destination URL was refused (nothing was sent).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RejectReason {
-    NotAUrl,
-    /// `http://` to a non-loopback host — see the module docs.
-    InsecureHttp,
-    UnsupportedScheme,
-}
-
-impl RejectReason {
-    fn as_str(self) -> &'static str {
-        match self {
-            RejectReason::NotAUrl => "unparsable URL",
-            RejectReason::InsecureHttp => "http:// to a non-loopback host (https:// required)",
-            RejectReason::UnsupportedScheme => "unsupported scheme (https:// required)",
-        }
-    }
-}
-
-/// Why a send failed (kept free of URLs/exception text so it is safe to log or
-/// assert on).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FailReason {
-    Timeout,
-    Status(u16),
-    Network,
-}
-
-/// Per-destination outcome, only used for logging and tests — the public API
-/// discards it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeliveryOutcome {
-    /// 2xx answer.
-    Sent { dest: Destination, status: u16 },
-    /// URL refused by the policy; nothing was sent.
-    Rejected {
-        dest: Destination,
-        reason: RejectReason,
-    },
-    /// Transport error, timeout, or non-2xx answer.
-    Failed {
-        dest: Destination,
-        reason: FailReason,
-    },
-}
-
-/// Shared HTTP client: no redirect following (a webhook URL carries a secret
-/// token; a 3xx would hand it to another host) and no default timeout — each
-/// request carries its own, so the caller's budget governs.
-fn http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!("huginn-hub/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .unwrap_or_default()
-    })
-}
-
 /// Fan the event out to every enabled, configured destination.
 ///
 /// `budget` bounds every request (the destinations are posted concurrently, so
@@ -327,7 +252,7 @@ async fn dispatch(
     }
 
     let client = http_client();
-    let discord_body = json!({ "content": text });
+    let discord_body = discord_payload(&text);
     let generic_body = generic_payload(event, &text, &ts);
 
     // Concurrent fan-out: one hung webhook cannot eat the budget of the other.
@@ -367,239 +292,19 @@ async fn dispatch(
     d.into_iter().chain(g).collect()
 }
 
-/// POST one payload to one destination, classifying the outcome and logging
-/// every problem as a warning (never raising).
-async fn deliver(
-    client: &reqwest::Client,
-    dest: Destination,
-    url: &str,
-    body: &Value,
-    budget: Duration,
-    event: &FleetEvent<'_>,
-) -> DeliveryOutcome {
-    let event_name = event.kind.as_str();
-    let target = match check_webhook_url(url) {
-        Ok(target) => target,
-        Err(reason) => {
-            warn!(
-                target: LOG_TARGET,
-                event = event_name,
-                dest = dest.as_str(),
-                url = %describe_url(url),
-                reason = reason.as_str(),
-                "webhook URL refused"
-            );
-            return DeliveryOutcome::Rejected { dest, reason };
-        }
-    };
-    match post_json(client, target, body, budget).await {
-        Ok(status) if (200..300).contains(&status) => DeliveryOutcome::Sent { dest, status },
-        Ok(status) => {
-            warn!(
-                target: LOG_TARGET,
-                event = event_name,
-                dest = dest.as_str(),
-                url = %describe_url(target),
-                status,
-                "webhook POST returned a non-2xx status"
-            );
-            DeliveryOutcome::Failed {
-                dest,
-                reason: FailReason::Status(status),
-            }
-        }
-        Err(reason) => {
-            let reason_str = match reason {
-                FailReason::Timeout => "timeout",
-                FailReason::Network => "network error",
-                FailReason::Status(_) => "request failed",
-            };
-            warn!(
-                target: LOG_TARGET,
-                event = event_name,
-                dest = dest.as_str(),
-                url = %describe_url(target),
-                reason = reason_str,
-                "notification POST failed"
-            );
-            DeliveryOutcome::Failed { dest, reason }
-        }
-    }
-}
-
-/// POST `body` as JSON with a per-request timeout. The error is stripped of
-/// its URL before it can reach a log (`reqwest` formats the full URL — secret
-/// token included — into its `Display`).
-async fn post_json(
-    client: &reqwest::Client,
-    url: &str,
-    body: &Value,
-    budget: Duration,
-) -> Result<u16, FailReason> {
-    let result = client.post(url).timeout(budget).json(body).send().await;
-    match result {
-        Ok(resp) => Ok(resp.status().as_u16()),
-        Err(e) => {
-            let reason = if e.is_timeout() {
-                FailReason::Timeout
-            } else {
-                FailReason::Network
-            };
-            // `without_url()` keeps the webhook URL (and its token) out of the
-            // warning.
-            let e = e.without_url();
-            warn!(
-                target: LOG_TARGET,
-                error = %e,
-                "notification POST failed (transport)"
-            );
-            Err(reason)
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// URL policy
+// Tests
 // ---------------------------------------------------------------------------
 
-/// `Some(url)` when the setting is actually configured (empty/whitespace means
-/// unset — the dashboard sends `""` for cleared fields).
-fn configured(url: Option<&str>) -> Option<&str> {
-    let url = url?.trim();
-    if url.is_empty() {
-        None
-    } else {
-        Some(url)
-    }
-}
-
-/// Extract the authority's host from `scheme://[user@]host[:port][/...]`
-/// (case preserved; the policy comparisons are case-insensitive).
-fn authority_host(url: &str) -> Option<&str> {
-    let rest = url.split_once("://")?.1;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    if hostport.starts_with('[') {
-        // IPv6 literal: keep the brackets, drop any port.
-        let end = hostport.find(']')?;
-        return Some(&hostport[..=end]);
-    }
-    Some(hostport.split(':').next().unwrap_or(hostport))
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost") || host.starts_with("127.") || host == "[::1]"
-}
-
-/// Webhook URL policy: HTTPS everywhere, `http://` tolerated for loopback only
-/// (what the tests exercise). Returns the URL unchanged on success.
-fn check_webhook_url(url: &str) -> Result<&str, RejectReason> {
-    let Some((scheme, host)) = url
-        .split_once("://")
-        .and_then(|(s, _)| authority_host(url).map(|h| (s, h)))
-    else {
-        return Err(RejectReason::NotAUrl);
-    };
-    if scheme.eq_ignore_ascii_case("https") {
-        return Ok(url);
-    }
-    if scheme.eq_ignore_ascii_case("http") {
-        return if is_loopback_host(host) {
-            Ok(url)
-        } else {
-            Err(RejectReason::InsecureHttp)
-        };
-    }
-    Err(RejectReason::UnsupportedScheme)
-}
-
-/// Safe URL label for logs: `scheme://host` only — never the path or query,
-/// where Discord tokens and generic-webhook secrets live. Unparsable input is
-/// never echoed (it may itself be a secret).
-fn describe_url(url: &str) -> String {
-    match url.split_once("://") {
-        Some((scheme, _)) => match authority_host(url) {
-            Some(host) => format!("{scheme}://{host}"),
-            None => "<unparsable>".to_string(),
-        },
-        None => "<unparsable>".to_string(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Messages and payloads
-// ---------------------------------------------------------------------------
-
-/// Human-readable one-liner — Python `_message` wording (Discord-flavoured
-/// markdown), with extra task detail (exit code, error excerpt) for
-/// `task_failure`.
-fn message(event: &FleetEvent<'_>) -> String {
-    let name = event.vm.map_or("?", |v| v.name.as_str());
-    let text = match event.kind {
-        EventKind::VmOffline => {
-            let ip = event
-                .vm
-                .and_then(|v| v.ip_address.as_deref())
-                .unwrap_or("?");
-            format!("🔴 VM went offline: **{name}** ({ip})")
-        }
-        EventKind::VmRecovered => {
-            format!("🟢 VM recovered: **{name}** is back online")
-        }
-        EventKind::TaskFailure => {
-            let task = event.task;
-            let action = task
-                .and_then(|t| t.action_name.as_deref())
-                .filter(|a| !a.is_empty())
-                .or_else(|| task.map(|t| t.task_type.as_str()))
-                .unwrap_or("task");
-            let status = task.map_or("failed", |t| t.status.as_str());
-            let mut text = format!("⚠️ Task failed: `{action}` on **{name}** ({status})");
-            if let Some(t) = task {
-                if let Some(code) = t.exit_code {
-                    text.push_str(&format!(", exit code {code}"));
-                }
-                if let Some(err) = t.error.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
-                    text.push_str(&format!(" — {}", truncate_chars(err, ERROR_EXCERPT_CHARS)));
-                }
-            }
-            text
-        }
-    };
-    truncate_chars(&text, DISCORD_CONTENT_LIMIT)
-}
-
-/// Generic webhook body — key-for-key with the Python hub
-/// (`event` / `message` / `vm` / `task` / `ts`) so existing consumers keep
-/// parsing it.
-fn generic_payload(event: &FleetEvent<'_>, text: &str, ts: &str) -> Value {
-    json!({
-        "event": event.kind.as_str(),
-        "message": text,
-        "vm": event.vm.map(|v| json!({ "id": v.id.to_string(), "name": v.name })),
-        "task": event.task.map(|t| json!({ "id": t.id.to_string(), "status": t.status.as_str() })),
-        "ts": ts,
-    })
-}
-
-/// Truncate to `max` characters (never splitting a code point), marking the
-/// cut with an ellipsis.
-fn truncate_chars(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let cut: String = text.chars().take(max.saturating_sub(1)).collect();
-    format!("{cut}…")
-}
-
+/// A throwaway local HTTP server that records what was posted to it.
 #[cfg(test)]
-mod tests {
+pub(crate) mod testing {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
-    use std::time::Instant;
 
     use chrono::{DateTime, Utc};
+    use serde_json::json;
     use uuid::Uuid;
 
     use crate::models::enums::{ExecMode, TaskStatus, TaskType, VMState, WorkerArch};
@@ -611,28 +316,28 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[derive(Debug, Clone)]
-    struct Recorded {
-        method: String,
-        path: String,
-        content_type: String,
-        body: String,
+    pub(crate) struct Recorded {
+        pub(crate) method: String,
+        pub(crate) path: String,
+        pub(crate) content_type: String,
+        pub(crate) body: String,
     }
 
     /// Minimal webhook double (the `wiremock` role, hand-rolled so the crate
     /// takes on no new dev-dependency): one std thread on a `TcpListener`,
     /// records every request, answers with a fixed status — optionally after a
     /// delay, to simulate a hung webhook.
-    struct MockWebhook {
+    pub(crate) struct MockWebhook {
         base: String,
         requests: Arc<Mutex<Vec<Recorded>>>,
     }
 
     impl MockWebhook {
-        fn start() -> Self {
+        pub(crate) fn start() -> Self {
             Self::start_with(200, Duration::ZERO)
         }
 
-        fn start_with(status: u16, delay: Duration) -> Self {
+        pub(crate) fn start_with(status: u16, delay: Duration) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock webhook");
             let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
             let requests = Arc::new(Mutex::new(Vec::new()));
@@ -659,11 +364,11 @@ mod tests {
             Self { base, requests }
         }
 
-        fn url(&self, path: &str) -> String {
+        pub(crate) fn url(&self, path: &str) -> String {
             format!("{}{}", self.base, path)
         }
 
-        fn requests(&self) -> Vec<Recorded> {
+        pub(crate) fn requests(&self) -> Vec<Recorded> {
             self.requests.lock().unwrap().clone()
         }
     }
@@ -714,7 +419,7 @@ mod tests {
         None
     }
 
-    fn sample_vm() -> VM {
+    pub(crate) fn sample_vm() -> VM {
         VM {
             id: Uuid::parse_str("00000000-0000-4000-8000-0000000000aa").unwrap(),
             name: "worker-1".into(),
@@ -736,7 +441,7 @@ mod tests {
         }
     }
 
-    fn sample_task(status: TaskStatus) -> Task {
+    pub(crate) fn sample_task(status: TaskStatus) -> Task {
         Task {
             id: Uuid::parse_str("00000000-0000-4000-8000-0000000000bb").unwrap(),
             vm_id: Uuid::parse_str("00000000-0000-4000-8000-0000000000aa").unwrap(),
@@ -759,7 +464,7 @@ mod tests {
         }
     }
 
-    fn enabled_settings() -> Setting {
+    pub(crate) fn enabled_settings() -> Setting {
         let mut s = base_settings_row();
         s.notifications_enabled = true;
         s.notify_vm_offline = true;
@@ -769,7 +474,7 @@ mod tests {
     }
 
     /// A settings row in its SQL defaults (all toggles explicit for clarity).
-    fn base_settings_row() -> Setting {
+    pub(crate) fn base_settings_row() -> Setting {
         Setting {
             id: 1,
             target_worker_version: String::new(),
@@ -806,222 +511,16 @@ mod tests {
             webauthn_origin: String::new(),
         }
     }
+}
 
-    // -----------------------------------------------------------------------
-    // Messages and payloads (Python `_message` / `notify` parity)
-    // -----------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::testing::*;
+    use super::*;
+    use serde_json::json;
+    use tower::ServiceExt;
 
-    #[test]
-    fn messages_match_python_wording() {
-        let vm = sample_vm();
-        let task = sample_task(TaskStatus::Failed);
-        let offline = FleetEvent {
-            kind: EventKind::VmOffline,
-            vm: Some(&vm),
-            task: None,
-        };
-        assert_eq!(
-            message(&offline),
-            "🔴 VM went offline: **worker-1** (10.0.0.5)"
-        );
-
-        let recovered = FleetEvent {
-            kind: EventKind::VmRecovered,
-            vm: Some(&vm),
-            task: None,
-        };
-        assert_eq!(
-            message(&recovered),
-            "🟢 VM recovered: **worker-1** is back online"
-        );
-
-        // Task details are quoted: action + status (Python), plus exit code and
-        // error excerpt (this port).
-        let failure = FleetEvent {
-            kind: EventKind::TaskFailure,
-            vm: Some(&vm),
-            task: Some(&task),
-        };
-        assert_eq!(
-            message(&failure),
-            "⚠️ Task failed: `reboot` on **worker-1** (failed), exit code 2 — boom"
-        );
-    }
-
-    #[test]
-    fn task_failure_message_falls_back_to_task_type() {
-        let vm = sample_vm();
-        let mut task = sample_task(TaskStatus::Timeout);
-        task.action_name = None;
-        task.exit_code = None;
-        task.error = None;
-        let event = FleetEvent {
-            kind: EventKind::TaskFailure,
-            vm: Some(&vm),
-            task: Some(&task),
-        };
-        assert_eq!(
-            message(&event),
-            "⚠️ Task failed: `action` on **worker-1** (timeout)"
-        );
-    }
-
-    #[test]
-    fn generic_payload_matches_python_shape() {
-        let vm = sample_vm();
-        let task = sample_task(TaskStatus::Failed);
-        let event = FleetEvent {
-            kind: EventKind::TaskFailure,
-            vm: Some(&vm),
-            task: Some(&task),
-        };
-        let body = generic_payload(&event, "msg", "2026-10-15T00:00:00+00:00");
-        assert_eq!(body["event"], "task_failure");
-        assert_eq!(body["message"], "msg");
-        assert_eq!(body["vm"]["id"], "00000000-0000-4000-8000-0000000000aa");
-        assert_eq!(body["vm"]["name"], "worker-1");
-        assert_eq!(body["task"]["id"], "00000000-0000-4000-8000-0000000000bb");
-        assert_eq!(body["task"]["status"], "failed");
-        assert_eq!(body["ts"], "2026-10-15T00:00:00+00:00");
-
-        // vm_offline: `task` is null (Python parity).
-        let event = FleetEvent {
-            kind: EventKind::VmOffline,
-            vm: Some(&vm),
-            task: None,
-        };
-        let body = generic_payload(&event, "m", "t");
-        assert_eq!(body["event"], "vm_offline");
-        assert!(body["task"].is_null());
-    }
-
-    // -----------------------------------------------------------------------
-    // URL policy + secret hygiene
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn webhook_url_policy() {
-        // HTTPS is always fine.
-        assert!(check_webhook_url("https://discord.com/api/webhooks/1/tok").is_ok());
-        // http:// is tolerated for loopback only (the tests' mock webhook).
-        assert!(check_webhook_url("http://127.0.0.1:9999/hook").is_ok());
-        assert!(check_webhook_url("http://localhost:9999/hook").is_ok());
-        assert!(check_webhook_url("http://[::1]:9999/hook").is_ok());
-        // http:// anywhere else is refused (Python accepted it — deliberate
-        // hardening).
-        assert_eq!(
-            check_webhook_url("http://example.com/hook"),
-            Err(RejectReason::InsecureHttp)
-        );
-        assert_eq!(
-            check_webhook_url("http://10.0.0.5/hook"),
-            Err(RejectReason::InsecureHttp)
-        );
-        // Other schemes and garbage.
-        assert_eq!(
-            check_webhook_url("ftp://example.com/hook"),
-            Err(RejectReason::UnsupportedScheme)
-        );
-        assert_eq!(
-            check_webhook_url("discord.com/api/webhooks/1/tok"),
-            Err(RejectReason::NotAUrl)
-        );
-    }
-
-    #[test]
-    fn describe_url_never_leaks_path_query_or_input() {
-        assert_eq!(
-            describe_url("https://discord.com/api/webhooks/123456/SUPER-SECRET-TOKEN"),
-            "https://discord.com"
-        );
-        assert_eq!(
-            describe_url("https://hooks.example.com/hook?token=SUPER-SECRET-TOKEN"),
-            "https://hooks.example.com"
-        );
-        // Unparsable input is never echoed (it may itself be a secret).
-        assert_eq!(describe_url("SUPER-SECRET-TOKEN"), "<unparsable>");
-    }
-
-    #[test]
-    fn empty_urls_are_not_configured() {
-        assert_eq!(configured(None), None);
-        assert_eq!(configured(Some("")), None);
-        assert_eq!(configured(Some("   ")), None);
-        assert_eq!(configured(Some(" https://x/y ")), Some("https://x/y"));
-    }
-
-    // -----------------------------------------------------------------------
-    // Delivery (mock webhook)
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn discord_delivery_posts_content_json() {
-        let server = MockWebhook::start();
-        let mut settings = enabled_settings();
-        settings.discord_webhook_url = Some(server.url("/discord"));
-        let vm = sample_vm();
-        let event = FleetEvent {
-            kind: EventKind::VmOffline,
-            vm: Some(&vm),
-            task: None,
-        };
-        let outcomes = dispatch(&settings, &event, Duration::from_secs(5)).await;
-        assert_eq!(
-            outcomes,
-            vec![DeliveryOutcome::Sent {
-                dest: Destination::Discord,
-                status: 200
-            }]
-        );
-        let requests = server.requests();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "POST");
-        assert_eq!(requests[0].path, "/discord");
-        assert!(requests[0].content_type.starts_with("application/json"));
-        let body: Value = serde_json::from_str(&requests[0].body).unwrap();
-        assert_eq!(
-            body["content"],
-            "🔴 VM went offline: **worker-1** (10.0.0.5)"
-        );
-    }
-
-    #[tokio::test]
-    async fn generic_delivery_matches_python_shape() {
-        let server = MockWebhook::start();
-        let mut settings = enabled_settings();
-        settings.generic_webhook_url = Some(server.url("/hook"));
-        let vm = sample_vm();
-        let task = sample_task(TaskStatus::Failed);
-        let event = FleetEvent {
-            kind: EventKind::TaskFailure,
-            vm: Some(&vm),
-            task: Some(&task),
-        };
-        let outcomes = dispatch(&settings, &event, Duration::from_secs(5)).await;
-        assert_eq!(
-            outcomes,
-            vec![DeliveryOutcome::Sent {
-                dest: Destination::Generic,
-                status: 200
-            }]
-        );
-        let requests = server.requests();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].path, "/hook");
-        let body: Value = serde_json::from_str(&requests[0].body).unwrap();
-        assert_eq!(body["event"], "task_failure");
-        assert_eq!(
-            body["message"],
-            "⚠️ Task failed: `reboot` on **worker-1** (failed), exit code 2 — boom"
-        );
-        assert_eq!(body["vm"]["id"], vm.id.to_string());
-        assert_eq!(body["vm"]["name"], "worker-1");
-        assert_eq!(body["task"]["id"], task.id.to_string());
-        assert_eq!(body["task"]["status"], "failed");
-        // `ts` is a parseable RFC 3339 instant.
-        let ts = body["ts"].as_str().unwrap();
-        assert!(DateTime::parse_from_rfc3339(ts).is_ok());
-    }
+    use crate::models::enums::{TaskStatus, WorkerArch};
 
     #[tokio::test]
     async fn both_destinations_receive_their_formats() {
@@ -1120,92 +619,6 @@ mod tests {
         assert!(dispatch(&settings, &event, Duration::from_secs(5))
             .await
             .is_empty());
-    }
-
-    #[tokio::test]
-    async fn insecure_http_url_is_refused_and_never_sent() {
-        let server = MockWebhook::start();
-        let mut settings = enabled_settings();
-        // Not loopback: refused even though it resolves fine.
-        settings.discord_webhook_url = Some("http://10.255.255.1/hook".into());
-        let vm = sample_vm();
-        let event = FleetEvent {
-            kind: EventKind::VmOffline,
-            vm: Some(&vm),
-            task: None,
-        };
-        let outcomes = dispatch(&settings, &event, Duration::from_secs(5)).await;
-        assert_eq!(
-            outcomes,
-            vec![DeliveryOutcome::Rejected {
-                dest: Destination::Discord,
-                reason: RejectReason::InsecureHttp
-            }]
-        );
-        // Nothing was sent to the configured-but-refused destination...
-        assert!(server.requests().is_empty());
-
-        // ...and the loopback exception is what the tests themselves rely on:
-        settings.discord_webhook_url = Some(server.url("/discord"));
-        let outcomes = dispatch(&settings, &event, Duration::from_secs(5)).await;
-        assert!(matches!(
-            outcomes.as_slice(),
-            [DeliveryOutcome::Sent {
-                dest: Destination::Discord,
-                ..
-            }]
-        ));
-    }
-
-    #[tokio::test]
-    async fn slow_webhook_times_out_without_error() {
-        // The webhook hangs for 5 s; the budget is 250 ms. The call must come
-        // back quickly, classify the failure as a timeout, and surface nothing.
-        let server = MockWebhook::start_with(200, Duration::from_secs(5));
-        let mut settings = enabled_settings();
-        settings.generic_webhook_url = Some(server.url("/hook"));
-        let vm = sample_vm();
-        let event = FleetEvent {
-            kind: EventKind::VmOffline,
-            vm: Some(&vm),
-            task: None,
-        };
-        let started = Instant::now();
-        let outcomes = dispatch(&settings, &event, Duration::from_millis(250)).await;
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "non-blocking: came back in {:?}",
-            started.elapsed()
-        );
-        assert_eq!(
-            outcomes,
-            vec![DeliveryOutcome::Failed {
-                dest: Destination::Generic,
-                reason: FailReason::Timeout
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn non_2xx_answer_is_classified_as_failure() {
-        let server = MockWebhook::start_with(500, Duration::ZERO);
-        let mut settings = enabled_settings();
-        settings.discord_webhook_url = Some(server.url("/discord"));
-        let vm = sample_vm();
-        let event = FleetEvent {
-            kind: EventKind::VmOffline,
-            vm: Some(&vm),
-            task: None,
-        };
-        let outcomes = dispatch(&settings, &event, Duration::from_secs(5)).await;
-        assert_eq!(
-            outcomes,
-            vec![DeliveryOutcome::Failed {
-                dest: Destination::Discord,
-                reason: FailReason::Status(500)
-            }]
-        );
-        assert_eq!(server.requests().len(), 1);
     }
 
     // -----------------------------------------------------------------------
