@@ -15,8 +15,8 @@ use crate::models::user::User;
 
 use super::totp::TotpEnrollFinishRequest;
 use super::{
-    client_ip, db_err, decrypt_totp_secret, enrolling_actor, generate_backup_codes,
-    map_json_rejection, now_unix, peer_addr, record_audit, AuthState,
+    client_ip, db_err, decrypt_totp_secret, enrolling_actor, generate_backup_codes, map_json_rejection,
+    mfa_throttle, now_unix, peer_addr, record_audit, AuthState,
 };
 
 /// `BackupCodesResponse`.
@@ -36,6 +36,11 @@ pub(super) async fn regenerate_backup_codes(
     body: Result<Json<TotpEnrollFinishRequest>, JsonRejection>,
 ) -> Result<Json<BackupCodesResponse>, ApiError> {
     let (user, _is_setup) = enrolling_actor(&state, &headers, false).await?;
+    // M-2: the code check is brute-forceable too — same double window as
+    // /verify (per IP + per user).
+    let ip =
+        client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
+    mfa_throttle(&state, &ip, user.id)?;
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
     if !user.totp_enabled || user.totp_secret_enc.is_none() {

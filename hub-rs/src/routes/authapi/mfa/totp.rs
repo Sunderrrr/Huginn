@@ -17,8 +17,9 @@ use crate::models::user::User;
 use super::backup_codes::store_backup_codes;
 use super::{
     backup_code_hash, client_ip, db_err, decrypt_totp_secret, encrypt_totp_secret, enrolling_actor,
-    generate_backup_codes, map_json_rejection, now_unix, peer_addr, present, record_audit,
-    set_pending_totp_secret, token_response, validate_len, validate_optional_len, AuthState,
+    generate_backup_codes, map_json_rejection, mfa_throttle, now_unix, peer_addr, present,
+    record_audit, set_pending_totp_secret, token_response, validate_len, validate_optional_len,
+    AuthState,
 };
 
 /// `TotpEnrollBeginResponse`.
@@ -106,6 +107,11 @@ pub(super) async fn totp_enroll_finish(
 ) -> Result<Json<TotpEnrollFinishResponse>, ApiError> {
     // FastAPI solves the `enrolling_actor` dependency before validating the body.
     let (user, is_setup) = enrolling_actor(&state, &headers, true).await?;
+    // M-2: the code check is brute-forceable too — same double window as
+    // /verify (per IP + per user).
+    let ip =
+        client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
+    mfa_throttle(&state, &ip, user.id)?;
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
     if user.totp_enabled {
@@ -158,6 +164,11 @@ pub(super) async fn totp_disable(
     body: Result<Json<TotpDisableRequest>, JsonRejection>,
 ) -> Result<StatusCode, ApiError> {
     let (user, _is_setup) = enrolling_actor(&state, &headers, false).await?;
+    // M-2: the code check is brute-forceable too — same double window as
+    // /verify (per IP + per user).
+    let ip =
+        client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
+    mfa_throttle(&state, &ip, user.id)?;
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
     if !user.totp_enabled || user.totp_secret_enc.is_none() {
