@@ -1,145 +1,131 @@
 # Huginn
 
-Huginn manages a fleet of Linux machines from one place. It enrolls machines with
-a one-line installer, lets you approve them from a dashboard, run controlled
-actions (or opt-in unrestricted commands), keep the workers up to date, and audit
-everything. An [MCP](https://modelcontextprotocol.io) server exposes the same
-capabilities to an AI agent without duplicating any business logic.
+Huginn manages a fleet of Linux VMs from one dashboard. Install a worker on a
+machine with one command, approve it, then run approved actions or free shell
+commands on it. An MCP server exposes the same operations to AI agents, so an
+agent can drive the fleet through the same API and audit log as a human operator.
 
-It is a **remote command-execution system**. Read
-[docs/security.md](docs/security.md) before you expose it.
+The stack is four pieces: a hub that owns the database and the API, one worker
+per VM that pulls work over outbound HTTPS, a web dashboard, and the MCP server.
+Every action is recorded in a tamper-evident audit log, and every user-facing
+endpoint enforces one of three roles (admin, operator, readonly).
 
-## Components
+## Quick start
 
-| Component | Path | What it is |
-|---|---|---|
-| **Hub** | `hub-rs/` | Rust (axum + PostgreSQL). The source of truth: inventory, enrollment, auth, task routing, audit. |
-| **Worker** | `worker-rs/` | One static Rust binary per machine. Pulls work from the hub over HTTPS (NAT-friendly), runs it, reports back. |
-| **MCP server** | `mcp-rs/` | Thin Rust façade over the hub's REST API, exposing tools for an external AI agent. |
-| **Dashboard** | `dashboard/` | React SPA (Vite + TypeScript): fleet roster, per-node actions, updates, scheduling, tokens, users, audit. |
-
-## Architecture
-
-```
-        ┌──────────────┐       ┌──────────────┐
-        │  AI agent    │       │  Dashboard   │
-        │  (MCP)       │       │   (React)    │
-        └──────┬───────┘       └──────┬───────┘
-               │ /mcp                 │ /api
-               ▼                      ▼
-        ┌────────────────────────────────────┐
-        │              HUB (hub-rs)          │
-        │        axum + PostgreSQL           │
-        │  inventory · auth · tasks · audit  │
-        └───────────────────┬────────────────┘
-                            │  HTTPS (per-worker token)
-        ┌───────────────────┼───────────────────┐
-        ▼                   ▼                   ▼
-   ┌─────────┐         ┌─────────┐         ┌─────────┐
-   │ worker  │         │ worker  │         │ worker  │   one per machine
-   └─────────┘         └─────────┘         └─────────┘
-```
-
-The worker **pulls** work from the hub over a single outbound HTTPS connection,
-so it works behind NAT. Only the hub needs an inbound port.
-
-## Quick start (Docker)
-
-The dev and prod stacks are two different compose files — there is no mode flag.
-This quick start brings up the **dev** stack (direct ports, no TLS). For a real
-deployment see [docs/deployment.md](docs/deployment.md).
+You need Docker with the Compose plugin. The hub, MCP server and dashboard build
+inside containers; the worker binaries are static and cross-compiled locally
+(see `deploy/README.md` for the toolchain).
 
 ```bash
-git clone https://github.com/<you>/huginn.git
-cd huginn/deploy
-cp .env.example .env
-# edit .env — generate secrets with: openssl rand -hex 32
-docker compose up --build
-```
-
-That starts PostgreSQL, the hub (`:8000`), the dashboard (`:5173`), and the MCP
-server (`:9000`). A first admin is created from `HUGINN_BOOTSTRAP_ADMIN_*`. Sign
-in at `http://localhost:5173`.
-
-For production, set `HUGINN_DOMAIN=example.com` in `deploy/.env.prod` and run the
-prod compose file (Caddy in front, automatic HTTPS on 80/443):
-
-```bash
-cd deploy
-cp .env.prod.example .env.prod          # set HUGINN_DOMAIN=example.com + real secrets
-./build-artifacts.sh v1.0.0             # worker binaries the hub serves at /dist
+git clone https://github.com/Sunderrrr/Huginn
+cd Huginn/deploy
+cp .env.prod.example .env.prod
+# Edit .env.prod: set HUGINN_DOMAIN and generate each secret with:
+#   openssl rand -hex 32
+../scripts/build-artifacts.sh v1.4.3     # worker binaries served at /dist
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
+Open `https://<HUGINN_DOMAIN>/` and sign in with the bootstrap admin from your
+env file. The first login requires enrolling a second factor (TOTP). The hub
+refuses to start in production with placeholder secrets.
+
+Enroll a VM from the dashboard (Fleet → Add VM) to get a one-time token, then
+run on the machine:
+
+```bash
+curl -fsSLk https://<HUGINN_DOMAIN>/install.sh | HUB_URL=https://<HUGINN_DOMAIN> TOKEN=<token> bash
+```
+
+The installer downloads the worker binary from the hub itself, verifies its
+SHA-256, installs a systemd unit and registers the machine. The VM appears as
+PENDING and cannot receive tasks until you approve it. If the hub serves a
+certificate the machine does not trust, the installer fetches the hub's CA and
+installs it (trust on first use).
+
+## Components
+
+| Path | What it does |
+|---|---|
+| `hub-rs/` | HTTP API, authentication, task routing, audit log. Rust (axum, sqlx). Runs the database migrations at startup. |
+| `worker-rs/` | Per-VM agent. Static Rust binary, systemd service, long-polls the hub, executes tasks, self-updates. |
+| `mcp-rs/` | MCP server exposing fleet tools to AI agents. Per-user bearer tokens, each action attributed to that user. |
+| `dashboard/` | React SPA served behind the reverse proxy. |
+| `deploy/` | Compose files, Caddyfile, Kubernetes manifests. |
+| `scripts/` | Worker installer, artifact build, database backup. |
+
+## How work flows
+
+The worker never listens for incoming connections. It long-polls
+`GET /api/worker/tasks/next` and the hub hands out one queued task at a time,
+transactionally (two workers racing for one task get one claim each). Results
+post back to the hub, which wakes anyone waiting on that task and notifies the
+dashboard. Workers behind NAT work without port forwarding.
+
+Task types and their execution rules:
+
+| Type | Who can run it | How it executes |
+|---|---|---|
+| `action` | any VM in whitelist mode | fixed argv from a built-in table (`status`, `metrics`, `restart_service{service}`, `list_upgradable_packages`, `apt_upgrade`) or an admin-defined custom command |
+| `command` | only VMs an admin switched to `unrestricted` | free shell, audited, size-capped |
+| `update` | hub-triggered | downloads a release, checks SHA-256, swaps the binary, rolls back if the health check fails |
+| `uninstall` | hub-triggered | removes the service and state before a VM is revoked |
+
+The worker never builds a shell string from parameters: whitelisted arguments
+are passed as separate argv elements, and custom commands are lists of argv
+vectors run without a shell.
+
+## Authentication
+
+Passwords (Argon2id), TOTP with backup codes, WebAuthn passkeys, OIDC/SSO, and
+LDAP are supported and can all be enabled at once. Each identity maps to one of
+three roles. 2FA can be required for admins. See [docs/auth.md](docs/auth.md).
+
+Audit entries are chained: each row's hash covers the previous row, so removing
+or editing an entry breaks verification (`GET /api/audit/verify` recomputes the
+chain).
+
 ## Configuration
 
-The hub and its clients read `HUGINN_*` environment variables (see
-`.env.example` for the full list). The important ones:
+`deploy/.env.prod.example` lists every variable. The ones that matter most:
 
-| Variable | Purpose |
+| Variable | Effect |
 |---|---|
-| `HUGINN_ENV` | `dev` or `prod`. In `prod` the hub refuses weak/placeholder secrets. |
-| `HUGINN_DATABASE_URL` | PostgreSQL connection string. |
-| `HUGINN_JWT_SECRET` | Signs access tokens. `openssl rand -hex 32`. |
-| `HUGINN_SECRET_HASH_KEY` | Keyed-HMAC for stored secrets. `openssl rand -hex 32`. |
-| `HUGINN_MCP_SERVICE_TOKEN` | Trust between the MCP server and the hub. `openssl rand -hex 32`. |
-| `HUGINN_MFA_ENCRYPTION_KEY` | Encrypts TOTP secrets at rest. `openssl rand -hex 32`. |
-| `HUGINN_DOMAIN` | Public name of the deployment (TLS, passkeys). Use a domain in production. |
-| `HUGINN_REQUIRE_TLS` | Enforce HTTPS for hub↔worker traffic (keep `true` in prod). |
-| `HUGINN_REQUIRE_ADMIN_MFA` | Force local admins to enrol a second factor. |
-| `HUGINN_BOOTSTRAP_ADMIN_USERNAME` / `_PASSWORD` | First admin account, created on start. |
-| `HUGINN_TARGET_WORKER_VERSION` | Worker version the fleet converges toward. |
+| `HUGINN_DOMAIN` | host the reverse proxy serves |
+| `HUGINN_DATABASE_URL` | PostgreSQL connection string |
+| `HUGINN_JWT_SECRET`, `HUGINN_SECRET_HASH_KEY`, `HUGINN_MCP_SERVICE_TOKEN`, `HUGINN_MFA_ENCRYPTION_KEY` | auth and encryption keys; the hub refuses short or placeholder values in production |
+| `HUGINN_REQUIRE_ADMIN_MFA` | force admins to enrol a second factor |
+| `HUGINN_TARGET_WORKER_VERSION` | version workers converge to |
 
-Full reference, TLS options, and per-service settings:
-[docs/deployment.md](docs/deployment.md).
-
-## Deployment
-
-| Mode | Best for | Guide |
-|---|---|---|
-| Local compose | development | [docs/deployment.md](docs/deployment.md#local-docker-compose) |
-| Docker + Caddy (HTTPS) | a single host | [docs/deployment.md](docs/deployment.md#docker-production-single-host) |
-| Kubernetes | clusters | [docs/deployment.md](docs/deployment.md#kubernetes) |
-
-Also see [docs/enrollment.md](docs/enrollment.md) for adding machines and
-[docs/](docs/) for everything else.
-
-## Security
-
-Auth on every endpoint; optional 2FA (TOTP + WebAuthn passkeys) with TOTP seeds
-encrypted at rest; TLS enforced for hub↔worker in prod; secrets hashed with
-keyed HMAC and compared timing-safe; the worker executes fixed argv vectors
-(never `sh -c`) except in explicit, audited, per-VM **unrestricted** mode;
-rate limits and body caps on execution; an SSRF allowlist on update sources; and
-an append-only, hash-chained audit log. Details in
-[docs/security.md](docs/security.md). Report vulnerabilities per
-[SECURITY.md](SECURITY.md).
-
-## Development & tests
-
-Each crate is an independent Cargo project:
+## Development
 
 ```bash
-cd hub-rs && cargo test --release      # hub unit tests
-cd worker-rs && cargo test --release   # worker unit tests
-cd mcp-rs && cargo test --release      # MCP unit tests
+cd hub-rs && cargo test --release          # 314 tests, incl. the parity suite
+cargo clippy --all-targets -- -D warnings  # zero warnings policy
 ```
 
-**Parity gate** — `hub-rs` must answer exactly like the reference API. Capture
-and diff golden responses with `hub-rs/tools/api_parity.py`:
+The API is under contract test: `huginn-parity` captures golden HTTP responses
+and diffs them against `hub-rs/golden/python`, responses recorded from the
+previous (Python) implementation. A clean diff is required before a release, and
+CI runs it on every pull request. The security primitives carry test vectors
+generated from the previous implementation, so password hashes, tokens and
+audit chains stay byte-compatible across the rewrite.
 
-```bash
-cd hub-rs
-python3 tools/api_parity.py capture --base http://127.0.0.1:8000 \
-  --admin-user admin --admin-pass <pass> --out /tmp/golden-rust
-python3 tools/api_parity.py diff golden/python /tmp/golden-rust
-```
+## Limits
 
-**CI** (`.github/workflows/ci-rust.yml`) runs per crate: `cargo fmt --check`,
-`cargo clippy -- -D warnings`, `cargo test --release`, and a dependency audit.
-`hub-rs` additionally runs the parity gate against its goldens. All must be green
-before merge. See [CONTRIBUTING.md](CONTRIBUTING.md).
+- The event bus is in-process: one hub instance wakes its own long-polls. If you
+  run several hub replicas, task pickup still works but a queued task may wait
+  up to the long-poll timeout (25 s) on another replica. A shared broker or
+  PostgreSQL `LISTEN/NOTIFY` would fix this; neither is implemented.
+- WebAuthn requires a real domain: passkeys do not register over a bare IP.
+- Error `422` bodies are a single `{"detail": "..."}` string, not the field
+  array FastAPI produced.
+- The parity suite covers the endpoints the reference implementation exposed;
+  behavior added afterwards is covered by unit tests only.
 
-## License
+## Links
 
-Licensed under [Apache-2.0](LICENSE).
+- [Deployment guide](docs/deployment.md) · [Architecture](docs/architecture.md) · [Enrollment](docs/enrollment.md)
+- [Security notes](docs/security.md) · [MCP integration](docs/mcp.md) · [Contributing](CONTRIBUTING.md)
+
+[Apache-2.0 license](LICENSE).
