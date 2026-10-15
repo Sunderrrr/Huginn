@@ -278,16 +278,11 @@ impl Agent {
         }
         // Free-command mode is the explicit, hub-gated, audited
         // "unrestricted" path; using a shell here is intentional. The
-        // whitelist path never does this.
-        match self
-            .runner
-            .run(
-                vec!["sh".into(), "-c".into(), command],
-                task_timeout(&task.payload),
-                0,
-            )
-            .await
-        {
+        // whitelist path never does this. The interpreter is OS-dependent
+        // (sh on Linux, PowerShell on Windows) and the command always rides
+        // in a single argv element.
+        let argv = crate::exec::shell_argv(crate::exec::unrestricted_shell(), &command);
+        match self.runner.run(argv, task_timeout(&task.payload), 0).await {
             Ok(res) => from_exec_result(res),
             Err(e) => failure(&e.to_string()),
         }
@@ -391,10 +386,22 @@ impl Agent {
     /// Removes the worker service and binary from the host. Best-effort
     /// cleanup triggered before VM revocation.
     async fn run_uninstall(&self) -> TaskResult {
-        let _ = run_raw("systemctl", &["stop", "huginn-worker"]);
-        let _ = run_raw("systemctl", &["disable", "huginn-worker"]);
-        let _ = std::fs::remove_file("/etc/systemd/system/huginn-worker.service");
-        let _ = run_raw("systemctl", &["daemon-reload"]);
+        #[cfg(unix)]
+        {
+            let _ = run_raw("systemctl", &["stop", "huginn-worker"]);
+            let _ = run_raw("systemctl", &["disable", "huginn-worker"]);
+            let _ = std::fs::remove_file("/etc/systemd/system/huginn-worker.service");
+            let _ = run_raw("systemctl", &["daemon-reload"]);
+        }
+        #[cfg(windows)]
+        {
+            // Stops and deletes the SCM service. Deleting a running exe
+            // below can fail (a live image can't be deleted on Windows) —
+            // best-effort, like the rest of this cleanup.
+            if let Err(e) = crate::service::uninstall() {
+                eprintln!("huginn-worker: uninstall service: {e}");
+            }
+        }
         let binary_path = self.state.lock().await.binary_location();
         let _ = std::fs::remove_file(&binary_path);
         let _ = std::fs::remove_dir_all(config::DEFAULT_STATE_DIR);
@@ -530,6 +537,9 @@ fn is_safe_release_domain(raw: &str) -> bool {
         || h.split('.').count() < 2)
 }
 
+/// Synchronous supervisor helper (unix only — the Windows path uses the
+/// windows-service crate instead of shelling out).
+#[cfg(unix)]
 fn run_raw(name: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
     std::process::Command::new(name).args(args).output()
 }
@@ -743,7 +753,10 @@ mod tests {
         let (res, restart) = a.dispatch(t).await;
         assert!(!restart);
         assert_eq!(res.status, "succeeded");
-        assert_eq!(runner.argv(), Some(vec!["uname".into(), "-a".into()]));
+        // The dispatch must hand the runner exactly this OS's whitelisted
+        // argv (uname on Linux, powershell on Windows).
+        let expected = whitelist::build_argv_checked("status", &HashMap::new()).unwrap();
+        assert_eq!(runner.argv(), Some(expected));
     }
 
     #[tokio::test]
@@ -768,10 +781,14 @@ mod tests {
             serde_json::json!({"command": "echo hi"}),
         );
         a.dispatch(t).await;
+        // The interpreter is OS-dependent (sh on Linux, PowerShell on
+        // Windows) but the command is always the last, single argv element.
+        let argv = runner.argv().expect("runner invoked");
         assert_eq!(
-            runner.argv(),
-            Some(vec!["sh".into(), "-c".into(), "echo hi".into()])
+            argv,
+            crate::exec::shell_argv(crate::exec::unrestricted_shell(), "echo hi")
         );
+        assert_eq!(argv.last().unwrap(), "echo hi");
     }
 
     #[tokio::test]

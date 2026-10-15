@@ -1,10 +1,12 @@
 // Worker build version, default paths, and on-disk state (hub URL + per-worker
-// credentials). The state file is written 0600, atomically via tmp+rename.
+// credentials). The state file is written atomically via tmp+rename: 0600 on
+// Unix, default (restrictive) ACLs on Windows.
 //
-// Rust port of worker/internal/config.
-use std::fmt;
+// Rust port of worker/internal/config, ported to Windows.
 use std::io::Write as _;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -18,9 +20,15 @@ pub const VERSION: &str = match option_env!("HUGINN_WORKER_VERSION") {
 };
 
 /// Default filesystem locations. Overridable via flags / env for tests.
+#[cfg(unix)]
 pub const DEFAULT_STATE_DIR: &str = "/etc/huginn";
+#[cfg(windows)]
+pub const DEFAULT_STATE_DIR: &str = "C:\\ProgramData\\Huginn";
 pub const DEFAULT_STATE_FILE: &str = "worker.json";
+#[cfg(unix)]
 pub const DEFAULT_BINARY_PATH: &str = "/usr/local/bin/huginn-worker";
+#[cfg(windows)]
+pub const DEFAULT_BINARY_PATH: &str = "C:\\Program Files\\Huginn\\huginn-worker.exe";
 
 /// Worker-side SSRF allowlist for update downloads (defense in depth; the hub
 /// also validates).
@@ -104,8 +112,8 @@ pub enum Error {
     },
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Io(e) => write!(f, "{e}"),
             Error::Json(e) => write!(f, "{e}"),
@@ -140,6 +148,63 @@ pub fn load(path: &Path) -> Result<State, Error> {
     })
 }
 
+/// Creates the state directory (recursively). On Unix it is tightened to
+/// 0700; on Windows inheritance from ProgramData is stripped and access is
+/// limited to SYSTEM and Administrators — the state file holds the worker
+/// secret, and the default ACLs would let every local user read it.
+/// Best-effort, like a restrictive umask.
+pub fn ensure_state_dir(dir: &Path) -> Result<(), Error> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    #[cfg(windows)]
+    restrict_dir_acl(dir);
+    Ok(())
+}
+
+/// Locks the state dir down to SYSTEM and Administrators via icacls (ships
+/// with every supported Windows; fixed argv, no shell involved).
+#[cfg(windows)]
+fn restrict_dir_acl(dir: &Path) {
+    let output = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(["/inheritance:r"])
+        .args(["/grant:r", "SYSTEM:(OI)(CI)F"])
+        .args(["/grant:r", "Administrators:(OI)(CI)F"])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => eprintln!(
+            "huginn-worker: warning: could not restrict state dir ACL: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => eprintln!("huginn-worker: warning: icacls failed: {e}"),
+    }
+}
+
+/// Creates the secret-bearing temp file with restrictive permissions before
+/// the atomic rename: 0600 from creation on Unix (mirroring
+/// os.WriteFile(tmp, data, 0o600)), default inherited ACLs on Windows.
+fn create_secret_file(path: &Path) -> Result<std::fs::File, Error> {
+    #[cfg(unix)]
+    {
+        Ok(std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?)
+    }
+    #[cfg(windows)]
+    {
+        Ok(std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(path)?)
+    }
+}
+
 /// Save writes worker state atomically (tmp + rename) with 0600 permissions.
 /// Credentials must never be world-readable, and a state file without a worker
 /// identity is refused.
@@ -152,19 +217,12 @@ pub fn save(path: &Path, state: &State) -> Result<(), Error> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     if !dir.exists() {
-        std::fs::create_dir_all(dir)?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        ensure_state_dir(dir)?;
     }
     let data = serde_json::to_vec_pretty(state).map_err(Error::Json)?;
     let tmp = PathBuf::from(format!("{}.tmp", path.display()));
     {
-        // 0600 from creation, mirroring os.WriteFile(tmp, data, 0o600).
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut f = create_secret_file(&tmp)?;
         f.write_all(&data)?;
     }
     std::fs::rename(&tmp, path)?;
@@ -212,6 +270,7 @@ mod tests {
         assert_eq!(out.hub_url, input.hub_url);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_save_sets_0600_permissions() {
         let dir = testutil::temp_dir("perms");
@@ -290,5 +349,38 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.binary_location(), "/srv/huginn", "override not respected");
+    }
+
+    #[test]
+    fn test_state_path_joins_state_file() {
+        assert_eq!(
+            state_path("/etc/huginn"),
+            PathBuf::from("/etc/huginn").join("worker.json")
+        );
+        // An empty dir falls back to the platform default.
+        assert_eq!(
+            state_path(""),
+            PathBuf::from(DEFAULT_STATE_DIR).join("worker.json")
+        );
+    }
+
+    // Per-OS default paths (the Windows arm runs only on the Windows CI).
+    #[cfg(unix)]
+    #[test]
+    fn test_default_paths_unix() {
+        assert_eq!(DEFAULT_STATE_DIR, "/etc/huginn");
+        assert_eq!(DEFAULT_BINARY_PATH, "/usr/local/bin/huginn-worker");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_default_paths_windows() {
+        assert_eq!(DEFAULT_STATE_DIR, "C:\\ProgramData\\Huginn");
+        // The self-update target must carry the .exe extension.
+        assert!(DEFAULT_BINARY_PATH.ends_with(".exe"));
+        assert_eq!(
+            DEFAULT_BINARY_PATH,
+            "C:\\Program Files\\Huginn\\huginn-worker.exe"
+        );
     }
 }

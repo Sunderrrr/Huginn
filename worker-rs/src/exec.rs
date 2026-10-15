@@ -1,8 +1,12 @@
-// Runs commands as separated argv vectors. It NEVER interprets a shell: there
-// is no `sh -c`, no string concatenation, and no metacharacter expansion. This
-// is the core defense against command injection on the worker.
+// Runs commands as separated argv vectors. The runner itself NEVER interprets
+// a shell: there is no string concatenation, and no metacharacter expansion.
+// (The hub-gated unrestricted mode deliberately invokes a shell as an argv
+// vector — `sh -c` on Linux, PowerShell on Windows — built here so the shell
+// choice stays in one audited place.) This is the core defense against
+// command injection on the worker.
 //
-// Rust port of worker/internal/exec.
+// Rust port of worker/internal/exec, ported to Windows (Job Objects replace
+// process groups).
 use std::io;
 use std::process::Stdio;
 use std::time::Duration;
@@ -46,6 +50,153 @@ impl Runner for CommandRunner {
         max_output: usize,
     ) -> BoxFuture<'static, io::Result<ExecResult>> {
         Box::pin(run_command(argv, timeout, max_output))
+    }
+}
+
+/// The interpreter used ONLY for hub-gated unrestricted free commands: `sh`
+/// on Linux; on Windows, PowerShell 7 (`pwsh`) when installed, else the
+/// built-in Windows PowerShell 5.1 (`powershell`). Resolved once per process.
+pub fn unrestricted_shell() -> &'static str {
+    #[cfg(unix)]
+    {
+        "sh"
+    }
+    #[cfg(windows)]
+    {
+        detect_powershell()
+    }
+}
+
+/// Builds the argv that invokes `shell` to interpret `command`. The command
+/// stays a single argv element — the OS spawns the interpreter directly with
+/// one argument, there is no intermediate string concatenation or quoting
+/// layer to break out of.
+pub fn shell_argv(shell: &str, command: &str) -> Vec<String> {
+    #[cfg(unix)]
+    {
+        vec![shell.into(), "-c".into(), command.into()]
+    }
+    #[cfg(windows)]
+    {
+        vec![
+            shell.into(),
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-ExecutionPolicy".into(),
+            "Bypass".into(),
+            "-Command".into(),
+            command.into(),
+        ]
+    }
+}
+
+/// Prefers `pwsh` (PowerShell 7+) when it is on PATH, else falls back to
+/// `powershell` (Windows PowerShell 5.1, ships with every supported Windows).
+#[cfg(windows)]
+fn detect_powershell() -> &'static str {
+    use std::sync::OnceLock;
+    static SHELL: OnceLock<&'static str> = OnceLock::new();
+    SHELL.get_or_init(|| {
+        if on_path("pwsh.exe") {
+            "pwsh"
+        } else {
+            "powershell"
+        }
+    })
+}
+
+#[cfg(windows)]
+fn on_path(exe: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file()))
+        .unwrap_or(false)
+}
+
+// --- Windows: Job Objects --------------------------------------------------
+//
+// The Unix runner kills a timed-out child's whole process group. The Windows
+// equivalent is a Job Object: assign the child to a job created with
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and terminate the job at timeout — the
+// child and every descendant it spawned die together, so nothing is left
+// holding the stdout/stderr pipes open.
+#[cfg(windows)]
+mod winjob {
+    use std::ffi::c_void;
+    use std::io;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA};
+
+    /// HANDLE is a raw isize in windows-sys; null is 0.
+    const NULL_HANDLE: HANDLE = 0;
+
+    pub struct Job(HANDLE);
+
+    impl Job {
+        /// Creates a job whose member processes are terminated when the last
+        /// handle to it closes.
+        pub fn create() -> io::Result<Self> {
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job == NULL_HANDLE {
+                    return Err(io::Error::last_os_error());
+                }
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if ok == 0 {
+                    let err = io::Error::last_os_error();
+                    CloseHandle(job);
+                    return Err(err);
+                }
+                Ok(Self(job))
+            }
+        }
+
+        /// Adds a running process (by PID) to the job. Descendants the child
+        /// spawns afterwards inherit its job membership.
+        pub fn assign_process(&self, pid: u32) -> io::Result<()> {
+            unsafe {
+                let process = OpenProcess(PROCESS_SET_QUOTA, 0, pid);
+                if process == NULL_HANDLE {
+                    return Err(io::Error::last_os_error());
+                }
+                let ok = AssignProcessToJobObject(self.0, process);
+                let result = if ok == 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(())
+                };
+                CloseHandle(process);
+                result
+            }
+        }
+
+        /// Terminates every process in the job (the child and all its
+        /// descendants). Best-effort — the handle drop also kills survivors.
+        pub fn terminate(&self) {
+            unsafe {
+                TerminateJobObject(self.0, 1);
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
     }
 }
 
@@ -93,6 +244,13 @@ pub async fn run_command(
         timeout
     };
 
+    // Windows: the job must exist before the spawn so the child can be
+    // assigned to it right away. Its handle drops when this function
+    // returns — KILL_ON_JOB_CLOSE then reaps any process still in the job,
+    // so a task can never leave orphaned descendants behind.
+    #[cfg(windows)]
+    let job = winjob::Job::create()?;
+
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);
     // tokio's Command does NOT invoke a shell; argv is passed verbatim.
@@ -110,6 +268,14 @@ pub async fn run_command(
     command.process_group(0);
 
     let mut child = command.spawn()?;
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        // Best-effort: if the child died instantly the assignment fails —
+        // kill_on_drop and the bounded capture below still bound the run.
+        if let Err(e) = job.assign_process(pid) {
+            eprintln!("huginn-worker: job assignment failed: {e}");
+        }
+    }
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
     // Bounded pipe collection: an orphaned descendant (`sh -c "sleep
@@ -131,7 +297,7 @@ pub async fn run_command(
         }
         Err(_elapsed) => {
             timed_out = true;
-            // Kill the whole process group: `child.kill()` alone leaves
+            // Kill the whole process tree: `child.kill()` alone leaves
             // grandchildren alive (they hold the pipes open → the capture
             // below would never see EOF).
             #[cfg(unix)]
@@ -140,6 +306,10 @@ pub async fn run_command(
                     libc::kill(-(pid as i32), libc::SIGKILL);
                 }
             }
+            // Windows: terminating the job kills the child plus every
+            // descendant it spawned.
+            #[cfg(windows)]
+            job.terminate();
             let _ = child.kill().await;
             let st = child.wait().await?;
             let _ = exited_tx.send(true);
@@ -206,6 +376,7 @@ mod tests {
         runner().run(argv, timeout, max_output).await
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_captures_stdout_and_exit_zero() {
         let res = run(&["echo", "hello"], Duration::from_secs(1), 0)
@@ -215,6 +386,7 @@ mod tests {
         assert_eq!(res.stdout.trim(), "hello", "stdout = {:?}", res.stdout);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_non_zero_exit() {
         let res = run(&["false"], Duration::from_secs(1), 0)
@@ -223,9 +395,23 @@ mod tests {
         assert_ne!(res.exit_code, 0, "expected non-zero exit code");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_timeout() {
         let res = run(&["sleep", "5"], Duration::from_millis(100), 0)
+            .await
+            .expect("no error");
+        assert!(res.timed_out, "expected TimedOut=true");
+    }
+
+    // Windows counterpart of the timeout test: a command that sleeps past its
+    // deadline must report TimedOut (the job termination kills it).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_run_timeout() {
+        let argv = shell_argv(unrestricted_shell(), "Start-Sleep -Seconds 5");
+        let res = runner()
+            .run(argv, Duration::from_millis(300), 0)
             .await
             .expect("no error");
         assert!(res.timed_out, "expected TimedOut=true");
@@ -248,6 +434,7 @@ mod tests {
         assert!(res.is_err(), "expected error for empty argv");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_no_shell_interpretation() {
         // If a shell were involved, "$(touch x)" would expand. Passed as a
@@ -263,6 +450,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_output_is_capped() {
         let res = run(
@@ -278,9 +466,46 @@ mod tests {
             res.stdout.len()
         );
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_shell_argv_windows_invokes_powershell_flags() {
+        assert_eq!(
+            shell_argv("pwsh", "Write-Output hi"),
+            vec![
+                "pwsh",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "Write-Output hi"
+            ]
+        );
+        // The command is always a single argv slot, never split or quoted.
+        let argv = shell_argv("powershell", "a; b | c");
+        assert_eq!(argv.last().unwrap(), "a; b | c");
+        assert_eq!(argv.len(), 7);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_unrestricted_shell_is_a_known_powershell() {
+        assert!(matches!(unrestricted_shell(), "pwsh" | "powershell"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_shell_argv_unix_invokes_sh_dash_c() {
+        assert_eq!(
+            shell_argv("sh", "echo hi"),
+            vec!["sh", "-c", "echo hi"],
+            "command must be the single -c argument"
+        );
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod hang_tests {
     use super::*;
 
