@@ -20,7 +20,8 @@ spec:
         runAsUser: 10002
       containers:
         - name: mcp
-          image: ghcr.io/example-website/huginn-mcp:latest
+          # Substitute <owner> with your registry namespace.
+        image: ghcr.io/<owner>/huginn-mcp:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9000

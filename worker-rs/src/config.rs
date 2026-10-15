@@ -286,9 +286,9 @@ mod tests {
         let s = State::default();
         assert_eq!(s.binary_location(), DEFAULT_BINARY_PATH);
         let s = State {
-            binary_path: "/opt/huginn".into(),
+            binary_path: "/srv/huginn".into(),
             ..Default::default()
         };
-        assert_eq!(s.binary_location(), "/opt/huginn", "override not respected");
+        assert_eq!(s.binary_location(), "/srv/huginn", "override not respected");
     }
 }

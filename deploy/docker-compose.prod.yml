@@ -138,7 +138,7 @@ services:
       HUGINN_TLS_INTERNAL: ${HUGINN_TLS_INTERNAL:-internal}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # TLS cert/key issued by the internal Internal Root CA (Vault pki/internal-lan).
+      # TLS cert/key pair generated for this deployment (see deploy/README.md).
       - ./certs:/etc/caddy/certs:ro
       # Self-hosted worker artifacts served at /install.sh and /dist/*.
       - ../scripts/install.sh:/srv/install.sh:ro
