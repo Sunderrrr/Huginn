@@ -29,15 +29,15 @@ const SETTINGS = {
   backup_s3_prefix: "db/",
   backup_s3_access_key: "AKIAEXAMPLE",
   backup_s3_secret_key: "",
-  backup_s3_secret_key_set: true,
+  backup_s3_secret_key_configured: true,
   backup_s3_retention_days: 30,
 };
 
 const LIST = {
-  s3_configured: true,
-  items: [
-    { name: "huginn-20261015-030000.sql.gz", size: 12345, modified_at: "2026-10-15T03:00:32Z" },
-    { name: "huginn-20261014-030000.sql.gz", size: 2 * 1024 * 1024, modified_at: "2026-10-14T03:00:30Z" },
+  configured: true,
+  backups: [
+    { name: "huginn-20261015-030000.sql.gz", size: 12345, last_modified: "2026-10-15T03:00:32Z" },
+    { name: "huginn-20261014-030000.sql.gz", size: 2 * 1024 * 1024, last_modified: "2026-10-14T03:00:30Z" },
   ],
 };
 
@@ -161,7 +161,7 @@ describe("BackupsPage", () => {
   });
 
   it("shows a clear empty state when S3 is not configured", async () => {
-    stubApi({ s3_configured: false, items: [] });
+    stubApi({ configured: false, items: [] });
     renderPage();
     expect(await screen.findByText(/s3 backups are not configured/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /back up now/i })).toBeDisabled();

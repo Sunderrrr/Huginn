@@ -167,12 +167,12 @@ export interface AuditEntry {
 export interface BackupFile {
   name: string;
   size: number;
-  modified_at: string;
+  last_modified: string;
 }
 
 export interface BackupList {
-  items: BackupFile[];
-  s3_configured: boolean;
+  backups: BackupFile[];
+  configured: boolean;
 }
 
 // Result of POST /api/backups — a backup that just ran.
@@ -189,7 +189,7 @@ export interface Settings {
   auto_update_enabled: boolean;
   updated_at: string;
   // S3 backup target (admin-only). `backup_s3_secret_key` is write-only: the GET
-  // never returns it — only `backup_s3_secret_key_set` tells whether one is stored.
+  // never returns it — only `backup_s3_secret_key_configured` tells whether one is stored.
   backup_s3_enabled?: boolean;
   backup_s3_endpoint?: string | null;
   backup_s3_region?: string | null;
@@ -197,7 +197,7 @@ export interface Settings {
   backup_s3_prefix?: string | null;
   backup_s3_access_key?: string | null;
   backup_s3_secret_key?: string | null;
-  backup_s3_secret_key_set?: boolean;
+  backup_s3_secret_key_configured?: boolean;
   backup_s3_retention_days?: number | null;
   // SSO / OIDC / LDAP / notifications fields are admin-only and optional here.
   oidc_provider_name?: string;

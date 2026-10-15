@@ -256,6 +256,12 @@ async fn sweeper(pool: sqlx::PgPool, config: Config, events: Arc<TaskEvents>, bu
 
         // 3. Due scheduled commands.
         run_due_schedules(&pool, &config, &events, &bus).await;
+
+        // 4. Daily S3 backup + retention (best-effort: never breaks the loop).
+        let report = crate::services::backup::sweep_backup(&pool).await;
+        if let Some(reason) = report.skipped {
+            tracing::debug!("backup sweep skipped: {reason}");
+        }
     }
 }
 
