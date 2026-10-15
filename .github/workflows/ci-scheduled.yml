@@ -1,0 +1,61 @@
+name: ci-scheduled
+
+# Weekly health check: new advisories (like the rustls CVEs that landed
+# mid-flight) and the parity gate, even when no PR is open.
+
+on:
+  schedule:
+    - cron: "17 4 * * 1" # Mondays 04:17 UTC
+  workflow_dispatch:
+
+jobs:
+  audit-and-parity:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: huginn
+          POSTGRES_PASSWORD: x
+          POSTGRES_DB: huginn
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: hub-rs
+      - name: Audit all crates
+        run: |
+          cargo install cargo-audit --quiet
+          for d in hub-rs worker-rs mcp-rs; do
+            echo "=== $d ==="
+            (cd "$d" && cargo audit)
+          done
+      - name: Build hub-rs
+        working-directory: hub-rs
+        run: cargo build --release --locked
+      - name: Boot hub-rs and run the parity gate
+        working-directory: hub-rs
+        env:
+          HUGINN_ENV: dev
+          HUGINN_REQUIRE_TLS: "false"
+          HUGINN_REQUIRE_ADMIN_MFA: "false"
+          HUGINN_DATABASE_URL: postgresql://huginn:x@127.0.0.1:5432/huginn
+          HUGINN_JWT_SECRET: parity-jwt-secret-0123456789abcdef012345
+          HUGINN_SECRET_HASH_KEY: parity-hmac-key-0123456789abcdef012345
+          HUGINN_MCP_SERVICE_TOKEN: parity-mcp-token-0123456789abcdef0123
+          HUGINN_MFA_ENCRYPTION_KEY: parity-mfa-key-0123456789abcdef01234
+          HUGINN_BOOTSTRAP_ADMIN_USERNAME: admin
+          HUGINN_BOOTSTRAP_ADMIN_PASSWORD: parity-admin-pass-123
+        run: |
+          ./target/release/huginn-hub > /tmp/hub.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8000/healthz && break; sleep 1; done
+          python3 tools/api_parity.py capture --base http://127.0.0.1:8000 \
+            --admin-user admin --admin-pass parity-admin-pass-123 --out /tmp/golden
+          python3 tools/api_parity.py diff golden/python /tmp/golden
