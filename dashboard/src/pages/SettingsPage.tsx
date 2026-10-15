@@ -190,7 +190,7 @@ export function SettingsPage() {
                 <input className="field" value={oidcClientId} onChange={(e) => setOidcClientId(e.target.value)} disabled={!isAdmin} />
               </Field>
               <Field label="Client secret">
-                <input className="field" type="password" value={oidcClientSecret} onChange={(e) => setOidcClientSecret(e.target.value)} disabled={!isAdmin} placeholder="••••••••" />
+                <input className="field" type="password" autoComplete="new-password" value={oidcClientSecret} onChange={(e) => setOidcClientSecret(e.target.value)} disabled={!isAdmin} placeholder="••••••••" />
               </Field>
             </div>
             <Field label="Redirect URL">
@@ -223,7 +223,7 @@ export function SettingsPage() {
                 <input className="field" value={ldapBindDn} onChange={(e) => setLdapBindDn(e.target.value)} disabled={!isAdmin} placeholder="cn=admin,dc=example,dc=com" />
               </Field>
               <Field label="Bind password">
-                <input className="field" type="password" value={ldapBindPassword} onChange={(e) => setLdapBindPassword(e.target.value)} disabled={!isAdmin} placeholder="••••••••" />
+                <input className="field" type="password" autoComplete="new-password" value={ldapBindPassword} onChange={(e) => setLdapBindPassword(e.target.value)} disabled={!isAdmin} placeholder="••••••••" />
               </Field>
             </div>
             <Field label="User search base">

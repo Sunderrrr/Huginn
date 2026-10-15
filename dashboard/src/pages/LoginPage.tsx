@@ -209,6 +209,7 @@ export function LoginPage() {
                   <input
                     className="field"
                     type="password"
+                    autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••••••"

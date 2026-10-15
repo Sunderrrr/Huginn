@@ -203,6 +203,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
                     </div>
                     <button
                       className="btn btn--sm btn--danger"
+                      disabled={revoke.isPending}
                       onClick={async () => {
                         await revoke.mutateAsync(t.id);
                         toast("ok", "invitation revoked");

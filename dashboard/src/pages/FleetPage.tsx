@@ -260,7 +260,7 @@ export function FleetPage() {
                   <td className="muted">{timeAgo(vm.last_heartbeat_at)}</td>
                   <td style={{ textAlign: "right" }}>
                     {vm.state === "pending" && isAdmin ? (
-                      <button className="btn btn--primary btn--sm" onClick={(e) => onApprove(e, vm.id)}>
+                      <button className="btn btn--primary btn--sm" disabled={approve.isPending} onClick={(e) => onApprove(e, vm.id)}>
                         Approve
                       </button>
                     ) : (
