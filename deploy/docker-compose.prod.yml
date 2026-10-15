@@ -56,6 +56,9 @@ services:
         condition: service_healthy
     environment:
       HUGINN_ENV: prod
+      # The bundled Caddyfile stamps X-Forwarded-For/X-Forwarded-Proto
+      # (header_up) — trust the proxy-appended hop (fail-closed otherwise).
+      HUGINN_TRUST_FORWARDED_FOR: "true"
       HUGINN_REQUIRE_TLS: "true"
       HUGINN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-huginn}
       HUGINN_JWT_SECRET: ${HUGINN_JWT_SECRET:?generate with openssl rand -hex 32}
