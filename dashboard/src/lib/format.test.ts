@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtTime, shortId, timeAgo } from "./format";
+import { fmtBytes, fmtTime, shortId, timeAgo } from "./format";
 
 describe("timeAgo", () => {
   it("returns em dash for null", () => {
@@ -38,5 +38,31 @@ describe("fmtTime", () => {
 describe("shortId", () => {
   it("truncates to 8 chars", () => {
     expect(shortId("0123456789abcdef")).toBe("01234567");
+  });
+});
+
+describe("fmtBytes", () => {
+  it("returns em dash for null/undefined/NaN", () => {
+    expect(fmtBytes(null)).toBe("—");
+    expect(fmtBytes(undefined)).toBe("—");
+    expect(fmtBytes(Number.NaN)).toBe("—");
+  });
+
+  it("keeps bytes as-is below 1 KB", () => {
+    expect(fmtBytes(0)).toBe("0 B");
+    expect(fmtBytes(512)).toBe("512 B");
+    expect(fmtBytes(1023)).toBe("1023 B");
+  });
+
+  it("scales through KB/MB/GB", () => {
+    expect(fmtBytes(1024)).toBe("1.0 KB");
+    expect(fmtBytes(12345)).toBe("12.1 KB");
+    expect(fmtBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+    expect(fmtBytes(3 * 1024 ** 3)).toBe("3.0 GB");
+    expect(fmtBytes(1024 ** 4)).toBe("1.0 TB");
+  });
+
+  it("rounds whole hundreds without a decimal", () => {
+    expect(fmtBytes(150 * 1024)).toBe("150 KB");
   });
 });
