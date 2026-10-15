@@ -32,16 +32,16 @@ use crate::models::audit::AuditNew;
 use crate::models::enums::ActorType;
 use crate::security::jwt::MFA_SCOPE;
 
-use super::{
-    backup_code_hash, challenge_user, client_ip, db_err, decrypt_totp_secret, enrolling_actor,
-    encrypt_totp_secret, generate_backup_codes, get_principal, map_json_rejection, peer_addr,
-    record_audit, set_pending_totp_secret, token_response, AuthState, TokenResponse,
-};
 use self::backup_codes::regenerate_backup_codes;
 use self::totp::{totp_disable, totp_enroll_begin, totp_enroll_finish};
 use self::webauthn::{
     delete_passkey, list_passkeys, rename_passkey, webauthn_login_begin, webauthn_login_finish,
     webauthn_register_begin, webauthn_register_finish,
+};
+use super::{
+    backup_code_hash, challenge_user, client_ip, db_err, decrypt_totp_secret, encrypt_totp_secret,
+    enrolling_actor, generate_backup_codes, get_principal, map_json_rejection, peer_addr,
+    record_audit, set_pending_totp_secret, token_response, AuthState, TokenResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -112,7 +112,6 @@ impl MfaVerifyRequest {
     }
 }
 
-
 fn validate_len(field: &str, value: &str, max: usize) -> Result<(), ApiError> {
     if value.chars().count() > max {
         return Err(ApiError::unprocessable_entity(format!(
@@ -133,7 +132,6 @@ fn validate_optional_len(field: &str, value: &Option<String>, max: usize) -> Res
 fn present(value: &Option<String>) -> Option<&str> {
     value.as_deref().filter(|s| !s.is_empty())
 }
-
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/mfa/verify — two-step login verification
@@ -207,7 +205,6 @@ async fn verify_mfa(
 /// Shared request/response helpers for the route tests.
 #[cfg(test)]
 pub(crate) mod support {
-    use super::*;
     use axum::body::Body;
     use http_body_util::BodyExt;
     use serde_json::json;
@@ -270,7 +267,6 @@ mod tests {
     }
 
     // ---- HTTP-level (no database needed) ----------------------------------
-
 
     #[tokio::test]
     async fn verify_requires_a_challenge_token() {
