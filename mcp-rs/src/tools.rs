@@ -483,6 +483,7 @@ mod tests {
             transport: "stdio".into(),
             host: "127.0.0.1".into(),
             port: 0,
+            trust_proxy: false,
         };
         let hub = HubClient::new(&settings);
         let ctx = CallCtx::default();
@@ -531,6 +532,7 @@ mod tests {
             transport: "stdio".into(),
             host: "127.0.0.1".into(),
             port: 0,
+            trust_proxy: false,
         };
         let hub2 = HubClient::new(&settings2);
         let err = resolve_vm(&hub2, &ctx, "twin").await.unwrap_err();

@@ -6,6 +6,7 @@ use crate::config::Settings;
 use reqwest::Method;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 
 pub struct HubClient {
     base_url: String,
@@ -122,8 +123,21 @@ impl HubClient {
         task_id: &str,
         timeout: u64,
     ) -> Result<Value, HubError> {
-        self.get(ctx, &format!("/api/tasks/{task_id}/wait?timeout={timeout}"))
-            .await
+        // The hub holds the request up to 300s server-side; the default 30s
+        // client timeout cut the wait with a transport error and pushed agents
+        // back to busy-polling. Allow the full server-side window + slack.
+        let timeout = timeout.min(300);
+        let path = format!("/api/tasks/{task_id}/wait?timeout={timeout}");
+        let headers = ctx_headers(ctx);
+        self.request_with_timeout(
+            Method::GET,
+            &path,
+            None,
+            &headers,
+            true,
+            Duration::from_secs(timeout + 5),
+        )
+        .await
     }
 
     pub async fn get_audit_log(

@@ -61,6 +61,8 @@ services:
       HUGINN_MCP_HUB_URL: http://hub:8000
       HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN:?set in .env}
       HUGINN_MCP_TRANSPORT: streamable-http
+      # The bundled Caddyfile stamps X-Real-IP (header_up) — trust it.
+      HUGINN_MCP_TRUST_PROXY: "true"
       HUGINN_MCP_HOST: 0.0.0.0
       HUGINN_MCP_PORT: 9000
     ports:

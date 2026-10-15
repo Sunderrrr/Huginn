@@ -10,6 +10,12 @@ pub struct Settings {
     pub transport: String,
     pub host: String,
     pub port: u16,
+    /// Trust X-Real-IP / X-Forwarded-For from the peer (fail-closed: only the
+    /// direct peer is used otherwise). Set to "true"/"1" ONLY when an edge
+    /// proxy stamps these headers (the bundled Caddyfile does, with
+    /// header_up X-Real-IP). A directly exposed port would otherwise let any
+    /// client spoof its IP and bypass the MCP tokens' IP allow-lists.
+    pub trust_proxy: bool,
 }
 
 impl Settings {
@@ -24,6 +30,10 @@ impl Settings {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(9000),
+            trust_proxy: matches!(
+                std::env::var("HUGINN_MCP_TRUST_PROXY").as_deref(),
+                Ok("true") | Ok("1") | Ok("yes") | Ok("on")
+            ),
         }
     }
 }
