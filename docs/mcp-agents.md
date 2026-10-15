@@ -2,7 +2,8 @@
 
 The Huginn MCP server is a thin façade over the hub REST API. Any agent that
 supports the [Model Context Protocol](https://modelcontextprotocol.io) can drive
-your fleet — Claude, Cursor, Continue, and more.
+your fleet. Claude is a common choice. Cursor and Continue work too, and other
+MCP-capable agents can connect as well.
 
 ## Prerequisites
 

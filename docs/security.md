@@ -7,7 +7,7 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 
 - The hub is the trust anchor and must be deployed behind TLS with strong secrets.
 - Workers are semi-trusted: they only ever run what an authenticated principal
-  asked for, and only after approval. Approval is manual by default; an admin may
+  asked for, and only after approval. Approval is manual by default. An admin may
   issue an `auto_approve` enrollment token for unattended/bulk provisioning, which
   deliberately trades that human gate for convenience — such a token lets anyone
   holding it add a live worker, so it must be kept secret and revoked after use.
@@ -21,12 +21,12 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 ### Authentication & authorization
 - **Every** endpoint requires authentication. There is no unauthenticated
   execution path. (`hub-rs/src/routes/` — auth extractors on every route group)
-- Users authenticate via local Argon2id login, OIDC (SSO), or LDAP/LDAPS;
+- Users authenticate via local Argon2id login, OIDC (SSO), or LDAP/LDAPS.
   JWTs carry the role. The OIDC flow follows the standard authorization-code +
   JWKS-verified id_token spec, but has only been **tested against Authentik** —
   other compliant IdPs should work but are unverified.
 - RBAC has three capability tiers:
-  - **read-only user** — list/inspect only; cannot execute.
+  - **read-only user** — list/inspect only, and cannot execute.
   - **operator** (admin user *or* the anonymous automation agent) — run
     actions/commands, trigger updates, read the audit log. A per-user MCP token
     grants exactly its owner's role, no more (a read-only user's token cannot
@@ -42,12 +42,12 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
   act as an **operator, not an admin**: they cannot approve VMs, enable
   unrestricted mode, or change the release allowlist. Agents authenticate with
   **per-user MCP tokens** (created/revoked in the dashboard, stored HMAC-hashed,
-  shown once); the hub resolves each to its owner and enforces that user's real
+  shown once). The hub resolves each to its owner and enforces that user's real
   role. A per-user token is only honoured alongside the server-held service
   token, so a leaked user token cannot reach the hub on its own. Tokens may be
-  pinned to an IP/CIDR; the allow-list is checked against the real client IP
+  pinned to an IP/CIDR. The allow-list is checked against the real client IP
   (stamped by the edge proxy as `X-Real-IP`, not client-forgeable).
-- Workers authenticate with their VM id + a per-worker secret on every request;
+- Workers authenticate with their VM id + a per-worker secret on every request.
   PENDING/REVOKED workers are rejected.
 
 ### Fail-closed configuration
@@ -79,15 +79,15 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
   unless it has itself observed unrestricted mode via heartbeat (defense in
   depth, so the hub alone cannot enable shell).
 - **Custom commands** (admin-defined, `custom` exec mode) are also **fixed argv,
-  no shell**. They shift one trust boundary deliberately — an admin can now
-  define which binary+args run on a VM — but are constrained: admin-only +
-  audited to define; double-gated to run (VM in `custom`/`unrestricted` mode AND
-  carrying one of the command's tags); and the worker refuses them outside custom
-  mode, mirroring the unrestricted gate. There is no parameter/shell surface.
+  no shell**. They shift one trust boundary deliberately. An admin can now define
+  which binary+args run on a VM. The constraints stay tight. Defining them is
+  admin-only and audited. Running them is double-gated (VM in `custom`/`unrestricted`
+  mode AND carrying one of the command's tags). The worker also refuses them outside
+  custom mode, mirroring the unrestricted gate. There is no parameter/shell surface.
 
 ### Transport
-- TLS is enforced for hub↔worker traffic in production (`HUGINN_REQUIRE_TLS`);
-  the worker refuses plaintext unless `allow_insecure` is set (dev only).
+- TLS is enforced for hub↔worker traffic in production (`HUGINN_REQUIRE_TLS`).
+  The worker refuses plaintext unless `allow_insecure` is set (dev only).
 
 ### Updates / SSRF
 - Update downloads are restricted to an **allowlist of release hosts**
@@ -100,7 +100,7 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 
 ### Abuse protection
 - Execution endpoints are **rate-limited** per principal and reject oversized
-  bodies; stored output is capped.
+  bodies. Stored output is capped.
 
 ### Auditability
 - The audit log is **append-only and hash-chained**: each row commits to the
@@ -117,6 +117,6 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 - Keep `HUGINN_REQUIRE_TLS=true` in production and terminate TLS in front of the hub.
 - Enable unrestricted mode only when necessary, and review the audit log.
 - Rotating `HUGINN_MFA_ENCRYPTION_KEY` invalidates existing TOTP secrets (users
-  re-enrol); it does not affect passkeys.
+  re-enrol). It does not affect passkeys.
 
 Report vulnerabilities per [SECURITY.md](../SECURITY.md).

@@ -1,7 +1,7 @@
 # Contributing to Huginn
 
 Huginn is a remote command-execution system, so we hold contributions to a high
-bar for security, clarity, and test coverage.
+bar for security and for test coverage, and we expect the code to stay clear.
 
 ## Ground rules
 
@@ -64,7 +64,7 @@ Every PR must be green on these, enforced in CI (`.github/workflows/ci-rust.yml`
 ### Parity gate (hub-rs)
 
 `hub-rs` must answer exactly like the reference API. If you touch an endpoint,
-regenerate and reconcile the goldens:
+regenerate the goldens and reconcile the diff:
 
 ```bash
 cd hub-rs
