@@ -378,8 +378,8 @@ mod tests {
     use serde_json::json;
 
     use super::super::router;
+    use super::super::store::AdminStore;
     use super::super::testing::*;
-    use super::super::AdminStore;
     use super::*;
     use crate::models::UserRole;
 
