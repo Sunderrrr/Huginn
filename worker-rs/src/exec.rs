@@ -49,6 +49,30 @@ impl Runner for CommandRunner {
     }
 }
 
+/// Captures a child pipe with a bounded grace: waits for EOF normally, but if
+/// an orphaned descendant keeps the write end open (`sh -c "sleep 999999 &"`),
+/// gives up `grace` after the child exits instead of hanging the worker.
+fn spawn_bounded_capture<R>(
+    stream: R,
+    max_output: usize,
+    exited: &tokio::sync::watch::Receiver<bool>,
+    grace: Duration,
+) -> tokio::task::JoinHandle<String>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let mut exited = exited.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            out = capture_output(stream, max_output) => out,
+            _ = async {
+                let _ = exited.changed().await;
+                tokio::time::sleep(grace).await;
+            } => String::new(),
+        }
+    })
+}
+
 /// Executes argv[0] with argv[1:] as arguments — no shell is involved.
 pub async fn run_command(
     argv: Vec<String>,
@@ -79,23 +103,47 @@ pub async fn run_command(
     // Never leak the child if the surrounding future is dropped (timeout or
     // shutdown) — mirrors CommandContext killing on context cancellation.
     command.kill_on_drop(true);
+    // Own process group: a killed child's descendants can otherwise keep the
+    // stdout/stderr pipes open forever (e.g. `sh -c "sleep 999999 &"`), which
+    // would hang the pipe capture below and freeze the whole worker.
+    #[cfg(unix)]
+    command.process_group(0);
 
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
-    let stdout_task = tokio::spawn(capture_output(stdout, max_output));
-    let stderr_task = tokio::spawn(capture_output(stderr, max_output));
+    // Bounded pipe collection: an orphaned descendant (`sh -c "sleep
+    // 999999 &"`) can hold the pipe's write end open forever; waiting for
+    // EOF would freeze the whole worker. Each capture gives up 5s AFTER the
+    // child exits (grace for a clean flush), never mid-run.
+    const PIPE_GRACE: Duration = Duration::from_secs(5);
+    let (exited_tx, exited_rx) = tokio::sync::watch::channel(false);
+    let stdout_task = spawn_bounded_capture(stdout, max_output, &exited_rx, PIPE_GRACE);
+    let stderr_task = spawn_bounded_capture(stderr, max_output, &exited_rx, PIPE_GRACE);
 
     let timed_out;
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(status) => {
             timed_out = false;
-            status?
+            let st = status?;
+            let _ = exited_tx.send(true);
+            st
         }
         Err(_elapsed) => {
             timed_out = true;
+            // Kill the whole process group: `child.kill()` alone leaves
+            // grandchildren alive (they hold the pipes open → the capture
+            // below would never see EOF).
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
             let _ = child.kill().await;
-            child.wait().await?
+            let st = child.wait().await?;
+            let _ = exited_tx.send(true);
+            st
         }
     };
 
@@ -229,5 +277,50 @@ mod tests {
             "stdout length = {}, want <= 1024",
             res.stdout.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod hang_tests {
+    use super::*;
+
+    /// H-1 regression: a background grandchild holding the pipe open must not
+    /// hang the runner. With the process-group kill + bounded grace, the task
+    /// returns promptly instead of waiting ~999999s for EOF.
+    #[tokio::test]
+    async fn background_child_holding_pipe_does_not_hang() {
+        let start = std::time::Instant::now();
+        let res = run_command(
+            vec![
+                "sh".into(),
+                "-c".into(),
+                "echo fast & sleep 300".into(),
+            ],
+            Duration::from_millis(300),
+            1024,
+        )
+        .await
+        .expect("run");
+        assert!(res.timed_out, "expected the 300s sleep to trip the timeout");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "runner returned in {:?} — bounded, not hung",
+            start.elapsed()
+        );
+    }
+
+    /// Normal capture still works with the grace (output flushed before EOF).
+    #[tokio::test]
+    async fn capture_with_grace_still_returns_output() {
+        let res = run_command(
+            vec!["sh".into(), "-c".into(), "echo before; sleep 0.2; echo after".into()],
+            Duration::from_secs(5),
+            1024,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.exit_code, 0);
+        assert!(res.stdout.contains("before"), "stdout: {:?}", res.stdout);
+        assert!(res.stdout.contains("after"), "stdout: {:?}", res.stdout);
     }
 }

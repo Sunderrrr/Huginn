@@ -19,6 +19,7 @@ thiserror = "2"
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
+libc = "0.2"
 
 [dev-dependencies]
 wiremock = "0.6"
