@@ -118,6 +118,7 @@ impl Updater {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         let tmp = dir.join(NEW_BINARY_NAME);
+        let _ = tokio::fs::remove_file(&tmp).await; // create_new is exclusive
         if let Err(e) = self.download(&spec.binary_url, &tmp).await {
             return Err(match e {
                 Error::HostNotAllowed(_) => e,
@@ -146,8 +147,16 @@ impl Updater {
             .map_err(|e| Error::msg(e.to_string()))?;
 
         let binary_path = PathBuf::from(&spec.binary_path);
-        // Keep a backup of the current binary for rollback.
+        // Keep a backup of the current binary for rollback — never write
+        // through a pre-placed symlink at that path.
         let backup = PathBuf::from(format!("{}.bak", spec.binary_path));
+        if tokio::fs::symlink_metadata(&backup)
+            .await
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(Error::msg("backup path is a symlink; refusing"));
+        }
         copy_file(&binary_path, &backup)
             .await
             .map_err(|e| Error::msg(format!("backup current binary: {e}")))?;
@@ -200,19 +209,36 @@ impl Updater {
         Err(Error::msg(format!("no checksum entry for {asset:?}")))
     }
 
+    /// Upper bound for a downloaded worker binary — a hostile/compromised
+    /// release host could otherwise stream gigabytes and fill the disk (the
+    /// checksum is only verified after the download completes).
+    const MAX_BINARY_BYTES: u64 = 256 * 1024 * 1024;
+
     async fn download(&self, raw_url: &str, dest: &Path) -> Result<(), Error> {
         let mut resp = self.open(raw_url).await?;
+        if let Some(len) = resp.content_length() {
+            if len > Self::MAX_BINARY_BYTES {
+                return Err(Error::msg("download too large (content-length)"));
+            }
+        }
+        // create_new (O_EXCL): never write through a pre-placed symlink, and
+        // never silently truncate an existing file we did not create.
         let mut out = tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .write(true)
             .mode(0o600)
             .open(dest)
             .await
             .map_err(|e| Error::msg(e.to_string()))?;
+        let mut written: u64 = 0;
         loop {
             match resp.chunk().await {
                 Ok(Some(chunk)) => {
+                    written += chunk.len() as u64;
+                    if written > Self::MAX_BINARY_BYTES {
+                        let _ = tokio::fs::remove_file(dest).await;
+                        return Err(Error::msg("download too large"));
+                    }
                     out.write_all(&chunk)
                         .await
                         .map_err(|e| Error::msg(e.to_string()))?;

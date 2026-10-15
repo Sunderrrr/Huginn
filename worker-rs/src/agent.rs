@@ -162,12 +162,10 @@ impl Agent {
             }
         };
         self.set_exec_mode(resp.exec_mode.clone()).await;
-        // Merge hub-provided release domains into the built-in allowlist. The
-        // hub can ADD domains but never remove the built-in defaults, and any
-        // domain it pushes must pass local validation. A compromised hub
-        // cannot point the worker at arbitrary internal hosts.
-        if !resp.allowed_release_domains.is_empty() {
-            let mut state = self.state.lock().await;
+        // Always re-derive the allowlist from the hub's CURRENT list
+        // (built-in defaults + validated additions): an empty response must
+        // drop previously-pushed domains, not keep them forever.
+        {
             let mut merged = config::DEFAULT_ALLOWED_RELEASE_DOMAINS
                 .iter()
                 .map(|s| s.to_string())
@@ -177,6 +175,7 @@ impl Agent {
                     merged.push(d.clone());
                 }
             }
+            let mut state = self.state.lock().await;
             state.allowed_release_domains = Some(merged);
         }
     }
@@ -305,10 +304,16 @@ impl Agent {
         if mode != "custom" && mode != "unrestricted" {
             return failure("worker refused custom command: custom mode not enabled");
         }
-        let commands = argv_list(task.payload.get("commands"));
-        if commands.is_empty() {
-            return failure("custom command has no commands");
-        }
+        let commands = match task.payload.get("commands") {
+            None => return failure("custom command has no commands"),
+            Some(v) => match argv_list(Some(v)) {
+                Some(c) if !c.is_empty() => c,
+                Some(_) => return failure("custom command has no commands"),
+                // A non-string argv element: reject rather than silently run
+                // a different command than the admin defined.
+                None => return failure("custom command has a non-string argv element"),
+            },
+        };
         let timeout = task_timeout(&task.payload);
         let mut stdout = String::new();
         let mut stderr = String::new();
@@ -441,7 +446,9 @@ fn failure(msg: &str) -> TaskResult {
 
 fn task_timeout(payload: &serde_json::Map<String, Value>) -> Duration {
     match payload.get("timeout").and_then(Value::as_f64) {
-        Some(v) if v > 0.0 => Duration::from_secs_f64(v),
+        // Clamp: 1e300/inf made Duration::from_secs_f64 panic — a hostile hub
+        // could crash-loop the worker. Same clamp class as the hub's longpoll.
+        Some(v) if v > 0.0 && v.is_finite() => Duration::from_secs_f64(v.clamp(1.0, 86_400.0)),
         _ => Duration::from_secs(60),
     }
 }
@@ -458,19 +465,26 @@ fn string_params(v: Option<&Value>) -> HashMap<String, String> {
     out
 }
 
-fn argv_list(v: Option<&Value>) -> Vec<Vec<String>> {
+/// Custom-command argv, or None if the payload is malformed (a non-string
+/// element used to be silently dropped, executing a DIFFERENT command than
+/// the admin defined — reject instead).
+fn argv_list(v: Option<&Value>) -> Option<Vec<Vec<String>>> {
     match v {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| match item {
-                Value::Array(argv) => argv
-                    .iter()
-                    .filter_map(|s| s.as_str().map(str::to_string))
-                    .collect(),
-                _ => Vec::new(),
-            })
-            .collect(),
-        _ => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    Value::Array(argv) if argv.iter().all(Value::is_string) => out.push(
+                        argv.iter()
+                            .map(|s| s.as_str().unwrap().to_string())
+                            .collect(),
+                    ),
+                    _ => return None,
+                }
+            }
+            Some(out)
+        }
+        _ => None,
     }
 }
 
@@ -478,20 +492,42 @@ fn as_string(v: Option<&Value>) -> String {
     v.and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-/// Rejects loopback/link-local/internal names a malicious hub might try to
-/// push into the worker's allowlist.
-fn is_safe_release_domain(host: &str) -> bool {
-    let h = host.trim().to_lowercase();
-    if h.is_empty() || h.contains('/') {
+/// An update host must be a public FQDN — never a private/loopback/VPN IP.
+/// The old string denylist was enumerable: RFC1918, CGNAT (100.64/10, VPN
+/// overlays), IPv6 ULA/link-local and the bracketed `[::1]` all passed, so a
+/// compromised hub could SSRF-pivot the worker into the internal network and
+/// serve a matching checksum → RCE on the fleet.
+fn is_safe_release_domain(raw: &str) -> bool {
+    let h = raw.trim().to_lowercase();
+    if h.is_empty() || h.contains('/') || h.starts_with('[') {
         return false;
     }
-    if h == "localhost" || h.ends_with(".local") || h.ends_with(".internal") {
-        return false;
+    if let Ok(ip) = h.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                !(v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_broadcast()
+                    || v4.is_documentation()
+                    // CGNAT 100.64.0.0/10
+                    || (v4.octets()[0] == 100 && (v4.octets()[1] & 0b1100_0000) == 64))
+            }
+            std::net::IpAddr::V6(v6) => {
+                !(v6.is_loopback()
+                    || v6.is_unspecified()
+                    // fe80::/10 link-local
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80
+                    // fc00::/7 unique-local
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00)
+            }
+        };
     }
-    !matches!(
-        h.as_str(),
-        "169.254.169.254" | "127.0.0.1" | "0.0.0.0" | "::1"
-    )
+    !(h == "localhost"
+        || h.ends_with(".local")
+        || h.ends_with(".internal")
+        || h.split('.').count() < 2)
 }
 
 fn run_raw(name: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
@@ -772,5 +808,19 @@ mod tests {
         assert!(!is_safe_release_domain("127.0.0.1"));
         assert!(!is_safe_release_domain(""));
         assert!(!is_safe_release_domain("a/b"));
+        // H-3: the old string denylist let all of these through.
+        assert!(!is_safe_release_domain("10.0.5.20"), "RFC1918");
+        assert!(!is_safe_release_domain("172.16.1.1"), "RFC1918");
+        assert!(!is_safe_release_domain("192.168.1.1"), "RFC1918");
+        assert!(!is_safe_release_domain("192.0.2.11"), "CGNAT/VPN");
+        assert!(!is_safe_release_domain("fe80::1"), "IPv6 link-local");
+        assert!(!is_safe_release_domain("fd12::1"), "IPv6 ULA");
+        assert!(!is_safe_release_domain("::1"));
+        assert!(!is_safe_release_domain("[::1]"), "bracketed IPv6 bypass");
+        assert!(!is_safe_release_domain("0.0.0.0"));
+        assert!(!is_safe_release_domain("255.255.255.255"));
+        assert!(!is_safe_release_domain("single"), "no-dot host");
+        // A public FQDN with a real public IP still passes.
+        assert!(is_safe_release_domain("objects.githubusercontent.com"));
     }
 }
