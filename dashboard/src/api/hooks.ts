@@ -4,6 +4,11 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { api } from "./client";
+
+// URL-encode every interpolated path segment — ids are UUIDs today, but the
+// helper keeps a forged `x?y` from ever reaching the router.
+const enc = (v: string) => encodeURIComponent(v);
+
 import type {
   BackupList,
   BackupRunResult,
@@ -60,7 +65,7 @@ export function useVms() {
 export function useVm(id: string) {
   return useQuery({
     queryKey: ["vm", id],
-    queryFn: () => api.get<VM>(`/api/vms/${id}`),
+    queryFn: () => api.get<VM>(`/api/vms/${enc(id)}`),
     refetchInterval: 5_000,
   });
 }
@@ -115,7 +120,7 @@ function useInvalidate(keys: string[]) {
 export function useApproveVm() {
   const invalidate = useInvalidate(["vms", "vm", "audit"]);
   return useMutation({
-    mutationFn: (id: string) => api.post<VM>(`/api/vms/${id}/approve`),
+    mutationFn: (id: string) => api.post<VM>(`/api/vms/${enc(id)}/approve`),
     onSuccess: invalidate,
   });
 }
@@ -124,7 +129,7 @@ export function useRevokeVm() {
   const invalidate = useInvalidate(["vms", "vm", "audit"]);
   return useMutation({
     mutationFn: (vars: { id: string; uninstall?: boolean }) =>
-      api.post<VM>(`/api/vms/${vars.id}/revoke`, { uninstall: vars.uninstall ?? false }),
+      api.post<VM>(`/api/vms/${enc(vars.id)}/revoke`, { uninstall: vars.uninstall ?? false }),
     onSuccess: invalidate,
   });
 }
@@ -132,7 +137,7 @@ export function useRevokeVm() {
 export function useDeleteVm() {
   const invalidate = useInvalidate(["vms", "vm", "audit"]);
   return useMutation({
-    mutationFn: (id: string) => api.del<void>(`/api/vms/${id}`),
+    mutationFn: (id: string) => api.del<void>(`/api/vms/${enc(id)}`),
     onSuccess: invalidate,
   });
 }
@@ -141,7 +146,7 @@ export function useSetExecMode() {
   const invalidate = useInvalidate(["vms", "vm", "audit"]);
   return useMutation({
     mutationFn: (vars: { id: string; mode: ExecMode }) =>
-      api.put<VM>(`/api/vms/${vars.id}/exec-mode`, { exec_mode: vars.mode }),
+      api.put<VM>(`/api/vms/${enc(vars.id)}/exec-mode`, { exec_mode: vars.mode }),
     onSuccess: invalidate,
   });
 }
@@ -150,7 +155,7 @@ export function useRunAction() {
   const invalidate = useInvalidate(["audit"]);
   return useMutation({
     mutationFn: (vars: { id: string; action: string; params?: Record<string, string> }) =>
-      api.post<Task>(`/api/vms/${vars.id}/actions`, {
+      api.post<Task>(`/api/vms/${enc(vars.id)}/actions`, {
         action: vars.action,
         params: vars.params ?? {},
         wait: true,
@@ -189,7 +194,7 @@ export function useRunCommand() {
   const invalidate = useInvalidate(["audit"]);
   return useMutation({
     mutationFn: (vars: { id: string; command: string }) =>
-      api.post<Task>(`/api/vms/${vars.id}/commands`, { command: vars.command, wait: true }),
+      api.post<Task>(`/api/vms/${enc(vars.id)}/commands`, { command: vars.command, wait: true }),
     onSuccess: invalidate,
   });
 }
@@ -197,7 +202,7 @@ export function useRunCommand() {
 export function useTriggerUpdate() {
   const invalidate = useInvalidate(["vms", "vm", "audit"]);
   return useMutation({
-    mutationFn: (id: string) => api.post<Task>(`/api/vms/${id}/update`),
+    mutationFn: (id: string) => api.post<Task>(`/api/vms/${enc(id)}/update`),
     onSuccess: invalidate,
   });
 }
@@ -218,7 +223,7 @@ export function useCreateToken() {
 export function useRevokeToken() {
   const invalidate = useInvalidate(["tokens"]);
   return useMutation({
-    mutationFn: (id: string) => api.del<void>(`/api/enrollment-tokens/${id}`),
+    mutationFn: (id: string) => api.del<void>(`/api/enrollment-tokens/${enc(id)}`),
     onSuccess: invalidate,
   });
 }
@@ -274,7 +279,7 @@ export function useUpdateUser() {
   const invalidate = useInvalidate(["users"]);
   return useMutation({
     mutationFn: (vars: { id: string } & UserUpdate) =>
-      api.put<User>(`/api/users/${vars.id}`, { role: vars.role, is_active: vars.is_active, email: vars.email }),
+      api.put<User>(`/api/users/${enc(vars.id)}`, { role: vars.role, is_active: vars.is_active, email: vars.email }),
     onSuccess: invalidate,
   });
 }
@@ -282,7 +287,7 @@ export function useUpdateUser() {
 export function useDeactivateUser() {
   const invalidate = useInvalidate(["users"]);
   return useMutation({
-    mutationFn: (id: string) => api.del<void>(`/api/users/${id}`),
+    mutationFn: (id: string) => api.del<void>(`/api/users/${enc(id)}`),
     onSuccess: invalidate,
   });
 }
@@ -290,7 +295,7 @@ export function useDeactivateUser() {
 export function useChangePassword() {
   return useMutation({
     mutationFn: (vars: { id: string } & PasswordChange) =>
-      api.put<{ status: string }>(`/api/users/${vars.id}/password`, {
+      api.put<{ status: string }>(`/api/users/${enc(vars.id)}/password`, {
         old_password: vars.old_password,
         new_password: vars.new_password,
       }),
@@ -301,7 +306,7 @@ export function useSetUserVms() {
   const invalidate = useInvalidate(["users"]);
   return useMutation({
     mutationFn: (vars: { id: string; vm_ids: string[] }) =>
-      api.put<User>(`/api/users/${vars.id}/vms`, { vm_ids: vars.vm_ids }),
+      api.put<User>(`/api/users/${enc(vars.id)}/vms`, { vm_ids: vars.vm_ids }),
     onSuccess: invalidate,
   });
 }
@@ -321,7 +326,7 @@ export function useUpdateMcpToken() {
   const invalidate = useInvalidate(["mcp-tokens"]);
   return useMutation({
     mutationFn: (vars: { id: string; allowed_ip: string | null }) =>
-      api.patch<McpToken>(`/api/mcp/tokens/${vars.id}`, { allowed_ip: vars.allowed_ip }),
+      api.patch<McpToken>(`/api/mcp/tokens/${enc(vars.id)}`, { allowed_ip: vars.allowed_ip }),
     onSuccess: invalidate,
   });
 }
@@ -329,7 +334,7 @@ export function useUpdateMcpToken() {
 export function useRevokeMcpToken() {
   const invalidate = useInvalidate(["mcp-tokens"]);
   return useMutation({
-    mutationFn: (id: string) => api.del<void>(`/api/mcp/tokens/${id}`),
+    mutationFn: (id: string) => api.del<void>(`/api/mcp/tokens/${enc(id)}`),
     onSuccess: invalidate,
   });
 }
@@ -355,7 +360,7 @@ export function useUpdateTag() {
   const invalidate = useInvalidate(["tags", "vms"]);
   return useMutation({
     mutationFn: (vars: { id: string } & TagUpdate) =>
-      api.put<Tag>(`/api/tags/${vars.id}`, { name: vars.name, color: vars.color }),
+      api.put<Tag>(`/api/tags/${enc(vars.id)}`, { name: vars.name, color: vars.color }),
     onSuccess: invalidate,
   });
 }
@@ -363,7 +368,7 @@ export function useUpdateTag() {
 export function useDeleteTag() {
   const invalidate = useInvalidate(["tags", "vms"]);
   return useMutation({
-    mutationFn: (id: string) => api.del<void>(`/api/tags/${id}`),
+    mutationFn: (id: string) => api.del<void>(`/api/tags/${enc(id)}`),
     onSuccess: invalidate,
   });
 }
@@ -397,7 +402,7 @@ export function useUpdateCustomAction() {
   return useMutation({
     mutationFn: (vars: { id: string } & Partial<Omit<CustomActionInput, "name">> & { enabled?: boolean }) => {
       const { id, ...body } = vars;
-      return api.patch<CustomAction>(`/api/actions/${id}`, body);
+      return api.patch<CustomAction>(`/api/actions/${enc(id)}`, body);
     },
     onSuccess: invalidate,
   });
@@ -406,7 +411,7 @@ export function useUpdateCustomAction() {
 export function useDeleteCustomAction() {
   const invalidate = useInvalidate(["custom-actions"]);
   return useMutation({
-    mutationFn: (id: string) => api.del<void>(`/api/actions/${id}`),
+    mutationFn: (id: string) => api.del<void>(`/api/actions/${enc(id)}`),
     onSuccess: invalidate,
   });
 }
@@ -415,7 +420,7 @@ export function useSetVmTags() {
   const invalidate = useInvalidate(["vms", "vm"]);
   return useMutation({
     mutationFn: (vars: { id: string; tag_ids: string[] }) =>
-      api.put<VM>(`/api/vms/${vars.id}/tags`, { tag_ids: vars.tag_ids }),
+      api.put<VM>(`/api/vms/${enc(vars.id)}/tags`, { tag_ids: vars.tag_ids }),
     onSuccess: invalidate,
   });
 }
@@ -445,7 +450,7 @@ export function useUpdateSchedule() {
     // serves both the enabled toggle and a full edit.
     mutationFn: (vars: { id: string } & Partial<ScheduleCreate>) => {
       const { id, ...rest } = vars;
-      return api.put<Schedule>(`/api/schedules/${id}`, rest);
+      return api.put<Schedule>(`/api/schedules/${enc(id)}`, rest);
     },
     onSuccess: invalidate,
   });
@@ -454,7 +459,7 @@ export function useUpdateSchedule() {
 export function useDeleteSchedule() {
   const invalidate = useInvalidate(["schedules"]);
   return useMutation({
-    mutationFn: (id: string) => api.del<void>(`/api/schedules/${id}`),
+    mutationFn: (id: string) => api.del<void>(`/api/schedules/${enc(id)}`),
     onSuccess: invalidate,
   });
 }
@@ -524,7 +529,7 @@ export function useRenamePasskey() {
   const invalidate = useInvalidate(["passkeys"]);
   return useMutation({
     mutationFn: (vars: { id: string; name: string }) =>
-      api.put<WebAuthnCredentialOut>(`/api/auth/mfa/webauthn/credentials/${vars.id}`, {
+      api.put<WebAuthnCredentialOut>(`/api/auth/mfa/webauthn/credentials/${enc(vars.id)}`, {
         name: vars.name,
       }),
     onSuccess: invalidate,
@@ -534,7 +539,7 @@ export function useRenamePasskey() {
 export function useDeletePasskey() {
   const invalidate = useInvalidate(["passkeys", "me"]);
   return useMutation({
-    mutationFn: (id: string) => api.del<void>(`/api/auth/mfa/webauthn/credentials/${id}`),
+    mutationFn: (id: string) => api.del<void>(`/api/auth/mfa/webauthn/credentials/${enc(id)}`),
     onSuccess: invalidate,
   });
 }

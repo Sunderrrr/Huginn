@@ -195,6 +195,8 @@ export function BackupsPage() {
                 <input
                   className="field"
                   type="password"
+                  autoComplete="new-password"
+                  name="backup-s3-secret-key"
                   value={secretKey}
                   onChange={(e) => setSecretKey(e.target.value)}
                   disabled={!isAdmin}

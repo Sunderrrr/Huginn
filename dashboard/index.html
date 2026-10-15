@@ -6,23 +6,9 @@
     <meta name="color-scheme" content="dark light" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg?v=2" />
     <title>HUGINN · fleet control</title>
-    <!-- Apply the saved theme before first paint (avoids a flash of dark). -->
-    <script>
-      (function () {
-        try {
-          document.documentElement.dataset.theme =
-            localStorage.getItem("huginn.theme") || "dark";
-        } catch (e) {
-          document.documentElement.dataset.theme = "dark";
-        }
-      })();
-    </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Theme applied by /theme.js (external, CSP-safe). Fonts are
+         self-hosted via @fontsource (no third-party origin in the CSP). -->
+    <script src="/theme.js"></script>
   </head>
   <body>
     <div id="root"></div>

@@ -281,6 +281,7 @@ export function AccountPage() {
                 </div>
                 <button
                   className="btn btn--sm btn--danger"
+                  disabled={deletePasskey.isPending}
                   onClick={async () => {
                     try {
                       await deletePasskey.mutateAsync(p.id);

@@ -95,6 +95,7 @@ export function SchedulesPage() {
                   <td>
                     <input
                       type="checkbox"
+                      disabled={update.isPending}
                       checked={s.enabled}
                       onChange={(e) =>
                         update.mutate(
