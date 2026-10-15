@@ -241,6 +241,12 @@ impl S3Client {
         let http = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(300))
+            // No redirect following (M-3): the request carries the SigV4
+            // `Authorization` header, which is bound to the signed host — a 3xx
+            // would re-send it, credentials included, to whatever host the
+            // response points at (same policy as the webhook client,
+            // services/notifications/webhook.rs).
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| BackupError::Transport(cfg.sanitize(&e.to_string())))?;
         Ok(Self { cfg, http })
@@ -644,6 +650,35 @@ mod tests {
         );
         assert!(objects.is_empty());
         assert!(next.is_none());
+    }
+
+    /// M-3: a 3xx from the storage endpoint must surface as a typed error,
+    /// never be followed — the request carries the SigV4 `Authorization`
+    /// header, which would be replayed at whatever host the redirect points to.
+    #[tokio::test]
+    async fn redirect_responses_are_not_followed() {
+        let server = MockServer::start().await;
+        let endpoint = format!("http://{}", server.address());
+        let client = S3Client::new(config_for(&endpoint)).unwrap();
+
+        Mock::given(method("HEAD"))
+            .and(path("/backups/db/x.sql.gz"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("Location", "/attacker-hoooks"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let err = client.head_object("db/x.sql.gz").await.unwrap_err();
+        assert!(
+            matches!(err, BackupError::Http { status: 302, .. }),
+            "typed 3xx error, got {err:?}"
+        );
+        // Exactly one request: the redirect was not followed (following it
+        // would have re-sent the signed Authorization header).
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
     }
 
     /// PUT / HEAD / LIST / DELETE against a fake S3 (wiremock), including the

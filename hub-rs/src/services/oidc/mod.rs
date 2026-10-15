@@ -153,6 +153,11 @@ impl OidcClient {
     pub fn new(config: OidcConfig) -> Self {
         let http = reqwest::Client::builder()
             .timeout(HTTP_TIMEOUT)
+            // No redirect following (M-3): `client_secret` goes to the token
+            // endpoint in the POST body — a 3xx would hand it to another host
+            // (same policy as the webhook client,
+            // services/notifications/webhook.rs).
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_default();
         Self {
@@ -551,6 +556,76 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, OidcError::NonceMismatch));
+    }
+
+    /// M-3: a 3xx from the provider must surface as a typed error, never be
+    /// followed — the token-endpoint POST carries `client_secret`, which a
+    /// redirect would hand to another host.
+    #[tokio::test]
+    async fn redirect_responses_are_not_followed() {
+        use axum::routing::{get, post};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let issuer = format!("http://{addr}");
+
+        let (key, jwk) = gen_rsa();
+        let id_token = key.sign(
+            "RS256",
+            Some("rsa-key"),
+            &serde_json::json!({
+                "sub": "subject-1", "preferred_username": "alice",
+                "iss": issuer, "aud": "client-1", "nonce": "nonce-1",
+                "iat": 1_700_000_000_i64, "exp": 4_000_000_000_i64,
+            }),
+        );
+        let state = MockIdp {
+            // The token endpoint sits behind a 302 whose target WOULD answer
+            // a valid token response if the client followed it.
+            discovery: serde_json::json!({
+                "issuer": issuer,
+                "authorization_endpoint": format!("{issuer}/auth"),
+                "token_endpoint": format!("{issuer}/redirect"),
+                "jwks_uri": format!("{issuer}/jwks"),
+            }),
+            jwks: serde_json::json!({ "keys": [jwk] }),
+            token: serde_json::json!({
+                "id_token": id_token, "access_token": "at", "token_type": "Bearer",
+            }),
+        };
+        async fn redirect_to_token() -> impl axum::response::IntoResponse {
+            (
+                axum::http::StatusCode::FOUND,
+                [("location", "/token")],
+            )
+        }
+        let app = axum::Router::new()
+            .route("/.well-known/openid-configuration", get(mock_discovery))
+            .route("/jwks", get(mock_jwks))
+            .route("/redirect", post(redirect_to_token))
+            .route("/token", post(mock_token))
+            .with_state(state);
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = OidcClient::new(OidcConfig {
+            enabled: true,
+            issuer,
+            client_id: "client-1".into(),
+            client_secret: "secret".into(),
+            redirect_url: "http://localhost:8000/api/auth/oidc/callback".into(),
+            post_login_redirect: String::new(),
+        });
+
+        // The 302 surfaces as the typed token-endpoint error — it is NOT
+        // followed to /token (where the exchange would otherwise succeed and
+        // the client_secret would have been re-sent).
+        let err = client.exchange_code("the-code", Some("nonce-1")).await.unwrap_err();
+        assert!(
+            matches!(err, OidcError::TokenEndpoint(302)),
+            "typed 3xx error, got {err:?}"
+        );
     }
 
     // ---- reconciliation decisions ---------------------------------------
