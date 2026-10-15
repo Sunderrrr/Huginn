@@ -303,20 +303,18 @@ pub(super) async fn delete_passkey(
     let Some(cred) = cred.filter(|c| c.user_id == user.id) else {
         return Err(ApiError::not_found("passkey not found"));
     };
-    // Lockout guard: a passwordless user with no TOTP must keep at least one key.
-    if user.password_hash.is_none() && !user.totp_enabled {
-        let remaining = crate::models::webauthn::count_credentials(&state.pool, user.id)
-            .await
-            .map_err(db_err)?;
-        if remaining <= 1 {
-            return Err(ApiError::bad_request(
-                "cannot delete your only passkey; set a password or add another factor first",
-            ));
-        }
-    }
-    crate::models::webauthn::delete_credential(&state.pool, cred.id, user.id)
+    // L-6: lockout guard — refuse to delete the last passkey of a user who has
+    // neither a password nor active TOTP (they would be locked out). The count
+    // and the delete are ONE statement, so two concurrent requests can no
+    // longer each observe "more than one key" and both delete.
+    if !crate::models::webauthn::delete_credential_guarded(&state.pool, cred.id, user.id)
         .await
-        .map_err(db_err)?;
+        .map_err(db_err)?
+    {
+        return Err(ApiError::bad_request(
+            "cannot delete your only passkey; set a password or add another factor first",
+        ));
+    }
     let mut new = AuditNew::new(ActorType::User, user.id.to_string(), "passkey_removed");
     new.detail = serde_json::json!({"name": cred.name});
     record_audit(

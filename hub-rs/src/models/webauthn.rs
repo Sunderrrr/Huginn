@@ -254,6 +254,41 @@ pub async fn delete_credential(pool: &PgPool, id: Uuid, user_id: Uuid) -> Result
     Ok(res.rows_affected() == 1)
 }
 
+/// Remove one credential UNLESS it is the user's last remaining login factor
+/// (L-6): the delete only goes through when the user has another passkey, a
+/// local password, or active TOTP. The guard runs in the SAME statement as the
+/// delete — the user's credential rows are locked first (in a deterministic
+/// order, so two concurrent requests cannot deadlock), then the guard is
+/// evaluated on the post-lock state. That closes the TOCTOU window where two
+/// concurrent deletes each observed "more than one key" and both went through,
+/// leaving a passwordless, TOTP-less user locked out. Returns false when the
+/// guard refused (or the credential no longer exists).
+pub async fn delete_credential_guarded(
+    pool: &PgPool,
+    id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, DbError> {
+    let res = sqlx::query(
+        "WITH locked AS ( \
+            SELECT id FROM webauthn_credentials \
+            WHERE user_id = $2 ORDER BY id FOR UPDATE \
+         ), guard AS ( \
+            SELECT count(*) FILTER (WHERE id <> $1)::int AS others FROM locked \
+         ), locked_user AS ( \
+            SELECT password_hash, totp_enabled FROM users WHERE id = $2 FOR UPDATE \
+         ) \
+         DELETE FROM webauthn_credentials c \
+         USING locked_user lu, guard g \
+         WHERE c.id = $1 AND c.user_id = $2 \
+           AND (lu.password_hash IS NOT NULL OR lu.totp_enabled OR g.others > 0)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() == 1)
+}
+
 /// Number of registered passkeys for a user (parity with `mfa.passkey_count`).
 pub async fn count_credentials(pool: &PgPool, user_id: Uuid) -> Result<i64, DbError> {
     let (n,): (i64,) =
@@ -342,4 +377,134 @@ pub async fn delete_backup_codes(pool: &PgPool, user_id: Uuid) -> Result<u64, Db
         .execute(pool)
         .await?;
     Ok(res.rows_affected())
+}
+
+#[cfg(test)]
+mod live_tests {
+    //! L-6: the atomic lockout guard of `delete_credential_guarded`, exercised
+    //! against a live PostgreSQL (skipped unless `HUGINN_TEST_DATABASE_URL` is
+    //! set — `cargo test` stays green without a database).
+
+    use super::*;
+    use crate::db::{connect, run_migrations, LIVE_DB_GUARD};
+    use crate::models::enums::UserRole;
+    use crate::models::user::{User, UserNew};
+
+    async fn fresh_pool() -> Option<(PgPool, tokio::sync::MutexGuard<'static, ()>)> {
+        let Ok(url) = std::env::var("HUGINN_TEST_DATABASE_URL") else {
+            eprintln!("skipped: HUGINN_TEST_DATABASE_URL not set");
+            return None;
+        };
+        let guard = LIVE_DB_GUARD.lock().await;
+        let pool = connect(&url, 4).await.expect("connect");
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        run_migrations(&pool).await.expect("migrations");
+        Some((pool, guard))
+    }
+
+    async fn make_user(pool: &PgPool, username: &str, password: Option<&str>) -> User {
+        crate::models::user::create(
+            pool,
+            UserNew {
+                username: username.into(),
+                password_hash: password.map(str::to_owned),
+                role: UserRole::Readonly,
+                is_active: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn add_passkey(pool: &PgPool, user: &User, name: &str) -> WebAuthnCredential {
+        create_credential(
+            pool,
+            CredentialNew {
+                user_id: user.id,
+                name: name.into(),
+                credential_id: format!("cid-{}", Uuid::new_v4()),
+                public_key: vec![1, 2, 3],
+                sign_count: 0,
+                transports: None,
+                aaguid: None,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn guarded_delete_refuses_the_last_factor() {
+        let Some((pool, _guard)) = fresh_pool().await else {
+            return;
+        };
+
+        // Passwordless, TOTP-less user: the only passkey cannot be deleted.
+        let bare = make_user(&pool, "bare", None).await;
+        let only = add_passkey(&pool, &bare, "only").await;
+        assert!(
+            !delete_credential_guarded(&pool, only.id, bare.id).await.unwrap(),
+            "the last passkey of a passwordless user is refused"
+        );
+        assert_eq!(count_credentials(&pool, bare.id).await.unwrap(), 1);
+
+        // With a second passkey both can go — until only one remains.
+        let second = add_passkey(&pool, &bare, "second").await;
+        assert!(delete_credential_guarded(&pool, only.id, bare.id).await.unwrap());
+        assert!(
+            !delete_credential_guarded(&pool, second.id, bare.id).await.unwrap(),
+            "back to one passkey, the last one is refused again"
+        );
+
+        // A local password OR active TOTP lifts the guard.
+        let with_password = make_user(&pool, "pw", Some("hash-of-password")).await;
+        let key = add_passkey(&pool, &with_password, "key").await;
+        assert!(delete_credential_guarded(&pool, key.id, with_password.id).await.unwrap());
+
+        let with_totp = make_user(&pool, "totp", None).await;
+        crate::models::user::set_mfa(&pool, with_totp.id, "enc-secret", Utc::now())
+            .await
+            .unwrap()
+            .unwrap();
+        let key = add_passkey(&pool, &with_totp, "key").await;
+        assert!(delete_credential_guarded(&pool, key.id, with_totp.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn guarded_delete_survives_concurrent_deletes_of_the_last_two_keys() {
+        let Some((pool, _guard)) = fresh_pool().await else {
+            return;
+        };
+
+        // L-6 TOCTOU: a passwordless, TOTP-less user holds exactly two
+        // passkeys and two concurrent requests try to delete both. The old
+        // count-then-delete implementation let both through; the atomic guard
+        // must let exactly ONE succeed.
+        let user = make_user(&pool, "racy", None).await;
+        let key_a = add_passkey(&pool, &user, "a").await;
+        let key_b = add_passkey(&pool, &user, "b").await;
+
+        let (ra, rb) = tokio::join!(
+            delete_credential_guarded(&pool, key_a.id, user.id),
+            delete_credential_guarded(&pool, key_b.id, user.id),
+        );
+        let wins = ra.unwrap() as u8 + rb.unwrap() as u8;
+        assert_eq!(
+            wins, 1,
+            "exactly one of the two concurrent deletes goes through"
+        );
+        assert_eq!(
+            count_credentials(&pool, user.id).await.unwrap(),
+            1,
+            "the user keeps exactly one passkey — no lockout"
+        );
+    }
 }
