@@ -29,8 +29,9 @@ use super::audit::{entry, record};
 use super::tasks::{self, ExecError, TaskOut};
 use super::{
     client_ip, db_err, enforce_body_size, load_vm, map_json_rejection, map_path_rejection,
-    peer_addr, rate_limit_exec, FleetState, Peer, RouteError,
+    peer_addr, principal_can_access_vm, rate_limit_exec, FleetState, Peer, RouteError,
 };
+use super::principal::Principal;
 
 /// How long `wait=true` blocks for a terminal result (`execution._WAIT_MAX_SECONDS`).
 const WAIT_MAX_SECONDS: u64 = 30;
@@ -176,6 +177,25 @@ pub fn router(state: FleetState) -> Router {
         .with_state(state)
 }
 
+/// M-1: the execution endpoints' IDOR guard — the same rule as `get_task`
+/// (`deps.principal_can_access_vm`), answered as 403 "access to this VM
+/// denied". Runs right after `load_vm`, so a caller without access cannot
+/// tell an inaccessible VM from a missing one and no task is ever queued for
+/// a VM outside the caller's grant.
+async fn require_vm_access(
+    state: &FleetState,
+    principal: &Principal,
+    vm_id: Uuid,
+) -> Result<(), RouteError> {
+    if !principal_can_access_vm(&state.pool, principal, vm_id)
+        .await
+        .map_err(db_err)?
+    {
+        return Err(ApiError::forbidden("access to this VM denied").into());
+    }
+    Ok(())
+}
+
 async fn run_action(
     State(state): State<FleetState>,
     headers: HeaderMap,
@@ -190,6 +210,7 @@ async fn run_action(
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
     let vm = load_vm(&state, vm_id).await?;
+    require_vm_access(&state, &principal, vm_id).await?;
 
     let task = tasks::create_action_task(
         &state,
@@ -227,6 +248,7 @@ async fn run_command(
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
     let vm = load_vm(&state, vm_id).await?;
+    require_vm_access(&state, &principal, vm_id).await?;
 
     let task = tasks::create_command_task(
         &state,
@@ -261,6 +283,7 @@ async fn trigger_update(
     let principal = super::require_operator(&state, &headers, ip.as_deref()).await?;
     let Path(vm_id) = path.map_err(map_path_rejection)?;
     let vm = load_vm(&state, vm_id).await?;
+    require_vm_access(&state, &principal, vm_id).await?;
 
     let row = crate::models::setting::get_settings_row(&state.pool)
         .await
@@ -434,6 +457,132 @@ fn exec_message(err: &ExecError) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// End-to-end exercise of the M-1 VM-access guard against a live
+    /// PostgreSQL (skipped unless `HUGINN_TEST_DATABASE_URL` is set — `cargo
+    /// test` stays green without a database, like `models::live_tests`).
+    #[tokio::test]
+    async fn execution_endpoints_deny_operators_without_a_vm_grant() {
+        let Ok(url) = std::env::var("HUGINN_TEST_DATABASE_URL") else {
+            eprintln!("skipped: HUGINN_TEST_DATABASE_URL not set");
+            return;
+        };
+        let guard = crate::db::LIVE_DB_GUARD.lock().await;
+        let pool = crate::db::connect(&url, 4).await.expect("connect");
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        crate::db::run_migrations(&pool).await.expect("migrations");
+
+        let state = FleetState::new(pool.clone(), crate::config::Config::default());
+        let app = crate::routes::fleet::router(state.clone());
+        let body_json = super::super::testing::body_json;
+
+        // An approved VM + two operators: one holds an access grant, one does
+        // not (M-1: the latter must not be able to drive the VM).
+        let vm = crate::models::vm::create(
+            &pool,
+            crate::models::vm::VmNew::new("vm-1", crate::models::WorkerArch::Amd64),
+        )
+        .await
+        .unwrap();
+        crate::models::vm::approve(&pool, vm.id, None)
+            .await
+        .unwrap()
+        .unwrap();
+        let make_operator = |username: &str| {
+            crate::models::user::UserNew {
+                username: username.into(),
+                password_hash: Some("h".into()),
+                role: crate::models::UserRole::Operator,
+                is_active: true,
+                ..Default::default()
+            }
+        };
+        let ungranted =
+            crate::models::user::create(&pool, make_operator("no-grant")).await.unwrap();
+        let granted =
+            crate::models::user::create(&pool, make_operator("has-grant")).await.unwrap();
+        crate::models::user::replace_vm_access(&pool, granted.id, &[vm.id])
+            .await
+            .unwrap();
+
+        let token = |user: &crate::models::user::User| {
+            state
+                .security
+                .jwt()
+                .create_access_token(&user.id.to_string(), user.role.as_str(), 60)
+                .unwrap()
+        };
+        let post = |uri: String, body: serde_json::Value, token: &str| {
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(axum::body::Body::from(if body.is_null() {
+                    String::new()
+                } else {
+                    body.to_string()
+                }))
+                .unwrap()
+        };
+
+        // All three execution endpoints answer 403 "access to this VM denied"
+        // for the operator without a grant — before any task is created.
+        for (uri, body) in [
+            (
+                format!("/api/vms/{}/actions", vm.id),
+                json!({"action": "status"}),
+            ),
+            (
+                format!("/api/vms/{}/commands", vm.id),
+                json!({"command": "ls"}),
+            ),
+            (format!("/api/vms/{}/update", vm.id), json!(null)),
+        ] {
+            let response = tower::ServiceExt::oneshot(
+                app.clone(),
+                post(uri.clone(), body, &token(&ungranted)),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
+            assert_eq!(
+                body_json(response).await,
+                json!({"detail": "access to this VM denied"}),
+                "{uri}"
+            );
+        }
+        // No task leaked to the queue for the guarded VM.
+        let (queued,): (i64,) = sqlx::query_as("SELECT count(*) FROM tasks WHERE vm_id = $1")
+            .bind(vm.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(queued, 0, "the 403s must not queue anything");
+
+        // Control: the granted operator passes the guard (the request proceeds
+        // to the normal action handling and is queued).
+        let response = tower::ServiceExt::oneshot(
+            app.clone(),
+            post(
+                format!("/api/vms/{}/actions", vm.id),
+                json!({"action": "status"}),
+                &token(&granted),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        drop(guard);
+    }
 
     #[test]
     fn action_request_bounds_match_pydantic() {
