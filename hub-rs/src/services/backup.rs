@@ -554,7 +554,13 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied, 2, "baseline recorded + 0002 applied");
+        // The baseline is recorded once and every post-baseline migration
+        // (0002+) applies on top of it.
+        assert_eq!(
+            applied as usize,
+            crate::db::MIGRATIONS.migrations.len(),
+            "baseline recorded + post-baseline migrations applied"
+        );
         let (columns,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM information_schema.columns \
              WHERE table_schema = 'public' AND table_name = 'settings' \
