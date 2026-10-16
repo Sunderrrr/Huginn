@@ -199,6 +199,89 @@ pub async fn create_browser_task(pool: &PgPool, new: BrowserTaskNew) -> Result<T
     .await
 }
 
+/// Inputs for `create_browser_install_task`: the hub-pinned engine release
+/// the worker downloads (from the fleet settings row).
+#[derive(Debug, Clone)]
+pub struct BrowserInstallTaskNew {
+    pub vm_id: Uuid,
+    /// The pinned release tag (`engine_version_allowed`), e.g. `v0.2.4`.
+    pub version: String,
+    /// Per-arch pinned SHA-256 map: `{"amd64": "…", "arm64": "…"}`.
+    pub sha256: serde_json::Value,
+    pub created_by: String,
+}
+
+/// `browser_install` payloads are tiny; the SHA map may not grow past this.
+pub const MAX_BROWSER_SHA_ENTRIES: usize = 8;
+
+/// A pinned engine version becomes a directory name on the worker, so it
+/// must be path-safe: `v` + 1..=32 chars of `[A-Za-z0-9._-]`, no `..`, no
+/// leading dot. The worker applies the byte-for-byte same gate before
+/// building its download URL.
+pub fn engine_version_allowed(version: &str) -> bool {
+    if !version.starts_with('v') || version.len() > 33 || version.len() < 3 {
+        return false;
+    }
+    let rest = &version[1..];
+    if rest.starts_with('.') || rest.contains("..") {
+        return false;
+    }
+    rest.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+/// Queue a `browser_install` task. Payload: `{"version": "v…", "sha256":
+/// {"amd64": "…", "arm64": "…"}}` — the pinned release coordinates from the
+/// fleet settings, re-validated here (defense in depth: the settings write
+/// path validated the same rules).
+pub async fn create_browser_install_task(
+    pool: &PgPool,
+    new: BrowserInstallTaskNew,
+) -> Result<Task, DbError> {
+    if !engine_version_allowed(&new.version) {
+        return Err(DbError::Invalid(
+            "invalid browser engine version (expected a v-prefixed tag, e.g. v0.2.4)".into(),
+        ));
+    }
+    let Some(entries) = new.sha256.as_object() else {
+        return Err(DbError::Invalid(
+            "browser engine sha256 must be a map of arch → hex digest".into(),
+        ));
+    };
+    if entries.is_empty() || entries.len() > MAX_BROWSER_SHA_ENTRIES {
+        return Err(DbError::Invalid(format!(
+            "browser engine sha256 must have 1..={MAX_BROWSER_SHA_ENTRIES} entries"
+        )));
+    }
+    for (arch, digest) in entries {
+        let valid = arch.chars().all(|c| c.is_ascii_alphanumeric())
+            && digest
+                .as_str()
+                .map(|d| d.len() == 64 && d.chars().all(|c| c.is_ascii_hexdigit()))
+                == Some(true);
+        if !valid {
+            return Err(DbError::Invalid(format!(
+                "browser engine sha256 entry {arch:?} must map to 64 hex characters"
+            )));
+        }
+    }
+    insert_idempotent(
+        pool,
+        TaskNew {
+            vm_id: new.vm_id,
+            task_type: TaskType::BrowserInstall,
+            action_name: None,
+            payload: serde_json::json!({
+                "version": new.version,
+                "sha256": new.sha256,
+            }),
+            created_by: new.created_by,
+            idempotency_key: None,
+        },
+    )
+    .await
+}
+
 /// Inputs for `submit_result`.
 #[derive(Debug, Clone)]
 pub struct SubmitResult {
@@ -732,5 +815,66 @@ mod tests {
         // The hub only caps the payload size (the per-script size gate is
         // the worker's); the count/shape validation must still pass.
         assert!(validate_browser_steps(&payload["steps"]).is_ok());
+    }
+
+    // ---- browser_install payloads ----------------------------------------
+
+    #[test]
+    fn engine_versions_must_be_path_safe_tags() {
+        for ok in ["v0.2.4", "v1.0.0", "v0.3.0-rc1", "v10.20.30"] {
+            assert!(engine_version_allowed(ok), "{ok} must be accepted");
+        }
+        for bad in [
+            "",                                // empty
+            "0.2.4",                           // no v prefix
+            "v",                               // v alone
+            "v0.2.4/evil",                     // path separator
+            "v..",                             // dot-dot
+            "v../..",                          // traversal
+            "v.0.2",                           // leading dot
+            "v0.2.4 extra",                    // space
+            "v0.2.4\n",                        // control character
+            &format!("v{}.1", "0".repeat(40)), // over-long
+        ] {
+            assert!(!engine_version_allowed(bad), "{bad:?} must be refused");
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_install_rejects_bad_pins() {
+        let url = std::env::var("HUGINN_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://invalid".into());
+        let Ok(pool) = crate::db::connect(&url, 1).await else {
+            eprintln!("skipped: HUGINN_TEST_DATABASE_URL not set");
+            return;
+        };
+        let new = |version: &str, sha256: serde_json::Value| BrowserInstallTaskNew {
+            vm_id: Uuid::new_v4(),
+            version: version.into(),
+            sha256,
+            created_by: "test".into(),
+        };
+        // A traversal-ish version is refused before any DB access.
+        let err = create_browser_install_task(
+            &pool,
+            new(
+                "v0.2.4/../../evil",
+                serde_json::json!({"amd64": "a".repeat(64)}),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("engine version"), "{err}");
+        // A valid version with a non-map SHA payload is refused.
+        let err = create_browser_install_task(&pool, new("v0.2.4", serde_json::json!("deadbeef")))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("sha256 must be a map"), "{err}");
+        // A short digest is refused.
+        let err =
+            create_browser_install_task(&pool, new("v0.2.4", serde_json::json!({"amd64": "abc"})))
+                .await
+                .unwrap_err();
+        assert!(err.to_string().contains("64 hex"), "{err}");
     }
 }

@@ -217,6 +217,17 @@ pub async fn create_browser_task(
     idempotency_key: Option<&str>,
 ) -> Result<(Task, usize), ExecError> {
     require_active(vm)?;
+    // The per-VM capability gate (migrations/0005): browser automation is
+    // off until an admin enables it on the VM — the browser equivalent of
+    // the exec-mode gate (an admin flips it, audited; operators then use
+    // it; readonly never passes the route's RBAC).
+    if !vm.browser_enabled {
+        return Err(ExecError::Forbidden(
+            "browser automation is disabled on this VM; an admin must enable it \
+             (PUT /api/vms/{vm_id}/browser-enabled)"
+                .into(),
+        ));
+    }
     let step_count = task::validate_browser_steps(steps).map_err(ExecError::Input)?;
     if serde_json::json!({ "steps": steps, "timeout": timeout_seconds })
         .to_string()
@@ -243,6 +254,38 @@ pub async fn create_browser_task(
     .await?;
     wake_queue(state, vm.id);
     Ok((task, step_count))
+}
+
+/// `create_browser_install_task` — queue the engine install. The pinned
+/// release coordinates (version + per-arch SHA-256) come from the fleet
+/// settings row; the worker re-validates them and verifies the download
+/// against the SHA-256 before installing. Returns the task plus the pinned
+/// version (for the audit entry). Linux workers install the engine; any
+/// other OS answers "browser not supported on this OS".
+pub async fn create_browser_install_task(
+    state: &FleetState,
+    vm: &VM,
+    created_by: &str,
+) -> Result<(Task, String), ExecError> {
+    require_active(vm)?;
+    let settings = crate::models::setting::get_settings_row(&state.pool)
+        .await?
+        .ok_or(ExecError::Settings)?;
+    let task = task::create_browser_install_task(
+        &state.pool,
+        task::BrowserInstallTaskNew {
+            vm_id: vm.id,
+            version: settings.browser_engine_version.clone(),
+            sha256: serde_json::json!({
+                "amd64": settings.browser_engine_sha256_amd64,
+                "arm64": settings.browser_engine_sha256_arm64,
+            }),
+            created_by: created_by.to_owned(),
+        },
+    )
+    .await?;
+    wake_queue(state, vm.id);
+    Ok((task, settings.browser_engine_version))
 }
 
 /// `create_update_task` — a self-update carrying SSRF-validated release URLs.
@@ -330,6 +373,7 @@ mod tests {
             approved_at: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            browser_enabled: false,
         }
     }
 

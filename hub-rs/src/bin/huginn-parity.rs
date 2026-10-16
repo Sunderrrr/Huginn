@@ -40,9 +40,16 @@ fn normalize(v: &Value) -> Value {
         Value::Array(items) => Value::Array(items.iter().map(normalize).collect()),
         Value::Object(map) => Value::Object(
             map.iter()
-                // `backup_s3_*` fields were added after the reference goldens
-                // were captured; the parity suite predates them.
-                .filter(|(k, _)| !k.starts_with("backup_s3_"))
+                // `backup_s3_*`, `enrollment_base_url`, `browser_engine_*`
+                // and `browser_enabled` were added after the reference
+                // goldens were captured; the parity suite predates them.
+                .filter(|(k, _)| {
+                    let key = k.as_str();
+                    !key.starts_with("backup_s3_")
+                        && !key.starts_with("browser_engine_")
+                        && key != "browser_enabled"
+                        && key != "enrollment_base_url"
+                })
                 .map(|(k, val)| (k.clone(), normalize(val)))
                 .collect(),
         ),

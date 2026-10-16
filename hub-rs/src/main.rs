@@ -473,6 +473,7 @@ mod tests {
             approved_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            browser_enabled: false,
         }
     }
 

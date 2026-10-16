@@ -13,7 +13,8 @@ use super::enums::{ExecMode, VMState, WorkerArch};
 
 const COLUMNS: &str = "id, name, hostname, ip_address, arch, os_info, state, exec_mode, \
                       worker_version, worker_secret_hash, enrollment_token_id, approved_by, \
-                      last_heartbeat_at, enrolled_at, approved_at, created_at, updated_at";
+                      last_heartbeat_at, enrolled_at, approved_at, created_at, updated_at, \
+                      browser_enabled";
 
 /// A fleet VM and its worker.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -37,6 +38,11 @@ pub struct VM {
     pub approved_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Browser automation gate (migrations/0005): off by default; an admin
+    /// must enable it per VM (mirrors the exec-mode gate). `serde(default)`
+    /// keeps rows/fixtures captured before 0005 decoding.
+    #[serde(default)]
+    pub browser_enabled: bool,
 }
 
 impl VM {
@@ -306,6 +312,43 @@ pub async fn set_exec_mode(pool: &PgPool, id: Uuid, mode: ExecMode) -> Result<Op
     Ok(Some(vm))
 }
 
+/// Enable/disable browser automation on a VM (migrations/0005). Mirrors
+/// [`set_exec_mode`]'s guard chain: the VM must be approved, the toggle is
+/// admin-driven and audited by the route.
+pub async fn set_browser_enabled(
+    pool: &PgPool,
+    id: Uuid,
+    enabled: bool,
+) -> Result<Option<VM>, DbError> {
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query_as::<_, VM>(&format!(
+        "SELECT {COLUMNS} FROM vms WHERE id = $1 FOR UPDATE"
+    ))
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(vm) = row else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    if !matches!(vm.state, VMState::Active | VMState::Offline) {
+        tx.rollback().await?;
+        return Err(DbError::Invalid(
+            "VM must be approved before changing the browser capability".into(),
+        ));
+    }
+    let vm = sqlx::query_as::<_, VM>(&format!(
+        "UPDATE vms SET browser_enabled = $2, updated_at = $3 WHERE id = $1 RETURNING {COLUMNS}"
+    ))
+    .bind(id)
+    .bind(enabled)
+    .bind(Utc::now())
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(vm))
+}
+
 /// Free-form state transition (used by sweeps and tests).
 pub async fn set_state(pool: &PgPool, id: Uuid, state: VMState) -> Result<Option<VM>, DbError> {
     let row = sqlx::query_as::<_, VM>(&format!(
@@ -432,11 +475,13 @@ mod tests {
             approved_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            browser_enabled: false,
         };
         let v = serde_json::to_value(&row).unwrap();
         assert_eq!(v["arch"], "arm64");
         assert_eq!(v["os_info"]["os"], "linux");
         assert_eq!(v["exec_mode"], "whitelist");
+        assert_eq!(v["browser_enabled"], false);
 
         row.state = VMState::Active;
         assert!(row.is_active());

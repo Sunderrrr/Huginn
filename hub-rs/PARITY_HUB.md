@@ -119,3 +119,17 @@ enabling TOTP). Both are single `UPDATE`s in `authapi/mod.rs`.
   `db.rs`/`models::live_tests`): full login → setup challenge → TOTP enrollment
   → verify → replay rejection → backup-code single use, and the users CRUD /
   RBAC / password / deactivation flows, verified against PostgreSQL 18.
+
+## Post-parity response keys
+
+The capture harness (`src/bin/huginn-parity.rs`) normalizes both sides and
+drops keys added after the reference goldens were captured, so post-parity
+hub extensions do not break the byte-diff of the pre-existing surface:
+
+- `backup_s3_*` (migrations/0002),
+- `enrollment_base_url` (migrations/0003),
+- `browser_engine_*` and `browser_enabled` (migrations/0005, browser
+  automation).
+
+Every one of these is additive (new optional settings/VM fields); no
+pre-existing key, value, or status code changed.

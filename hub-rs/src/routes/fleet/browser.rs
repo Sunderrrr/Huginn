@@ -25,7 +25,7 @@ use super::execution::{maybe_wait, require_vm_access};
 use super::tasks::{self, ExecError, TaskOut};
 use super::{
     client_ip, db_err, enforce_body_size, load_vm, map_json_rejection, map_path_rejection,
-    peer_addr, rate_limit_exec, FleetState, Peer, RouteError,
+    peer_addr, rate_limit_exec, require_admin, FleetState, Peer, RouteError,
 };
 
 /// Upper bound for the whole-task timeout — the worker enforces the same cap
@@ -97,7 +97,48 @@ impl BrowserRequest {
 pub fn router(state: FleetState) -> Router {
     Router::new()
         .route("/api/vms/{vm_id}/browser", post(run_browser))
+        .route(
+            "/api/vms/{vm_id}/browser-install",
+            post(run_browser_install),
+        )
         .with_state(state)
+}
+
+/// `POST /api/vms/{vm_id}/browser-install` — queue the engine install.
+/// Admin-only (an admin decides which VMs carry a ~70 MiB third-party
+/// browser engine), audited with the pinned version. The body is empty:
+/// the pinned release coordinates live in the fleet settings.
+async fn run_browser_install(
+    State(state): State<FleetState>,
+    headers: HeaderMap,
+    peer: Peer,
+    path: Result<Path<Uuid>, axum::extract::rejection::PathRejection>,
+) -> Result<impl IntoResponse, RouteError> {
+    let ip = client_ip(&headers, &state.config, peer_addr(peer));
+    let principal = require_admin(&state, &headers, ip.as_deref()).await?;
+    let Path(vm_id) = path.map_err(map_path_rejection)?;
+    let vm = load_vm(&state, vm_id).await?;
+
+    let (task, version) = tasks::create_browser_install_task(&state, &vm, &principal.actor_id)
+        .await
+        .map_err(browser_err)?;
+
+    // Audited with the pinned version only — no secrets exist in this
+    // payload, but the entry stays as lean as every other task creation.
+    let mut new = entry(
+        principal.actor_type,
+        &principal.actor_id,
+        "browser_install_task",
+    );
+    new.vm_id = Some(vm.id);
+    new.detail = serde_json::json!({
+        "version": version,
+        "task_id": task.id.to_string(),
+    });
+    new.source_ip = ip;
+    record(&state.pool, new).await.map_err(db_err)?;
+
+    Ok((StatusCode::ACCEPTED, Json(TaskOut::from(task))))
 }
 
 async fn run_browser(
@@ -287,6 +328,21 @@ mod tests {
             .expect("create schema");
         crate::db::run_migrations(&pool).await.expect("migrations");
 
+        // The settings singleton (the install endpoint pins the engine from
+        // it): seed it with the migration-0005 defaults — v0.2.4 and the
+        // per-arch release digests.
+        let values = crate::models::setting::SettingValues {
+            browser_engine_version: "v0.2.4".into(),
+            browser_engine_sha256_amd64:
+                "757e7b597ba5cdd53af9fc701e0a9b80f0a8d788f545d4f82ec9ad32db77f000".into(),
+            browser_engine_sha256_arm64:
+                "d9ba3719c2442a227567d7664b5505b38ab68236f3f5388884eee2e27f55db28".into(),
+            ..crate::models::setting::SettingValues::default()
+        };
+        crate::models::setting::upsert(&pool, values)
+            .await
+            .expect("seed settings");
+
         let state = FleetState::new(pool.clone(), crate::config::Config::default());
         let app = crate::routes::fleet::router(state.clone());
         let body_json = super::super::testing::body_json;
@@ -361,7 +417,77 @@ mod tests {
             json!({"detail": "access to this VM denied"})
         );
 
-        // 2. Bad steps are a 400 with the validator's reason.
+        // 2. The capability gate: browser automation is off by default — a
+        //    granted operator is refused until an admin enables it (the gate
+        //    runs before input validation, mirroring the exec-mode gate's
+        //    ordering in create_command_task).
+        let response = tower::ServiceExt::oneshot(
+            app.clone(),
+            post(uri.clone(), json!({ "steps": steps }), &token(&granted)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(
+            body_json(response).await["detail"]
+                .as_str()
+                .unwrap()
+                .contains("browser automation is disabled"),
+            "the disabled-capability refusal must name the gate"
+        );
+
+        // 3. An admin flips the toggle (audited `toggle_browser`).
+        let admin = crate::models::user::create(
+            &pool,
+            make_user("admin-browser", crate::models::UserRole::Admin),
+        )
+        .await
+        .unwrap();
+        let put = |uri: String, body: serde_json::Value, token: &str| {
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap()
+        };
+        // The toggle is admin-only: the operator gets 403.
+        let response = tower::ServiceExt::oneshot(
+            app.clone(),
+            put(
+                format!("/api/vms/{}/browser-enabled", vm.id),
+                json!({ "enabled": true }),
+                &token(&granted),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = tower::ServiceExt::oneshot(
+            app.clone(),
+            put(
+                format!("/api/vms/{}/browser-enabled", vm.id),
+                json!({ "enabled": true }),
+                &token(&admin),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["browser_enabled"], true);
+        let (event_type, detail): (String, serde_json::Value) = sqlx::query_as(
+            "SELECT event_type, detail FROM audit_log \
+             WHERE event_type = 'toggle_browser' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(event_type, "toggle_browser");
+        assert_eq!(detail["enabled"], true);
+
+        // 4. With the capability on, bad steps are a 400 with the
+        //    validator's reason.
         let response = tower::ServiceExt::oneshot(
             app.clone(),
             post(
@@ -378,7 +504,7 @@ mod tests {
             .unwrap()
             .contains("http(s)://"));
 
-        // 3. A granted operator queues a `browser` task with the documented
+        // 5. A granted operator queues a `browser` task with the documented
         //    payload shape and gets a 202 + TaskOut.
         let response = tower::ServiceExt::oneshot(
             app.clone(),
@@ -405,7 +531,7 @@ mod tests {
         assert_eq!(payload["timeout"], 60);
         assert_eq!(payload["steps"].as_array().unwrap().len(), 2);
 
-        // 4. The audit entry commits the step count — never the typed text.
+        // 6. The audit entry commits the step count — never the typed text.
         let (event_type, detail): (String, serde_json::Value) = sqlx::query_as(
             "SELECT event_type, detail FROM audit_log \
              WHERE event_type = 'browser_task' ORDER BY id DESC LIMIT 1",
@@ -420,6 +546,54 @@ mod tests {
             !detail.to_string().contains("hunter2"),
             "typed text must never reach the audit chain"
         );
+
+        // 7. The engine install endpoint is admin-only: an operator gets 403.
+        let install_uri = format!("/api/vms/{}/browser-install", vm.id);
+        let response = tower::ServiceExt::oneshot(
+            app.clone(),
+            post(install_uri.clone(), json!({}), &token(&granted)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // 8. An admin queues a `browser_install` task carrying the pinned
+        //    release coordinates from the settings row (migration 0005
+        //    defaults: v0.2.4 + the per-arch SHA-256 map).
+        let response = tower::ServiceExt::oneshot(
+            app.clone(),
+            post(install_uri.clone(), json!({}), &token(&admin)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let out = body_json(response).await;
+        assert_eq!(out["type"], "browser_install");
+        let install_id: Uuid = out["id"].as_str().unwrap().parse().unwrap();
+        let (task_type, payload): (String, serde_json::Value) =
+            sqlx::query_as("SELECT type::text, payload FROM tasks WHERE id = $1")
+                .bind(install_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(task_type, "browser_install");
+        assert_eq!(payload["version"], "v0.2.4");
+        for arch in ["amd64", "arm64"] {
+            let digest = payload["sha256"][arch].as_str().unwrap();
+            assert_eq!(digest.len(), 64, "{arch} sha256 must be pinned");
+            assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+        // The install creation is audited with the pinned version.
+        let (event_type, detail): (String, serde_json::Value) = sqlx::query_as(
+            "SELECT event_type, detail FROM audit_log \
+             WHERE event_type = 'browser_install_task' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(event_type, "browser_install_task");
+        assert_eq!(detail["version"], "v0.2.4");
+        assert_eq!(detail["task_id"], install_id.to_string());
 
         drop(guard);
     }

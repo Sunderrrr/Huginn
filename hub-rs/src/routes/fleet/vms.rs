@@ -86,6 +86,9 @@ pub struct VMOut {
     #[serde(with = "ts")]
     pub created_at: DateTime<Utc>,
     pub tags: Vec<TagOut>,
+    /// Browser automation gate (migrations/0005) — off until an admin
+    /// enables it on the VM.
+    pub browser_enabled: bool,
 }
 
 impl VMOut {
@@ -113,6 +116,7 @@ impl VMOut {
             approved_at: vm.approved_at,
             created_at: vm.created_at,
             tags: Vec::new(),
+            browser_enabled: vm.browser_enabled,
         }
     }
 }
@@ -127,6 +131,13 @@ pub struct VMTagsUpdate {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExecModeUpdate {
     pub exec_mode: ExecMode,
+}
+
+/// `BrowserEnabledUpdate` — the per-VM browser automation toggle
+/// (migrations/0005).
+#[derive(Debug, Clone, Deserialize)]
+pub struct BrowserEnabledUpdate {
+    pub enabled: bool,
 }
 
 /// `RevokeRequest` — the body is optional in the Python handler.
@@ -157,6 +168,7 @@ pub fn router(state: FleetState) -> Router {
         .route("/api/vms/{vm_id}/tags", put(set_vm_tags))
         .route("/api/vms/{vm_id}/approve", post(approve_vm))
         .route("/api/vms/{vm_id}/exec-mode", put(set_exec_mode))
+        .route("/api/vms/{vm_id}/browser-enabled", put(set_browser_enabled))
         .route("/api/vms/{vm_id}/revoke", post(revoke_vm))
         .with_state(state)
 }
@@ -336,6 +348,39 @@ async fn set_exec_mode(
     Ok(Json(VMOut::from_row(&vm)))
 }
 
+/// `PUT /api/vms/{vm_id}/browser-enabled` — the browser automation gate
+/// (migrations/0005). Off by default; only an admin may flip it, and the
+/// flip is audited (mirrors `set_exec_mode`). Operators can then run
+/// browser tasks; readonly never can (the browser route rides the exec
+/// RBAC chain).
+async fn set_browser_enabled(
+    State(state): State<FleetState>,
+    headers: HeaderMap,
+    peer: Peer,
+    path: Result<Path<Uuid>, axum::extract::rejection::PathRejection>,
+    body: Result<Json<BrowserEnabledUpdate>, axum::extract::rejection::JsonRejection>,
+) -> Result<impl IntoResponse, RouteError> {
+    let ip = client_ip(&headers, &state.config, peer_addr(peer));
+    let principal = require_admin(&state, &headers, ip.as_deref()).await?;
+    let Path(vm_id) = path.map_err(map_path_rejection)?;
+    let body = body.map_err(super::map_json_rejection)?.0;
+    let vm = load_vm(&state, vm_id).await?;
+
+    let vm = vm::set_browser_enabled(&state.pool, vm.id, body.enabled)
+        .await
+        .map_err(vm_state_err)?
+        .ok_or_else(|| ApiError::not_found("VM not found"))?;
+
+    // Enabling a remote-controlled browser is a sensitive, explicitly
+    // audited action.
+    let mut new = entry(principal.actor_type, &principal.actor_id, "toggle_browser");
+    new.vm_id = Some(vm.id);
+    new.detail = serde_json::json!({ "enabled": body.enabled });
+    new.source_ip = ip;
+    record(&state.pool, new).await.map_err(db_err)?;
+    Ok(Json(VMOut::from_row(&vm)))
+}
+
 async fn revoke_vm(
     State(state): State<FleetState>,
     headers: HeaderMap,
@@ -486,6 +531,7 @@ mod tests {
             approved_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            browser_enabled: false,
         }
     }
 
@@ -512,6 +558,7 @@ mod tests {
             "state": "active",
             "exec_mode": "whitelist",
             "worker_version": "v1.4.0",
+            "browser_enabled": false,
             "last_heartbeat_at": null,
             "enrolled_at": null,
             "approved_at": null,

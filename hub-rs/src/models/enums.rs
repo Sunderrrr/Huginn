@@ -101,10 +101,13 @@ impl ExecMode {
     }
 }
 
-/// `task_type`: action, command, update, uninstall, browser.
+/// `task_type`: action, command, update, uninstall, browser, browser_install.
+/// `snake_case` keeps the single-word labels identical to the Python hub's
+/// enum values and maps `BrowserInstall` to `browser_install`
+/// (`lowercase` would encode the invalid label `browserinstall`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "task_type", rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "task_type", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum TaskType {
     Action,
     Command,
@@ -113,6 +116,9 @@ pub enum TaskType {
     /// Ordered browser steps executed by a Linux worker via Obscura/CDP
     /// (migration 0004; hub-rs extension with no Python-hub counterpart).
     Browser,
+    /// Download + install the hub-pinned Obscura engine release on a Linux
+    /// worker (migration 0005; admin-triggered).
+    BrowserInstall,
 }
 
 impl TaskType {
@@ -123,6 +129,7 @@ impl TaskType {
             TaskType::Update => "update",
             TaskType::Uninstall => "uninstall",
             TaskType::Browser => "browser",
+            TaskType::BrowserInstall => "browser_install",
         }
     }
 }
