@@ -134,6 +134,23 @@ impl HubClient {
         .await
     }
 
+    /// Queue the Obscura engine install on a VM (admin-only hub route; the
+    /// hub pins the release coordinates — version + per-arch SHA-256 — from
+    /// the fleet settings). Returns the created task immediately (202); the
+    /// download runs on the worker, so no extended HTTP budget is needed.
+    pub async fn install_browser_engine(
+        &self,
+        ctx: &CallCtx,
+        vm_id: &str,
+    ) -> Result<Value, HubError> {
+        self.post(
+            ctx,
+            &format!("/api/vms/{vm_id}/browser-install"),
+            &Value::Null,
+        )
+        .await
+    }
+
     pub async fn trigger_update(&self, ctx: &CallCtx, vm_id: &str) -> Result<Value, HubError> {
         self.post(ctx, &format!("/api/vms/{vm_id}/update"), &Value::Null)
             .await

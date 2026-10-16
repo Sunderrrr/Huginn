@@ -30,7 +30,7 @@ mcp-rs/
     ├── auth.rs          # per-user token validation, cache, client-IP extraction
     ├── hub_client.rs    # REST client to the hub (service token + on-behalf-of)
     ├── protocol.rs      # MCP handshake: initialize, tools/list
-    └── tools.rs         # tool definitions + call_tool dispatch (13 tools)
+    └── tools.rs         # tool definitions + call_tool dispatch (14 tools)
 ```
 
 ## Tools
