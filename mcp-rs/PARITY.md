@@ -39,3 +39,13 @@ Le hub voit exactement les mêmes appels REST (mêmes headers, mêmes corps).
 |---|---|---|
 | RAM | 41 MB (runtime Python) | ~3–5 MB |
 | Image/deploiement | python:3.12 + pip install | un seul binaire |
+
+
+## Browser automation tools (post-migration, hub `browser` task type)
+
+| Tool | What |
+|---|---|
+| `browser_start(vm_id, steps, timeout)` | Executes a step sequence on a headless browser (navigate, click, type, eval, wait_for, screenshot, get_text, get_html). |
+| `browser_navigate(vm_id, url, timeout)` | Shortcut: navigate + get_text. |
+| `browser_screenshot(vm_id, url, quality, timeout)` | Shortcut: navigate + screenshot (JPEG). |
+| `browser_eval(vm_id, url, js, timeout)` | Shortcut: navigate + eval. |
