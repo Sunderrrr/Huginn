@@ -306,6 +306,22 @@ impl Updater {
     }
 }
 
+/// One-off allowlisted download (used by the browser E2E test to fetch the
+/// Obscura release tarball). Every redirect hop is validated against
+/// `allowed`, exactly like the updater's own downloads.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) async fn download_bytes(
+    url: &str,
+    allowed: &[String],
+    cap: usize,
+) -> Result<Vec<u8>, Error> {
+    let updater = Updater::new(allowed.to_vec(), None, None);
+    let mut resp = updater.open(url).await?;
+    read_capped(&mut resp, cap)
+        .await
+        .map_err(|e| Error::msg(e.to_string()))
+}
+
 /// ValidateURL checks scheme and host against the allowlist.
 pub fn validate_url(raw: &str, allowed: &[String]) -> Result<(), Error> {
     let parsed = reqwest::Url::parse(raw).map_err(|e| Error::msg(e.to_string()))?;

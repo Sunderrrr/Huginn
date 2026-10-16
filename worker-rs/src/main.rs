@@ -12,6 +12,8 @@
 //! on Linux and Windows.
 
 mod agent;
+#[cfg(target_os = "linux")]
+mod browser;
 mod config;
 mod exec;
 mod hubclient;
@@ -252,7 +254,12 @@ async fn run_agent(state_dir: &str, shutdown_rx: watch::Receiver<()>) -> i32 {
         }
     };
 
-    let a = Arc::new(agent::Agent::new(Arc::new(client), state, shutdown_rx));
+    let a = Arc::new(agent::Agent::new(
+        Arc::new(client),
+        state,
+        state_dir,
+        shutdown_rx,
+    ));
     // A clean return means either a clean shutdown or an applied update; exit
     // 0 so the supervisor relaunches the (possibly new) binary.
     match a.run().await {
