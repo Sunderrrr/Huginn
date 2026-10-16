@@ -306,10 +306,11 @@ impl Updater {
     }
 }
 
-/// One-off allowlisted download (used by the browser E2E test to fetch the
-/// Obscura release tarball). Every redirect hop is validated against
+/// Allowlisted download used by the browser module: the E2E test fetches
+/// the Obscura release tarball and the `browser_install` task handler
+/// downloads the pinned engine. Every redirect hop is validated against
 /// `allowed`, exactly like the updater's own downloads.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub(crate) async fn download_bytes(
     url: &str,
     allowed: &[String],
