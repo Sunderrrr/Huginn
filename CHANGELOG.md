@@ -7,6 +7,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Full Obscura step vocabulary** (v1.7.0): `press_key` (Enter/Tab/arrows or
+  one ASCII char — forms submit for real), `hover` (trusted mouse move),
+  `scroll` (into view / top / bottom), `wait_for_text`, `title`,
+  `set_viewport` (200-5000 px), `full_page` screenshots
+  (`captureBeyondViewport`), `pdf` (Obscura's `Page.printToPDF` — base64
+  `data:application/pdf` in stdout), `get_cookies`, and `set_cookies` (fills
+  Obscura's request cookie jar; the page's `document.cookie` is a separate
+  DOM store). MCP gains the `browser_pdf` shortcut (15 tools) and the
+  dashboard a PDF preset + PDF download links in task results. Every step
+  is verified against the real Obscura v0.2.4 binary by the E2E test, which
+  now drives all 17 actions plus the failure paths (missing selector,
+  wait timeouts, global timeout, unknown release). Step output is one line
+  per step (multi-line details escaped) so captures stay parseable, and
+  captures now ride the 1 MiB stdout budget instead of the per-step text
+  cap (fixes latent truncation of large screenshots/PDFs).
 - **Browser automation on Linux workers (Obscura)**: drive a headless browser
   on any Linux VM from the dashboard or through MCP tools (`browser_install`,
   `browser_start`, `browser_navigate`, `browser_screenshot`, `browser_eval`).

@@ -10,9 +10,11 @@ headless browser (Apache-2.0) with a CDP (Chrome DevTools Protocol) server.
 | Action | Dashboard | MCP tool |
 |---|---|---|
 | Navigate to a URL and read the text | ✅ | `browser_navigate` |
-| Click an element, type text, run JS | ✅ | `browser_start` (step sequences) |
-| Take a screenshot (JPEG, shown inline) | ✅ | `browser_screenshot` |
+| Full step sequences (click, type, keys, hover, scroll, cookies…) | ✅ | `browser_start` (see the step reference) |
+| Take a screenshot (JPEG/PNG, viewport or full page, shown inline) | ✅ | `browser_screenshot` |
+| Export the page as a PDF (download link) | ✅ | `browser_pdf` |
 | Evaluate JavaScript and get the result | ✅ | `browser_eval` |
+| Install the engine on a VM (admin) | ✅ | `browser_install` |
 
 Linux only — Windows VMs respond "not supported".
 
@@ -96,17 +98,22 @@ between polls and leak login state across tasks.
 
 ## Step reference
 
-A browser task is a sequence of steps executed in the same tab:
+A browser task is a sequence of steps executed in the same tab (1-50 steps,
+whole-task `timeout` 1-300 s). Every step is validated by the hub, the MCP
+server, and again by the worker (defense in depth). The result is one
+`step N (action): detail` line per step in the task stdout — captures ride as
+base64 `data:` tags:
 
 ```json
 {
   "steps": [
     { "action": "navigate", "url": "https://example.com" },
     { "action": "type", "selector": "#search", "text": "rust lang" },
-    { "action": "click", "selector": "#submit" },
-    { "action": "wait_for", "selector": "#results", "timeout_ms": 5000 },
+    { "action": "press_key", "key": "enter" },
+    { "action": "wait_for_text", "text": "results", "timeout_ms": 5000 },
     { "action": "get_text" },
-    { "action": "screenshot", "format": "jpeg", "quality": 80 }
+    { "action": "screenshot", "format": "png", "full_page": true },
+    { "action": "pdf" }
   ],
   "timeout": 120
 }
@@ -114,14 +121,29 @@ A browser task is a sequence of steps executed in the same tab:
 
 | Step | Params | What it does |
 |---|---|---|
-| `navigate` | `url` | Loads the URL, waits for the page |
+| `navigate` | `url` | Loads the URL (http(s) only), waits for the load |
 | `click` | `selector` | Clicks the element (CSS selector) |
-| `type` | `selector`, `text` | Focuses the element and types |
+| `type` | `selector`, `text` | Focuses the element and types (text never echoed) |
+| `press_key` | `key` | Presses a control key (`enter`, `tab`, `escape`, arrows, `pageup`…) or one ASCII character |
+| `hover` | `selector` | Moves the mouse over the element (trusted `mouseenter`/`mouseover`) |
+| `scroll` | `selector` or `to` | Scrolls an element into view, or to `top`/`bottom` |
 | `eval` | `js` | Evaluates JavaScript, returns the result |
-| `wait_for` | `selector`, `timeout_ms` | Waits for the selector to appear |
+| `set_viewport` | `width`, `height` | Sets the page viewport (200-5000 px) — screenshots and layout follow |
+| `wait_for` | `selector`, `timeout_ms` | Waits for a selector to appear in the DOM |
+| `wait_for_text` | `text`, `timeout_ms` | Waits until the text appears in the page |
 | `get_text` | — | Returns the page's inner text |
 | `get_html` | — | Returns the page's outer HTML |
-| `screenshot` | `format`, `quality` | Captures a screenshot (JPEG) |
+| `title` | — | Returns the page's title |
+| `screenshot` | `format` (jpeg/png), `quality`, `full_page` | Captures the viewport — or the whole page with `full_page: true` (`data:image/…` tag) |
+| `pdf` | `landscape`, `print_background`, `paper_width`, `paper_height` (inches, A4 default) | Exports the page as a PDF (`data:application/pdf` tag, Obscura's `Page.printToPDF`) |
+| `get_cookies` | — | Lists the page's cookies (values can be session credentials — only ask when you mean it) |
+| `set_cookies` | `cookies: [{name, value, url}]` (1-20) | Fills Obscura's **request cookie jar** (carried by subsequent navigations); the page's `document.cookie` is a separate DOM store |
+
+**Output format**: each step is exactly one line (`step N (action): detail`,
+multi-line details escaped as `\n`) — screenshots ≤ 900 KiB, PDFs ≤ 768 KiB of
+base64, the whole stdout capped at 1 MiB. The dashboard renders screenshots
+inline and PDFs as download links; the MCP returns the task with stdout as
+is.
 
 ## Binary size impact
 
