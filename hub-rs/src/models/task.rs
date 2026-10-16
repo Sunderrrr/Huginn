@@ -108,16 +108,22 @@ pub const MAX_BROWSER_PAYLOAD_BYTES: usize = 64 * 1024;
 /// `navigate` URLs are capped and must be http(s)://.
 pub const MAX_BROWSER_URL_CHARS: usize = 2048;
 
-/// `^https?://` plus at least one non-space character — the scheme gate for
-/// `navigate` steps. file://, javascript:, data: and friends are refused here
-/// and again in the worker before Obscura ever sees them.
+/// `http://` or `https://` followed by at least one printable-ASCII
+/// character, none of them whitespace/control — the scheme gate for
+/// `navigate` steps. file://, javascript:, data: and friends are refused
+/// here and again in the worker before Obscura ever sees them. (Hand-rolled:
+/// linking the regex crate into the hub binary for one anchored match cost
+/// ~570 KiB; the worker applies the byte-for-byte same rule.)
 fn navigate_url_allowed(url: &str) -> bool {
-    static HTTP_URL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = HTTP_URL.get_or_init(|| {
-        // \x20-\x7e printable ASCII only, no whitespace/control characters.
-        regex::Regex::new(r"^https?://[\x21-\x7e]+$").expect("static browser URL regex")
-    });
-    url.chars().count() <= MAX_BROWSER_URL_CHARS && re.is_match(url)
+    let Some(rest) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    !rest.is_empty()
+        && url.chars().count() <= MAX_BROWSER_URL_CHARS
+        && url.chars().all(|c| ('\x21'..='\x7e').contains(&c))
 }
 
 /// Validate a browser `steps` array, returning the step count. Rules:
