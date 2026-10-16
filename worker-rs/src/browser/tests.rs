@@ -4,11 +4,11 @@
 use super::cdp::{classify_cdp_frame, js_string, CdpFrame};
 use super::install::{parse_libc_version, sha256_gate, version_gate};
 use super::process::{parse_max_rss_mb, random_cdp_token};
-use super::steps::{navigate_url_allowed, BrowserStep, ScreenshotFormat};
+use super::steps::{key_spec, navigate_url_allowed, BrowserStep, ScreenshotFormat, ScrollTarget};
 use super::{
-    data_uri, ensure_obscura_installed, install_roots, newest_binary, parse_steps, truncate_chars,
-    ObscuraProcess, ENV_MUTEX, MAX_SELECTOR, MAX_STEP_JS, MAX_TYPE_TEXT, MAX_URL_CHARS,
-    OBSCURA_INSTALL_ROOT,
+    data_uri, ensure_obscura_installed, install_roots, newest_binary, parse_steps, pdf_uri,
+    truncate_chars, ObscuraProcess, ENV_MUTEX, MAX_SELECTOR, MAX_STEP_JS, MAX_TYPE_TEXT,
+    MAX_URL_CHARS, OBSCURA_INSTALL_ROOT,
 };
 
 use serde_json::json;
@@ -117,7 +117,7 @@ fn steps_parse_with_defaults() {
     assert_eq!(steps, vec![BrowserStep::GetText]);
     assert_eq!(timeout, std::time::Duration::from_secs(120));
 
-    // screenshot defaults: jpeg, quality 80.
+    // screenshot defaults: jpeg, quality 80, viewport only.
     let (steps, _) =
         parse_steps(&payload(json!({ "steps": [{ "action": "screenshot" }] }))).unwrap();
     assert_eq!(
@@ -125,11 +125,12 @@ fn steps_parse_with_defaults() {
         vec![BrowserStep::Screenshot {
             format: ScreenshotFormat::Jpeg,
             quality: 80,
+            full_page: false,
         }]
     );
-    // explicit png + quality 95.
+    // explicit png + quality 95 + full page.
     let (steps, _) = parse_steps(&payload(json!({
-        "steps": [{ "action": "screenshot", "format": "png", "quality": 95 }]
+        "steps": [{ "action": "screenshot", "format": "png", "quality": 95, "full_page": true }]
     })))
     .unwrap();
     assert_eq!(
@@ -137,6 +138,30 @@ fn steps_parse_with_defaults() {
         vec![BrowserStep::Screenshot {
             format: ScreenshotFormat::Png,
             quality: 95,
+            full_page: true,
+        }]
+    );
+    // pdf defaults: portrait, background on, A4.
+    let (steps, _) = parse_steps(&payload(json!({ "steps": [{ "action": "pdf" }] }))).unwrap();
+    assert_eq!(
+        steps,
+        vec![BrowserStep::Pdf {
+            options: super::steps::PdfOptions::default()
+        }]
+    );
+    let (steps, _) = parse_steps(&payload(json!({
+        "steps": [{ "action": "pdf", "landscape": true, "paper_width": 11, "paper_height": 8.5 }]
+    })))
+    .unwrap();
+    assert_eq!(
+        steps,
+        vec![BrowserStep::Pdf {
+            options: super::steps::PdfOptions {
+                landscape: true,
+                paper_width: 11.0,
+                paper_height: 8.5,
+                ..super::steps::PdfOptions::default()
+            }
         }]
     );
     // wait_for default timeout 5000ms.
@@ -195,7 +220,7 @@ fn oversized_step_fields_are_refused() {
     assert!(err.contains("http(s)://"), "{err}");
 
     // Unknown action.
-    let err = parse_steps(&payload(json!({ "steps": [{ "action": "hover" }] }))).unwrap_err();
+    let err = parse_steps(&payload(json!({ "steps": [{ "action": "teleport" }] }))).unwrap_err();
     assert!(err.contains("unknown action"), "{err}");
 }
 
@@ -227,6 +252,202 @@ fn empty_or_missing_steps_are_refused() {
     assert_eq!(err, "steps must contain at least one step");
     let err = parse_steps(&payload(json!({ "steps": "x" }))).unwrap_err();
     assert_eq!(err, "steps must be a JSON array");
+}
+
+// ---- the Obscura capability steps -------------------------------------------
+
+#[test]
+fn press_key_specs_normalize_to_chrome_keys() {
+    assert_eq!(
+        key_spec("enter"),
+        Some(("enter".into(), "Enter".into(), 13))
+    );
+    assert_eq!(
+        key_spec("ARROWDOWN"),
+        Some(("arrowdown".into(), "ArrowDown".into(), 40))
+    );
+    assert_eq!(
+        key_spec("pageup"),
+        Some(("pageup".into(), "PageUp".into(), 33))
+    );
+    // A single printable char: itself + its upper-case vk code.
+    assert_eq!(key_spec("a"), Some(("a".into(), "a".into(), 65)));
+    assert_eq!(key_spec(" "), Some((" ".into(), " ".into(), 32)));
+    // Refused: multi-char names, unknown names, empty, control chars.
+    for bad in ["", "ctrl", "enter-shift", "ab", "é", "\n"] {
+        assert!(key_spec(bad).is_none(), "{bad:?} must be refused");
+    }
+}
+
+#[test]
+fn press_key_steps_validate() {
+    let (steps, _) = parse_steps(&payload(json!({
+        "steps": [{ "action": "press_key", "key": "enter" }]
+    })))
+    .unwrap();
+    assert_eq!(
+        steps,
+        vec![BrowserStep::PressKey {
+            key: "enter".into()
+        }]
+    );
+    // Unknown keys are refused at parse time (never reach the engine).
+    let err = parse_steps(&payload(json!({
+        "steps": [{ "action": "press_key", "key": "ctrl+a" }]
+    })))
+    .unwrap_err();
+    assert!(err.contains("named key"), "{err}");
+    let err = parse_steps(&payload(json!({
+        "steps": [{ "action": "press_key" }]
+    })))
+    .unwrap_err();
+    assert!(err.contains("requires key"), "{err}");
+}
+
+#[test]
+fn scroll_steps_require_exactly_one_target() {
+    let (steps, _) = parse_steps(&payload(json!({
+        "steps": [
+            { "action": "scroll", "to": "bottom" },
+            { "action": "scroll", "to": "top" },
+            { "action": "scroll", "selector": "#footer" }
+        ]
+    })))
+    .unwrap();
+    assert_eq!(
+        steps,
+        vec![
+            BrowserStep::Scroll {
+                selector: None,
+                to: Some(ScrollTarget::Bottom)
+            },
+            BrowserStep::Scroll {
+                selector: None,
+                to: Some(ScrollTarget::Top)
+            },
+            BrowserStep::Scroll {
+                selector: Some("#footer".into()),
+                to: None
+            },
+        ]
+    );
+    for bad in [
+        json!({ "action": "scroll" }),               // neither
+        json!({ "action": "scroll", "to": "side" }), // bad target
+        json!({ "action": "scroll", "selector": "#a", "to": "bottom" }), // both
+    ] {
+        let err = parse_steps(&payload(json!({ "steps": [bad] }))).unwrap_err();
+        assert!(err.contains("scroll"), "{err}");
+    }
+}
+
+#[test]
+fn wait_for_text_and_title_steps_validate() {
+    let (steps, _) = parse_steps(&payload(json!({
+        "steps": [
+            { "action": "wait_for_text", "text": "deployed", "timeout_ms": 8000 },
+            { "action": "title" }
+        ]
+    })))
+    .unwrap();
+    assert_eq!(
+        steps,
+        vec![
+            BrowserStep::WaitForText {
+                text: "deployed".into(),
+                timeout_ms: 8000
+            },
+            BrowserStep::Title,
+        ]
+    );
+    // Missing text / oversized text are refused.
+    let err = parse_steps(&payload(json!({
+        "steps": [{ "action": "wait_for_text" }]
+    })))
+    .unwrap_err();
+    assert!(err.contains("requires text"), "{err}");
+    let err = parse_steps(&payload(json!({
+        "steps": [{ "action": "wait_for_text", "text": "x".repeat(513) }]
+    })))
+    .unwrap_err();
+    assert!(err.contains("exceeds"), "{err}");
+}
+
+#[test]
+fn cookie_steps_validate() {
+    let (steps, _) = parse_steps(&payload(json!({
+        "steps": [
+            { "action": "get_cookies" },
+            { "action": "set_cookies", "cookies": [
+                { "name": "session", "value": "abc", "url": "https://example.com/" }
+            ]}
+        ]
+    })))
+    .unwrap();
+    assert_eq!(steps[0], BrowserStep::GetCookies);
+    assert_eq!(
+        steps[1],
+        BrowserStep::SetCookies {
+            cookies: vec![super::steps::CookieSpec {
+                name: "session".into(),
+                value: "abc".into(),
+                url: "https://example.com/".into(),
+            }]
+        }
+    );
+    // Bad URL, empty name, oversized value, too many cookies, missing array.
+    for bad in [
+        json!({ "action": "set_cookies", "cookies": [
+            { "name": "s", "value": "v", "url": "file:///etc" }
+        ]}),
+        json!({ "action": "set_cookies", "cookies": [{ "name": "", "value": "v", "url": "https://x/" }] }),
+        json!({ "action": "set_cookies", "cookies": [
+            { "name": "s", "value": "x".repeat(4097), "url": "https://x/" }
+        ]}),
+        json!({ "action": "set_cookies" }),
+    ] {
+        let err = parse_steps(&payload(json!({ "steps": [bad] }))).unwrap_err();
+        assert!(!err.is_empty());
+    }
+    // Over the cookie-count cap.
+    let many: Vec<serde_json::Value> = (0..21)
+        .map(|i| json!({ "name": format!("c{i}"), "value": "v", "url": "https://x/" }))
+        .collect();
+    let err = parse_steps(&payload(json!({ "steps": [
+        { "action": "set_cookies", "cookies": many }
+    ] })))
+    .unwrap_err();
+    assert!(err.contains("cookies"), "{err}");
+}
+
+#[test]
+fn viewport_and_pdf_bounds_hold() {
+    let (steps, _) = parse_steps(&payload(json!({
+        "steps": [{ "action": "set_viewport", "width": 1280, "height": 800 }]
+    })))
+    .unwrap();
+    assert_eq!(
+        steps,
+        vec![BrowserStep::SetViewport {
+            width: 1280,
+            height: 800
+        }]
+    );
+    for bad in [
+        json!({ "action": "set_viewport", "width": 10, "height": 800 }),
+        json!({ "action": "set_viewport", "width": 1280, "height": 99999 }),
+        json!({ "action": "set_viewport", "width": 1280 }),
+        json!({ "action": "pdf", "paper_width": 0.5 }),
+        json!({ "action": "pdf", "paper_height": 500 }),
+    ] {
+        let err = parse_steps(&payload(json!({ "steps": [bad] }))).unwrap_err();
+        assert!(!err.is_empty(), "{bad} must be refused");
+    }
+}
+
+#[test]
+fn pdf_uri_tags_the_right_mime() {
+    assert_eq!(pdf_uri("QUJD"), "data:application/pdf;base64,QUJD");
 }
 
 // ---- helpers -----------------------------------------------------------------
