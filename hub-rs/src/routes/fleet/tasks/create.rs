@@ -7,7 +7,10 @@ use uuid::Uuid;
 
 use crate::db::DbError;
 use crate::models::enums::{ExecMode, VMState};
-use crate::models::task::{self, ActionTaskNew, CommandTaskNew, Task, TaskNew, UpdateTaskNew};
+use crate::models::task::{
+    self, ActionTaskNew, BrowserTaskNew, CommandTaskNew, Task, TaskNew, UpdateTaskNew,
+    MAX_BROWSER_PAYLOAD_BYTES,
+};
 use crate::models::vm::VM;
 
 use super::super::{py_repr, FleetState};
@@ -197,6 +200,49 @@ pub async fn create_command_task(
     .await?;
     wake_queue(state, vm.id);
     Ok(task)
+}
+
+/// `create_browser_task` — queue an Obscura/CDP automation run. Steps are
+/// validated by the model layer (non-empty array, ≤ 50 steps, non-empty
+/// `action` per step, http(s)-only `navigate` URLs) and the serialized
+/// payload is capped; the worker re-validates every field before executing.
+/// Linux workers execute the steps; any other OS answers "browser not
+/// supported on this OS".
+pub async fn create_browser_task(
+    state: &FleetState,
+    vm: &VM,
+    steps: &serde_json::Value,
+    timeout_seconds: i64,
+    created_by: &str,
+    idempotency_key: Option<&str>,
+) -> Result<(Task, usize), ExecError> {
+    require_active(vm)?;
+    let step_count = task::validate_browser_steps(steps).map_err(ExecError::Input)?;
+    if serde_json::json!({ "steps": steps, "timeout": timeout_seconds })
+        .to_string()
+        .len()
+        > MAX_BROWSER_PAYLOAD_BYTES
+    {
+        return Err(ExecError::Input(format!(
+            "browser task payload exceeds {MAX_BROWSER_PAYLOAD_BYTES} bytes"
+        )));
+    }
+    if let Some(task) = find_idempotent(state, vm.id, idempotency_key).await? {
+        return Ok((task, step_count));
+    }
+    let task = task::create_browser_task(
+        &state.pool,
+        BrowserTaskNew {
+            vm_id: vm.id,
+            steps: steps.clone(),
+            timeout_seconds,
+            created_by: created_by.to_owned(),
+            idempotency_key: idempotency_key.map(str::to_owned),
+        },
+    )
+    .await?;
+    wake_queue(state, vm.id);
+    Ok((task, step_count))
 }
 
 /// `create_update_task` — a self-update carrying SSRF-validated release URLs.

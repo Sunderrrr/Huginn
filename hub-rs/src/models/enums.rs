@@ -101,7 +101,7 @@ impl ExecMode {
     }
 }
 
-/// `task_type`: action, command, update, uninstall.
+/// `task_type`: action, command, update, uninstall, browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "task_type", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
@@ -110,6 +110,9 @@ pub enum TaskType {
     Command,
     Update,
     Uninstall,
+    /// Ordered browser steps executed by a Linux worker via Obscura/CDP
+    /// (migration 0004; hub-rs extension with no Python-hub counterpart).
+    Browser,
 }
 
 impl TaskType {
@@ -119,6 +122,7 @@ impl TaskType {
             TaskType::Command => "command",
             TaskType::Update => "update",
             TaskType::Uninstall => "uninstall",
+            TaskType::Browser => "browser",
         }
     }
 }
@@ -218,6 +222,11 @@ mod tests {
             serde_json::to_string(&TaskType::Uninstall).unwrap(),
             "\"uninstall\""
         );
+        assert_eq!(
+            serde_json::to_string(&TaskType::Browser).unwrap(),
+            "\"browser\""
+        );
+        assert_eq!(TaskType::Browser.as_str(), "browser");
         assert_eq!(
             serde_json::to_string(&TaskStatus::DeadLetter).unwrap(),
             "\"dead_letter\""

@@ -181,8 +181,8 @@ pub fn router(state: FleetState) -> Router {
 /// (`deps.principal_can_access_vm`), answered as 403 "access to this VM
 /// denied". Runs right after `load_vm`, so a caller without access cannot
 /// tell an inaccessible VM from a missing one and no task is ever queued for
-/// a VM outside the caller's grant.
-async fn require_vm_access(
+/// a VM outside the caller's grant. Shared with the browser route.
+pub(super) async fn require_vm_access(
     state: &FleetState,
     principal: &Principal,
     vm_id: Uuid,
@@ -405,8 +405,9 @@ async fn run_bulk_action(
 // ---------------------------------------------------------------------------
 
 /// `_maybe_wait` — with `wait=true`, block (event-driven) for a terminal result
-/// and return it; on timeout return the task as last observed.
-async fn maybe_wait(state: &FleetState, task: Task, wait: bool) -> Task {
+/// and return it; on timeout return the task as last observed. Shared with the
+/// browser route.
+pub(super) async fn maybe_wait(state: &FleetState, task: Task, wait: bool) -> Task {
     if !wait {
         return task;
     }

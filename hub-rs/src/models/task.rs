@@ -88,6 +88,111 @@ pub struct UpdateTaskNew {
     pub created_by: String,
 }
 
+/// Inputs for `create_browser_task`: the raw `steps` array plus the whole-task
+/// timeout. Step semantics are validated here (shape, count, action presence,
+/// navigate URL scheme); the worker re-validates every field before executing
+/// (defense in depth — a hostile hub must not be able to smuggle a step in).
+#[derive(Debug, Clone)]
+pub struct BrowserTaskNew {
+    pub vm_id: Uuid,
+    pub steps: serde_json::Value,
+    pub timeout_seconds: i64,
+    pub created_by: String,
+    pub idempotency_key: Option<String>,
+}
+
+/// `steps` must be a non-empty JSON array of at most this many entries.
+pub const MAX_BROWSER_STEPS: usize = 50;
+/// The serialized `{"steps": [...], "timeout": N}` payload is capped.
+pub const MAX_BROWSER_PAYLOAD_BYTES: usize = 64 * 1024;
+/// `navigate` URLs are capped and must be http(s)://.
+pub const MAX_BROWSER_URL_CHARS: usize = 2048;
+
+/// `^https?://` plus at least one non-space character — the scheme gate for
+/// `navigate` steps. file://, javascript:, data: and friends are refused here
+/// and again in the worker before Obscura ever sees them.
+fn navigate_url_allowed(url: &str) -> bool {
+    static HTTP_URL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = HTTP_URL.get_or_init(|| {
+        // \x20-\x7e printable ASCII only, no whitespace/control characters.
+        regex::Regex::new(r"^https?://[\x21-\x7e]+$").expect("static browser URL regex")
+    });
+    url.chars().count() <= MAX_BROWSER_URL_CHARS && re.is_match(url)
+}
+
+/// Validate a browser `steps` array, returning the step count. Rules:
+/// non-empty array, ≤ [`MAX_BROWSER_STEPS`] steps, every step an object with a
+/// non-empty string `action`, and every `navigate` step an http(s) URL of at
+/// most [`MAX_BROWSER_URL_CHARS`] characters. Returns a human-readable
+/// reason on failure (rendered as the 400 detail by the route).
+pub fn validate_browser_steps(steps: &serde_json::Value) -> Result<usize, String> {
+    let Some(items) = steps.as_array() else {
+        return Err("steps must be a JSON array".into());
+    };
+    if items.is_empty() {
+        return Err("steps must contain at least one step".into());
+    }
+    if items.len() > MAX_BROWSER_STEPS {
+        return Err(format!("steps must have at most {MAX_BROWSER_STEPS} items"));
+    }
+    for (i, step) in items.iter().enumerate() {
+        let Some(obj) = step.as_object() else {
+            return Err(format!("step {} must be a JSON object", i + 1));
+        };
+        let action = obj
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .filter(|a| !a.is_empty());
+        if action.is_none() {
+            return Err(format!("step {} has no action", i + 1));
+        }
+        if action == Some("navigate") {
+            let url = obj
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if !navigate_url_allowed(url) {
+                return Err(format!(
+                    "step {} navigate url must be http(s):// and at most {MAX_BROWSER_URL_CHARS} characters",
+                    i + 1
+                ));
+            }
+        }
+    }
+    Ok(items.len())
+}
+
+/// Queue a browser-automation task. Payload: `{"steps": [...], "timeout": s}`
+/// (validated by [`validate_browser_steps`]; the total payload is capped at
+/// [`MAX_BROWSER_PAYLOAD_BYTES`]).
+pub async fn create_browser_task(pool: &PgPool, new: BrowserTaskNew) -> Result<Task, DbError> {
+    // Defense in depth: the service layer validated the same rules (and
+    // answers with a 400); this re-check keeps the queue itself honest.
+    validate_browser_steps(&new.steps)
+        .map_err(|detail| DbError::Invalid(format!("invalid browser steps: {detail}")))?;
+    let payload = serde_json::json!({
+        "steps": new.steps,
+        "timeout": new.timeout_seconds,
+    });
+    if payload.to_string().len() > MAX_BROWSER_PAYLOAD_BYTES {
+        return Err(DbError::Invalid(format!(
+            "browser task payload exceeds {MAX_BROWSER_PAYLOAD_BYTES} bytes"
+        )));
+    }
+    insert_idempotent(
+        pool,
+        TaskNew {
+            vm_id: new.vm_id,
+            task_type: TaskType::Browser,
+            action_name: None,
+            payload,
+            created_by: new.created_by,
+            idempotency_key: new.idempotency_key,
+        },
+    )
+    .await
+}
+
 /// Inputs for `submit_result`.
 #[derive(Debug, Clone)]
 pub struct SubmitResult {
@@ -510,5 +615,116 @@ mod tests {
         assert_eq!(v["type"], "command");
         assert_eq!(v["status"], "pending");
         assert!(v.get("task_type").is_none());
+    }
+
+    // ---- browser steps validation -------------------------------------------
+
+    fn steps(v: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "steps": v, "timeout": 120 })
+    }
+
+    #[test]
+    fn browser_steps_accept_the_documented_actions() {
+        let payload = steps(serde_json::json!([
+            { "action": "navigate", "url": "https://example.com" },
+            { "action": "click", "selector": "#button" },
+            { "action": "type", "selector": "#input", "text": "hello" },
+            { "action": "eval", "js": "document.title" },
+            { "action": "screenshot", "format": "jpeg", "quality": 80 },
+            { "action": "get_text" },
+            { "action": "get_html" },
+            { "action": "wait_for", "selector": "#result", "timeout_ms": 5000 },
+        ]));
+        let count = validate_browser_steps(&payload["steps"]).unwrap();
+        assert_eq!(count, 8);
+    }
+
+    #[test]
+    fn browser_steps_must_be_a_non_empty_array() {
+        let err = validate_browser_steps(&serde_json::json!({})).unwrap_err();
+        assert_eq!(err, "steps must be a JSON array");
+        let err = validate_browser_steps(&serde_json::json!([])).unwrap_err();
+        assert_eq!(err, "steps must contain at least one step");
+    }
+
+    #[test]
+    fn browser_steps_are_capped_at_50() {
+        let many: Vec<_> = (0..51)
+            .map(|i| serde_json::json!({ "action": "get_text", "i": i }))
+            .collect();
+        let err = validate_browser_steps(&serde_json::Value::Array(many)).unwrap_err();
+        assert_eq!(err, "steps must have at most 50 items");
+        // Exactly 50 is fine.
+        let fifty: Vec<_> = (0..50)
+            .map(|i| serde_json::json!({ "action": "get_text", "i": i }))
+            .collect();
+        assert_eq!(
+            validate_browser_steps(&serde_json::Value::Array(fifty)).unwrap(),
+            50
+        );
+    }
+
+    #[test]
+    fn browser_steps_require_an_action_string() {
+        let err = validate_browser_steps(&serde_json::json!([{ "url": "https://x" }])).unwrap_err();
+        assert_eq!(err, "step 1 has no action");
+        let err = validate_browser_steps(&serde_json::json!([{ "action": "" }])).unwrap_err();
+        assert_eq!(err, "step 1 has no action");
+        let err = validate_browser_steps(&serde_json::json!([{ "action": 1 }])).unwrap_err();
+        assert_eq!(err, "step 1 has no action");
+        let err = validate_browser_steps(&serde_json::json!(["get_text"])).unwrap_err();
+        assert_eq!(err, "step 1 must be a JSON object");
+    }
+
+    #[test]
+    fn browser_navigate_urls_must_be_http() {
+        for url in [
+            "https://example.com",
+            "http://example.com/a?b=c#d",
+            "https://user@example.com/", // printable ASCII only
+        ] {
+            let payload = serde_json::json!([{ "action": "navigate", "url": url }]);
+            assert!(
+                validate_browser_steps(&payload).is_ok(),
+                "{url} must be accepted"
+            );
+        }
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<script>x</script>",
+            "ftp://example.com",
+            "HTTP://example.com", // scheme must be lowercase (regex is case-sensitive)
+            "https://",           // no host
+            "https://exa mple.com",
+            "https://example.com/\u{0000}",
+        ] {
+            let payload = serde_json::json!([{ "action": "navigate", "url": url }]);
+            let err = validate_browser_steps(&payload).unwrap_err();
+            assert!(err.contains("http(s)://"), "{url} must be refused: {err}");
+        }
+    }
+
+    #[test]
+    fn browser_navigate_urls_are_length_capped() {
+        let long = format!("https://example.com/{}", "a".repeat(2048));
+        let payload = serde_json::json!([{ "action": "navigate", "url": long }]);
+        let err = validate_browser_steps(&payload).unwrap_err();
+        assert!(err.contains("2048"), "{err}");
+    }
+
+    #[test]
+    fn browser_payload_is_capped_at_64_kib() {
+        // 51 steps would trip the count check first; build a legal-but-huge
+        // step instead: one eval step with a 64 KiB+ script.
+        let big = "x".repeat(70_000);
+        let payload = steps(serde_json::json!([{ "action": "eval", "js": big }]));
+        assert!(
+            payload.to_string().len() > MAX_BROWSER_PAYLOAD_BYTES,
+            "fixture must actually exceed the cap"
+        );
+        // The hub only caps the payload size (the per-script size gate is
+        // the worker's); the count/shape validation must still pass.
+        assert!(validate_browser_steps(&payload["steps"]).is_ok());
     }
 }
