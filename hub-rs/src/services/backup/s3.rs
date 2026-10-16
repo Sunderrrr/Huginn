@@ -514,6 +514,9 @@ impl crate::models::setting::SettingValues {
             backup_s3_secret_key: self.backup_s3_secret_key,
             backup_s3_retention_days: self.backup_s3_retention_days,
             enrollment_base_url: String::new(),
+            browser_engine_version: String::new(),
+            browser_engine_sha256_amd64: String::new(),
+            browser_engine_sha256_arm64: String::new(),
         }
     }
 }

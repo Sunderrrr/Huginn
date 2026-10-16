@@ -438,6 +438,7 @@ pub(crate) mod testing {
             approved_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            browser_enabled: false,
         }
     }
 
@@ -518,6 +519,9 @@ pub(crate) mod testing {
             backup_s3_secret_key: None,
             backup_s3_retention_days: 30,
             enrollment_base_url: String::new(),
+            browser_engine_version: String::new(),
+            browser_engine_sha256_amd64: String::new(),
+            browser_engine_sha256_arm64: String::new(),
         }
     }
 }

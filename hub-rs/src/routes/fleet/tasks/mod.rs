@@ -59,8 +59,8 @@ mod create;
 mod release_urls;
 
 pub use create::{
-    create_action_task, create_browser_task, create_command_task, create_uninstall_task,
-    create_update_task, ExecError,
+    create_action_task, create_browser_install_task, create_browser_task, create_command_task,
+    create_uninstall_task, create_update_task, ExecError,
 };
 
 /// Whether `name` is one of the built-in whitelisted actions (`actions.py`'s

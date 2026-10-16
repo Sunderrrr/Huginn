@@ -28,7 +28,9 @@ const COLUMNS: &str = "id, target_worker_version, target_release_repo, allowed_r
                       webauthn_rp_name, webauthn_origin, backup_s3_enabled, \
                       backup_s3_endpoint, backup_s3_region, backup_s3_bucket, \
                       backup_s3_prefix, backup_s3_access_key, backup_s3_secret_key, \
-                      backup_s3_retention_days, enrollment_base_url";
+                      backup_s3_retention_days, enrollment_base_url, \
+                      browser_engine_version, browser_engine_sha256_amd64, \
+                      browser_engine_sha256_arm64";
 
 /// Fleet-wide configuration (one row).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, sqlx::FromRow)]
@@ -92,6 +94,15 @@ pub struct Setting {
     pub backup_s3_retention_days: i32,
     /// Base URL for the install command in the "Add VM" modal. Empty = dashboard origin.
     pub enrollment_base_url: String,
+    /// Browser automation (migrations/0005): the pinned Obscura engine
+    /// release `browser_install` tasks download. The SHA-256 columns pin
+    /// each arch's tarball; both are admin-updatable in settings.
+    #[serde(default)]
+    pub browser_engine_version: String,
+    #[serde(default)]
+    pub browser_engine_sha256_amd64: String,
+    #[serde(default)]
+    pub browser_engine_sha256_arm64: String,
 }
 
 impl Setting {
@@ -156,6 +167,10 @@ pub struct SettingValues {
     pub backup_s3_retention_days: i32,
     /// The base URL used in the "Add VM" install command. Empty = dashboard origin.
     pub enrollment_base_url: String,
+    /// Browser automation: the pinned engine release (see `Setting`).
+    pub browser_engine_version: String,
+    pub browser_engine_sha256_amd64: String,
+    pub browser_engine_sha256_arm64: String,
 }
 
 /// Defaults mirror the SQLAlchemy column defaults.
@@ -202,6 +217,9 @@ impl Default for SettingValues {
             backup_s3_secret_key: None,
             backup_s3_retention_days: 30,
             enrollment_base_url: String::new(),
+            browser_engine_version: String::new(),
+            browser_engine_sha256_amd64: String::new(),
+            browser_engine_sha256_arm64: String::new(),
         }
     }
 }
@@ -228,10 +246,12 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
          notify_task_failure, auto_update_enabled, oidc_provider_name, require_admin_mfa, \
          allow_password_login, webauthn_rp_id, webauthn_rp_name, webauthn_origin, \
          backup_s3_enabled, backup_s3_endpoint, backup_s3_region, backup_s3_bucket, \
-         backup_s3_prefix, backup_s3_access_key, backup_s3_secret_key, backup_s3_retention_days) \
+         backup_s3_prefix, backup_s3_access_key, backup_s3_secret_key, backup_s3_retention_days, \
+         enrollment_base_url, browser_engine_version, browser_engine_sha256_amd64, \
+         browser_engine_sha256_arm64) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
          $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, \
-         $35, $36, $37, $38, $39, $40, $41) \
+         $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45) \
          ON CONFLICT (id) DO UPDATE SET \
          target_worker_version = EXCLUDED.target_worker_version, \
          target_release_repo = EXCLUDED.target_release_repo, \
@@ -273,7 +293,10 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
          backup_s3_access_key = EXCLUDED.backup_s3_access_key, \
          backup_s3_secret_key = EXCLUDED.backup_s3_secret_key, \
          backup_s3_retention_days = EXCLUDED.backup_s3_retention_days, \
-         enrollment_base_url = EXCLUDED.enrollment_base_url \
+         enrollment_base_url = EXCLUDED.enrollment_base_url, \
+         browser_engine_version = EXCLUDED.browser_engine_version, \
+         browser_engine_sha256_amd64 = EXCLUDED.browser_engine_sha256_amd64, \
+         browser_engine_sha256_arm64 = EXCLUDED.browser_engine_sha256_arm64 \
          RETURNING {COLUMNS}"
     ))
     .bind(SETTINGS_SINGLETON_ID)
@@ -318,6 +341,9 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
     .bind(&values.backup_s3_secret_key)
     .bind(values.backup_s3_retention_days)
     .bind(&values.enrollment_base_url)
+    .bind(&values.browser_engine_version)
+    .bind(&values.browser_engine_sha256_amd64)
+    .bind(&values.browser_engine_sha256_arm64)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -392,6 +418,9 @@ mod tests {
             backup_s3_secret_key: None,
             backup_s3_retention_days: 30,
             enrollment_base_url: String::new(),
+            browser_engine_version: String::new(),
+            browser_engine_sha256_amd64: String::new(),
+            browser_engine_sha256_arm64: String::new(),
         };
         assert_eq!(
             s.allowed_release_domains_vec(),
@@ -400,5 +429,57 @@ mod tests {
                 "objects.githubusercontent.com".to_string()
             ]
         );
+    }
+
+    /// Live round-trip of `upsert` against a real PostgreSQL: the INSERT
+    /// path (fresh schema) and the ON CONFLICT update path must both persist
+    /// EVERY column — regression test for the 0003-era bug where
+    /// `enrollment_base_url` had a bind but no INSERT column, making every
+    /// settings save fail with a bind-count error.
+    #[tokio::test]
+    async fn upsert_roundtrips_every_column_on_both_paths() {
+        let Ok(url) = std::env::var("HUGINN_TEST_DATABASE_URL") else {
+            eprintln!("skipped: HUGINN_TEST_DATABASE_URL not set");
+            return;
+        };
+        let guard = crate::db::LIVE_DB_GUARD.lock().await;
+        let pool = crate::db::connect(&url, 4).await.expect("connect");
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        crate::db::run_migrations(&pool).await.expect("migrations");
+
+        let mut values = SettingValues {
+            target_worker_version: "v9.9.9".into(),
+            enrollment_base_url: "https://100.73.17.140".into(),
+            browser_engine_version: "v0.2.5".into(),
+            browser_engine_sha256_amd64: "a".repeat(64),
+            browser_engine_sha256_arm64: "b".repeat(64),
+            notify_vm_offline: false,
+            ..SettingValues::default()
+        };
+
+        // INSERT path (no row yet).
+        let row = upsert(&pool, values.clone()).await.expect("insert upsert");
+        assert_eq!(row.target_worker_version, "v9.9.9");
+        assert_eq!(row.enrollment_base_url, "https://100.73.17.140");
+        assert_eq!(row.browser_engine_version, "v0.2.5");
+        assert_eq!(row.browser_engine_sha256_amd64, "a".repeat(64));
+        assert_eq!(row.browser_engine_sha256_arm64, "b".repeat(64));
+        assert!(!row.notify_vm_offline);
+
+        // ON CONFLICT path — the previously-broken update branch.
+        values.enrollment_base_url = "https://example.com".into();
+        values.browser_engine_version = "v0.3.0".into();
+        let row = upsert(&pool, values).await.expect("conflict upsert");
+        assert_eq!(row.enrollment_base_url, "https://example.com");
+        assert_eq!(row.browser_engine_version, "v0.3.0");
+
+        drop(guard);
     }
 }

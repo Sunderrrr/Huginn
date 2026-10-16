@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::RouteError;
 use crate::models::setting::{Setting, SettingValues};
+use crate::models::task::engine_version_allowed;
 
 /// `SettingsOut` — the full fleet configuration. Mirrors the pydantic model
 /// field for field: **no secret ever crosses this boundary** (`ldap_bind_password`
@@ -61,6 +62,13 @@ pub struct SettingsOut {
     pub backup_s3_secret_key_configured: bool,
     pub backup_s3_retention_days: i32,
     pub enrollment_base_url: String,
+
+    // Browser automation (migrations/0005): the pinned Obscura engine
+    // release used by `browser_install` tasks. Not secrets — the workers
+    // need them from the task payload anyway.
+    pub browser_engine_version: String,
+    pub browser_engine_sha256_amd64: String,
+    pub browser_engine_sha256_arm64: String,
 }
 
 impl SettingsOut {
@@ -103,7 +111,10 @@ impl SettingsOut {
             backup_s3_access_key: row.backup_s3_access_key.clone(),
             backup_s3_secret_key_configured: row.backup_s3_secret_configured(),
             backup_s3_retention_days: row.backup_s3_retention_days,
-        enrollment_base_url: row.enrollment_base_url.clone(),
+            enrollment_base_url: row.enrollment_base_url.clone(),
+            browser_engine_version: row.browser_engine_version.clone(),
+            browser_engine_sha256_amd64: row.browser_engine_sha256_amd64.clone(),
+            browser_engine_sha256_arm64: row.browser_engine_sha256_arm64.clone(),
         }
     }
 }
@@ -185,6 +196,15 @@ pub struct SettingsUpdate {
     pub backup_s3_access_key: Option<String>,
     pub backup_s3_secret_key: Option<String>,
     pub backup_s3_retention_days: Option<i32>,
+
+    /// Fleet enrollment (`migrations/0003`): the base URL of the install
+    /// command shown in the "Add VM" modal. Empty = dashboard origin.
+    pub enrollment_base_url: Option<String>,
+
+    // Browser automation (migrations/0005): the pinned engine release.
+    pub browser_engine_version: Option<String>,
+    pub browser_engine_sha256_amd64: Option<String>,
+    pub browser_engine_sha256_arm64: Option<String>,
 }
 
 impl SettingsUpdate {
@@ -227,6 +247,18 @@ impl SettingsUpdate {
             ("backup_s3_prefix", &self.backup_s3_prefix, 255),
             ("backup_s3_access_key", &self.backup_s3_access_key, 255),
             ("backup_s3_secret_key", &self.backup_s3_secret_key, 512),
+            ("enrollment_base_url", &self.enrollment_base_url, 2048),
+            ("browser_engine_version", &self.browser_engine_version, 64),
+            (
+                "browser_engine_sha256_amd64",
+                &self.browser_engine_sha256_amd64,
+                64,
+            ),
+            (
+                "browser_engine_sha256_arm64",
+                &self.browser_engine_sha256_arm64,
+                64,
+            ),
         ] {
             if let Some(value) = value {
                 if value.chars().count() > max {
@@ -242,6 +274,43 @@ impl SettingsUpdate {
                 return Err(RouteError::unprocessable_entity(
                     "backup_s3_retention_days must be between 0 and 3650",
                 ));
+            }
+        }
+        // The enrollment base URL: empty (= dashboard origin) or an
+        // absolute http(s):// URL — the workers trust it for enrollment.
+        if let Some(url) = &self.enrollment_base_url {
+            if !url.is_empty() && !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Err(RouteError::unprocessable_entity(
+                    "enrollment_base_url must be empty or an absolute http(s):// URL",
+                ));
+            }
+        }
+        // The pinned engine release: same gate the worker applies before
+        // building the download URL (path-safe v-tag), and the SHA-256s
+        // must be 64 hex characters.
+        if let Some(version) = &self.browser_engine_version {
+            if !engine_version_allowed(version) {
+                return Err(RouteError::unprocessable_entity(
+                    "browser_engine_version must be a v-prefixed tag (e.g. v0.2.4) of at most 64 characters [A-Za-z0-9._-], without leading/trailing dots",
+                ));
+            }
+        }
+        for (field, value) in [
+            (
+                "browser_engine_sha256_amd64",
+                &self.browser_engine_sha256_amd64,
+            ),
+            (
+                "browser_engine_sha256_arm64",
+                &self.browser_engine_sha256_arm64,
+            ),
+        ] {
+            if let Some(value) = value {
+                if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(RouteError::unprocessable_entity(format!(
+                        "{field} must be 64 hex characters"
+                    )));
+                }
             }
         }
         Ok(())
@@ -378,6 +447,21 @@ impl SettingsUpdate {
         if let Some(v) = self.backup_s3_retention_days {
             push("backup_s3_retention_days", v.into());
         }
+        // Post-parity hub extensions (migrations 0003/0005) — none of these
+        // are secrets: the enrollment URL is fleet-wide and the browser
+        // engine coordinates ride in the `browser_install` task payloads.
+        if let Some(v) = &self.enrollment_base_url {
+            push("enrollment_base_url", v.clone().into());
+        }
+        if let Some(v) = &self.browser_engine_version {
+            push("browser_engine_version", v.clone().into());
+        }
+        if let Some(v) = &self.browser_engine_sha256_amd64 {
+            push("browser_engine_sha256_amd64", v.clone().into());
+        }
+        if let Some(v) = &self.browser_engine_sha256_arm64 {
+            push("browser_engine_sha256_arm64", v.clone().into());
+        }
         serde_json::Value::Object(detail)
     }
 }
@@ -426,6 +510,9 @@ pub fn values_from(row: &Setting) -> SettingValues {
         backup_s3_secret_key: row.backup_s3_secret_key.clone(),
         backup_s3_retention_days: row.backup_s3_retention_days,
         enrollment_base_url: row.enrollment_base_url.clone(),
+        browser_engine_version: row.browser_engine_version.clone(),
+        browser_engine_sha256_amd64: row.browser_engine_sha256_amd64.clone(),
+        browser_engine_sha256_arm64: row.browser_engine_sha256_arm64.clone(),
     }
 }
 
@@ -475,5 +562,8 @@ pub fn setting_row(values: SettingValues, updated_at: DateTime<Utc>) -> Setting 
         backup_s3_secret_key: values.backup_s3_secret_key,
         backup_s3_retention_days: values.backup_s3_retention_days,
         enrollment_base_url: values.enrollment_base_url.clone(),
+        browser_engine_version: values.browser_engine_version.clone(),
+        browser_engine_sha256_amd64: values.browser_engine_sha256_amd64.clone(),
+        browser_engine_sha256_arm64: values.browser_engine_sha256_arm64.clone(),
     }
 }

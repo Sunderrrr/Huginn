@@ -263,6 +263,20 @@ async fn update_settings_endpoint(
     if let Some(v) = body.backup_s3_retention_days {
         values.backup_s3_retention_days = v;
     }
+    // Post-parity fleet fields: the enrollment install URL (0003) and the
+    // pinned browser engine release (0005). Validated by `body.validate()`.
+    if let Some(v) = &body.enrollment_base_url {
+        values.enrollment_base_url = v.clone();
+    }
+    if let Some(v) = &body.browser_engine_version {
+        values.browser_engine_version = v.clone();
+    }
+    if let Some(v) = &body.browser_engine_sha256_amd64 {
+        values.browser_engine_sha256_amd64 = v.clone();
+    }
+    if let Some(v) = &body.browser_engine_sha256_arm64 {
+        values.browser_engine_sha256_arm64 = v.clone();
+    }
     // `row.updated_by = principal.user.id` when a real user is behind it.
     values.updated_by = caller.principal.user.as_ref().map(|u| u.id);
     // Never write secrets into the audit log.
@@ -475,6 +489,81 @@ mod tests {
             body_json(response).await,
             json!({"detail": "release domain not allowed: 'localhost'"})
         );
+    }
+
+    #[test]
+    fn update_validate_gates_the_post_parity_fleet_fields() {
+        let with =
+            |enrollment: Option<&str>, version: Option<&str>, sha: Option<&str>| SettingsUpdate {
+                enrollment_base_url: enrollment.map(str::to_owned),
+                browser_engine_version: version.map(str::to_owned),
+                browser_engine_sha256_amd64: sha.map(str::to_owned),
+                ..SettingsUpdate::default()
+            };
+        // Empty = dashboard origin; absolute http(s):// is allowed.
+        assert!(with(Some(""), None, None).validate().is_ok());
+        assert!(with(Some("https://100.73.17.140"), None, None)
+            .validate()
+            .is_ok());
+        assert!(with(Some("http://example.com"), None, None)
+            .validate()
+            .is_ok());
+        for bad in ["ftp://x", "javascript:alert(1)", "huginn.lan", "//x"] {
+            assert!(
+                with(Some(bad), None, None).validate().is_err(),
+                "{bad} must be refused"
+            );
+        }
+        // The engine pin: v-tag on both write paths (settings + task).
+        assert!(with(None, Some("v0.2.4"), None).validate().is_ok());
+        assert!(with(None, Some("v0.3.0-rc1"), None).validate().is_ok());
+        for bad in ["0.2.4", "v0.2.4/evil", "latest", "v0.2.4 ../x"] {
+            assert!(
+                with(None, Some(bad), None).validate().is_err(),
+                "{bad} must be refused"
+            );
+        }
+        // The SHA-256 pins: 64 hex characters exactly.
+        assert!(with(None, None, Some(&"a".repeat(64))).validate().is_ok());
+        for bad in ["abc", &"z".repeat(64), &"a".repeat(63)] {
+            assert!(
+                with(None, None, Some(bad)).validate().is_err(),
+                "{bad} must be refused"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn put_settings_applies_the_post_parity_fleet_fields() {
+        let (store, state, admin) = setup();
+        let app = router(state.clone());
+        let request = json_request_with(
+            "PUT",
+            "/api/settings",
+            json!({
+                "enrollment_base_url": "https://100.73.17.140",
+                "browser_engine_version": "v0.2.5",
+                "browser_engine_sha256_amd64": "a".repeat(64),
+            }),
+            &[(
+                "authorization",
+                format!("Bearer {}", bearer(&state, &admin)),
+            )],
+        );
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let out = body_json(response).await;
+        assert_eq!(out["enrollment_base_url"], "https://100.73.17.140");
+        assert_eq!(out["browser_engine_version"], "v0.2.5");
+        assert_eq!(out["browser_engine_sha256_amd64"], "a".repeat(64));
+        // Persisted through SettingValues → save_settings (setting_row keeps
+        // every field; the real upsert is covered by the live round-trip test
+        // in models::setting).
+        let db = store.db.lock().unwrap();
+        let row = db.settings.as_ref().expect("saved settings");
+        assert_eq!(row.enrollment_base_url, "https://100.73.17.140");
+        assert_eq!(row.browser_engine_version, "v0.2.5");
+        assert_eq!(row.browser_engine_sha256_amd64, "a".repeat(64));
     }
 
     #[tokio::test]
