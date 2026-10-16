@@ -170,7 +170,7 @@ mod tests {
                 .unwrap();
         let resp = handle_message(&s, &ctx, &list).await.unwrap();
         let tools_arr = resp["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools_arr.len(), 9, "9 tools expected");
+        assert_eq!(tools_arr.len(), 13, "13 tools expected");
         let names: Vec<&str> = tools_arr
             .iter()
             .filter_map(|t| t["name"].as_str())
@@ -185,6 +185,10 @@ mod tests {
             "get_task",
             "wait_for_task",
             "get_audit_log",
+            "browser_start",
+            "browser_navigate",
+            "browser_screenshot",
+            "browser_eval",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
