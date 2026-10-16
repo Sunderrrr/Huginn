@@ -15,6 +15,16 @@ const TTL_OPTIONS = [
 
 const mask = (t: string) => (t.length > 8 ? `****${t.slice(-8)}` : "****");
 
+type OS = "linux" | "windows";
+
+/** Per-OS install command, shown after a token is generated. */
+function installCommand(os: OS, base: string, token: string): string {
+  if (os === "windows") {
+    return `irm ${base}/install.ps1 | iex  # or: .\\install.ps1 -HUB_URL "${base}" -Token "${token}"`;
+  }
+  return `curl -fsSLk ${base}/install.sh | HUB_URL=${base} TOKEN=${token} bash`;
+}
+
 /** Enroll a new VM: generate a single-use token and show the install one-liner. */
 export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { data: tokens } = useTokens();
@@ -30,13 +40,11 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [autoApprove, setAutoApprove] = useState(false);
   const [created, setCreated] = useState<EnrollmentTokenCreated | null>(null);
   const [reveal, setReveal] = useState(false);
-  const [revealCmd, setRevealCmd] = useState(false);
+  const [os, setOs] = useState<OS>("linux");
 
   // Same-origin installer; -k fetches the script despite the hub's internal-CA
   // cert, then the script trust-on-first-use installs the CA.
   const base = window.location.origin;
-  const installCmd = (token: string) =>
-    `curl -fsSLk ${base}/install.sh | HUB_URL=${base} TOKEN=${token} bash`;
   const copy = (text: string, what: string) => {
     navigator.clipboard?.writeText(text);
     toast("ok", what);
@@ -45,10 +53,10 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
   function reset() {
     setCreated(null);
     setReveal(false);
-    setRevealCmd(false);
     setLabel("");
     setReusable(false);
     setAutoApprove(false);
+    setOs("linux");
   }
 
   async function onGenerate() {
@@ -61,7 +69,6 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
         auto_approve: autoApprove,
       });
       setReveal(false);
-      setRevealCmd(false);
       setCreated(t);
       toast("ok", "invitation created");
     } catch {
@@ -78,6 +85,10 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
       new Date(t.expires_at).getTime() > Date.now(),
   );
 
+  // The token masked in the command (the full token is shown in the Token
+  // field below with its own reveal toggle).
+  const cmdToken = created ? created.token : "";
+
   return (
     <Modal open={open} onClose={() => { reset(); onClose(); }} title="Add a VM" width={640}>
       {created ? (
@@ -88,18 +99,56 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
               : "Run this on the new machine. The token is single-use and shown only once."}
           </p>
 
-          <label className="lbl">One-line install</label>
-          <div className="row" style={{ gap: 8, alignItems: "stretch" }}>
-            <div className="codeblock grow" style={{ userSelect: "all", padding: "9px 12px" }}>
-              {installCmd(revealCmd ? created.token : mask(created.token))}
-            </div>
-            <button className="btn btn--sm" onClick={() => setRevealCmd((v) => !v)}>
-              {revealCmd ? "hide" : "reveal"}
+          {/* OS selector */}
+          <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+            <button
+              className={`btn btn--sm ${os === "linux" ? "btn--primary" : "btn--ghost"}`}
+              onClick={() => setOs("linux")}
+            >
+              ▲ Linux
             </button>
-            <button className="btn btn--sm" onClick={() => copy(installCmd(created.token), "command copied")}>
+            <button
+              className={`btn btn--sm ${os === "windows" ? "btn--primary" : "btn--ghost"}`}
+              onClick={() => setOs("windows")}
+            >
+              ⊞ Windows
+            </button>
+          </div>
+
+          <label className="lbl">
+            {os === "linux" ? "One-line install (bash)" : "One-line install (PowerShell, as Administrator)"}
+          </label>
+          <div className="row" style={{ gap: 8, alignItems: "stretch" }}>
+            <div
+              className="codeblock grow"
+              style={{
+                userSelect: "all",
+                padding: "9px 12px",
+                fontSize: os === "windows" ? 12 : 13,
+                lineHeight: 1.5,
+              }}
+            >
+              {installCommand(os, base, cmdToken)}
+            </div>
+            <button className="btn btn--sm" onClick={() => copy(installCommand(os, base, created.token), "command copied")}>
               copy
             </button>
           </div>
+
+          {os === "windows" && (
+            <p className="muted tiny" style={{ marginTop: 8, lineHeight: 1.5 }}>
+              Run PowerShell <b>as Administrator</b> on the Windows VM. The installer downloads
+              the worker .exe, verifies its SHA-256, installs the hub's CA if needed, creates the
+              <b> HuginnWorker</b> service, and enrolls.
+            </p>
+          )}
+          {os === "linux" && (
+            <p className="muted tiny" style={{ marginTop: 8, lineHeight: 1.5 }}>
+              Run on the Linux VM as root. The installer detects the architecture (amd64/arm64),
+              downloads the matching static binary, verifies the checksum, and installs a systemd
+              unit.
+            </p>
+          )}
 
           <label className="lbl" style={{ marginTop: 16 }}>Token</label>
           <div className="row" style={{ gap: 8, alignItems: "stretch" }}>
