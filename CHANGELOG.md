@@ -8,12 +8,43 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - **Browser automation on Linux workers (Obscura)**: drive a headless browser
-  on any Linux VM from the dashboard or through MCP tools (`browser_start`,
-  `browser_navigate`, `browser_screenshot`, `browser_eval`). Steps: navigate,
-  click, type, eval, wait_for, get_text, get_html, screenshot. The engine is
-  Obscura (Apache-2.0, third-party notice added) downloaded on-demand —
-  never embedded in the worker binary. Linux only; Windows responds
-  "not supported". See docs/browser.md.
+  on any Linux VM from the dashboard or through MCP tools (`browser_install`,
+  `browser_start`, `browser_navigate`, `browser_screenshot`, `browser_eval`).
+  Steps: navigate, click, type, eval, wait_for, get_text, get_html, screenshot.
+  The engine is Obscura (Apache-2.0, third-party notice added) downloaded
+  on-demand — never embedded in the worker binary. Linux only; Windows
+  responds "not supported". See docs/browser.md.
+- **`browser_install` task type** (admin-triggered): the worker downloads the
+  hub-pinned engine release (fleet settings `browser_engine_version` +
+  per-arch `browser_engine_sha256_*`, defaults: Obscura v0.2.4), verifies the
+  SHA-256, checks glibc ≥ 2.35 (clear refusal on musl/Alpine), extracts
+  strictly into `/opt/huginn/obscura/<version>/` with the Apache-2.0 license,
+  smoke-tests `obscura --version`, and removes the engine on uninstall.
+- **Per-VM browser capability gate** (`browser_enabled`, off by default):
+  browser tasks are refused until an admin enables the VM
+  (`PUT /api/vms/{id}/browser-enabled`, audited `toggle_browser`) — the
+  browser equivalent of the exec-mode gate. Engine install is admin-only and
+  audited (`browser_install_task`).
+- **Resource caps on the engine process**: `obscura serve` runs with
+  `--workers 2 --max-connections 4` and `--worker-max-rss <MB>` whenever the
+  installed release supports the flag (probed from its `serve --help`; the
+  pinned v0.2.4 predates it). Default cap 512 MB, env-overridable
+  (`HUGINN_BROWSER_MAX_RSS_MB`).
+
+### Fixed
+- **`PUT /api/settings` returned 500 on every save** (regression from the
+  enrollment migration): the settings upsert had a bind for
+  `enrollment_base_url` but no INSERT column for it. The column is now part
+  of the INSERT (and the new engine columns with it), covered by a live
+  round-trip regression test on both the INSERT and ON CONFLICT paths.
+- **`enrollment_base_url` was not writable through `PUT /api/settings`** —
+  the update schema never had the field; the dashboard value could only be
+  changed via psql. The field is now part of the settings update (validated:
+  empty or absolute http(s)://).
+- **The parity gate was failing on `settings_get`** (28/29) since the
+  enrollment migration: the post-parity settings keys are now filtered by the
+  harness normalizer like the backup keys, and the gate is green again
+  (29/29, re-verified end to end).
 
 ### Removed
 - **The superseded Python/Go implementations — `hub/`, `mcp/`, `worker/` — are

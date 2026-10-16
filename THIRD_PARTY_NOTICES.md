@@ -23,8 +23,9 @@ MIT/Apache-2.0 dual-licensed):
 
 tokio, axum, sqlx, reqwest, serde, serde_json, sha2, hmac, argon2, base64,
 regex, chrono, uuid, thiserror, tracing, tracing-subscriber, tokio-tungstenite
-(Linux only), flate2, and their transitive dependencies. See each crate's
-`Cargo.toml` for the full dependency graph and individual licenses.
+(Linux only), flate2, tar (Linux only), and their transitive dependencies.
+See each crate's `Cargo.toml` for the full dependency graph and individual
+licenses.
 
 ---
 

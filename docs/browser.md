@@ -16,21 +16,26 @@ headless browser (Apache-2.0) with a CDP (Chrome DevTools Protocol) server.
 
 Linux only — Windows VMs respond "not supported".
 
-## Install Obscura on a VM
+## Install the engine on a VM
 
-The VM admin triggers an install (one-time, per VM):
+Two admin actions, once per VM (Linux, glibc ≥ 2.35 — Ubuntu 22.04+, Debian
+12+, RHEL 9+, Fedora 36+; not Alpine/musl):
 
-```
-Dashboard → VM detail → Install browser engine
-```
-
-or through the hub API (`POST /api/vms/{id}/browser-install`). The worker
-downloads the pinned Obscura release from GitHub (SSRF allowlisted, SHA-256
-verified), installs it to `/opt/huginn/obscura/<version>/` with the license,
-and runs a smoke test (`obscura --version`).
-
-Requirements on the VM: Linux with glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+,
-RHEL 9+, Fedora 36+). Not supported on Alpine/musl.
+1. **Enable the capability** — dashboard VM toggle, or
+   `PUT /api/vms/{id}/browser-enabled {"enabled": true}` (admin only, audited
+   `toggle_browser`). Browser tasks are refused with a clear 403 until this
+   is on — the browser equivalent of the exec-mode gate.
+2. **Install the engine** — dashboard button, or
+   `POST /api/vms/{id}/browser-install` (admin only, audited
+   `browser_install_task`; MCP tool `browser_install`). The worker downloads
+   the **hub-pinned** release (fleet settings: `browser_engine_version`,
+   per-arch `browser_engine_sha256_*`; defaults: Obscura v0.2.4) from GitHub
+   (SSRF-allowlisted, redirect hops validated), verifies the SHA-256,
+   extracts strictly into `/opt/huginn/obscura/<version>/` with the
+   Apache-2.0 license and a third-party notice, smoke-tests
+   `obscura --version`, and only then publishes the directory. A failed
+   install leaves nothing behind; `uninstall` removes the engine with the
+   rest of the worker.
 
 ## How it works
 
@@ -53,19 +58,41 @@ Dashboard / MCP agent
 
 The worker never listens for inbound connections — the browser task uses the
 existing long-poll task model. The CDP port is loopback-only with a random
-authentication token.
+authentication token, and the engine is bound by `--workers 2` /
+`--max-connections 4` (plus `--worker-max-rss` when the installed release
+supports it).
+
+Sessions are per-task: each task spawns a fresh engine, executes its steps
+in one tab, and tears everything down — no state (cookies, storage, logged-in
+sessions) survives a task. Keeping a session open between tasks was
+considered and deliberately left out: it would hold a browser process alive
+between polls and leak login state across tasks.
 
 ## Security model
 
 - **Off by default**: browser capability is disabled per VM; an admin must
-  enable it (like `unrestricted` mode).
+  enable it (like `unrestricted` mode) — audited `toggle_browser`. Operators
+  can then run browser tasks; readonly never can.
+- **Hub-pinned install**: the engine version and per-arch SHA-256 digests
+  live in the fleet settings (admin-updatable); the worker refuses any
+  download that does not hash to the pin. Version tags are path-safe on both
+  sides (no traversal in the install directory).
 - **URL validation**: http(s):// only, size-limited.
-- **SSRF**: Obscura blocks private IPs by default (its own SSRF protection).
-- **Resource limits**: memory capped via `--worker-max-rss`, hard timeout.
-- **No shell**: Obscura is spawned as separated argv (`["obscura", "serve",
-  "--port", port]`), never `sh -c`.
-- **Audit**: every browser task logs the URL, step count, user, and VM —
-  never the content of typed fields.
+- **SSRF**: Obscura blocks private IPs by default (its own SSRF protection);
+  the install download rides the updater's allowlist-validated client.
+- **Resource limits**: `obscura serve` runs with `--workers 2` and
+  `--max-connections 4`; `--worker-max-rss <MB>` is applied when the
+  installed engine supports the flag (probed from its `serve --help`; the
+  pinned v0.2.4 predates it) and defaults to 512 MB, overridable via
+  `HUGINN_BROWSER_MAX_RSS_MB`. The whole task additionally runs under the
+  request's own timeout (≤ 300 s).
+- **No shell**: Obscura is spawned as separated argv, never `sh -c` — the
+  CDP token rides in the environment, never in argv.
+- **Audit**: every browser task logs the URL count/step count, user, and VM
+  — never the content of typed fields (a `type` step can carry a password).
+- **Guaranteed teardown**: the engine process (whole process group) is
+  killed on success, failure, timeout, and panics (`kill_on_drop` + a
+  synchronous group-kill backstop) — no orphan browser processes.
 
 ## Step reference
 
