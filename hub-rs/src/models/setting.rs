@@ -28,10 +28,10 @@ const COLUMNS: &str = "id, target_worker_version, target_release_repo, allowed_r
                       webauthn_rp_name, webauthn_origin, backup_s3_enabled, \
                       backup_s3_endpoint, backup_s3_region, backup_s3_bucket, \
                       backup_s3_prefix, backup_s3_access_key, backup_s3_secret_key, \
-                      backup_s3_retention_days";
+                      backup_s3_retention_days, enrollment_base_url";
 
 /// Fleet-wide configuration (one row).
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Setting {
     pub id: i32,
     pub target_worker_version: String,
@@ -90,6 +90,8 @@ pub struct Setting {
     /// Delete backup objects older than this many days (0 = keep forever).
     #[serde(default = "default_backup_retention_days")]
     pub backup_s3_retention_days: i32,
+    /// Base URL for the install command in the "Add VM" modal. Empty = dashboard origin.
+    pub enrollment_base_url: String,
 }
 
 impl Setting {
@@ -152,6 +154,8 @@ pub struct SettingValues {
     pub backup_s3_access_key: String,
     pub backup_s3_secret_key: Option<String>,
     pub backup_s3_retention_days: i32,
+    /// The base URL used in the "Add VM" install command. Empty = dashboard origin.
+    pub enrollment_base_url: String,
 }
 
 /// Defaults mirror the SQLAlchemy column defaults.
@@ -197,6 +201,7 @@ impl Default for SettingValues {
             backup_s3_access_key: String::new(),
             backup_s3_secret_key: None,
             backup_s3_retention_days: 30,
+            enrollment_base_url: String::new(),
         }
     }
 }
@@ -267,7 +272,8 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
          backup_s3_prefix = EXCLUDED.backup_s3_prefix, \
          backup_s3_access_key = EXCLUDED.backup_s3_access_key, \
          backup_s3_secret_key = EXCLUDED.backup_s3_secret_key, \
-         backup_s3_retention_days = EXCLUDED.backup_s3_retention_days \
+         backup_s3_retention_days = EXCLUDED.backup_s3_retention_days, \
+         enrollment_base_url = EXCLUDED.enrollment_base_url \
          RETURNING {COLUMNS}"
     ))
     .bind(SETTINGS_SINGLETON_ID)
@@ -311,6 +317,7 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
     .bind(&values.backup_s3_access_key)
     .bind(&values.backup_s3_secret_key)
     .bind(values.backup_s3_retention_days)
+    .bind(&values.enrollment_base_url)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -384,6 +391,7 @@ mod tests {
             backup_s3_access_key: String::new(),
             backup_s3_secret_key: None,
             backup_s3_retention_days: 30,
+            enrollment_base_url: String::new(),
         };
         assert_eq!(
             s.allowed_release_domains_vec(),

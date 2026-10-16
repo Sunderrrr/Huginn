@@ -475,25 +475,15 @@ mod tests {
 
     fn empty_setting() -> Setting {
         // Only the fields auth_config reads are meaningful here.
-        serde_json::from_value(json!({
-            "id": 1,
-            "target_worker_version": "", "target_release_repo": "",
-            "allowed_release_domains": [], "updated_by": null,
-            "updated_at": "2024-01-01T00:00:00Z",
-            "oidc_enabled": false, "oidc_issuer": "", "oidc_client_id": "",
-            "oidc_client_secret": null, "oidc_redirect_url": "",
-            "oidc_post_login_redirect": "", "ldap_enabled": false,
-            "ldap_server_url": "", "ldap_bind_dn": "", "ldap_bind_password": null,
-            "ldap_user_search_base": "", "ldap_user_search_filter": "",
-            "ldap_start_tls": false, "ldap_use_ldaps": false,
-            "notifications_enabled": false, "discord_webhook_url": null,
-            "generic_webhook_url": null, "notify_vm_offline": true,
-            "notify_vm_recovered": false, "notify_task_failure": false,
-            "auto_update_enabled": false, "oidc_provider_name": "SSO",
-            "require_admin_mfa": true, "allow_password_login": false,
-            "webauthn_rp_id": "", "webauthn_rp_name": "Huginn", "webauthn_origin": ""
-        }))
-        .unwrap()
+        Setting {
+            id: 1,
+            updated_at: chrono::Utc::now(),
+            oidc_provider_name: "SSO".into(),
+            require_admin_mfa: true,
+            notify_vm_offline: true,
+            backup_s3_retention_days: 30,
+            ..Setting::default()
+        }
     }
 
     // ---- login decision (auth.login's branches) ---------------------------

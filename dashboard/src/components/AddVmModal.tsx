@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useCreateToken, useRevokeToken, useTokens } from "../api/hooks";
+import { useCreateToken, useRevokeToken, useSettings, useTokens } from "../api/hooks";
 import type { EnrollmentTokenCreated } from "../api/types";
 import { Modal } from "./Dialog";
 import { useToast } from "./Toast";
@@ -43,19 +43,15 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [revealCmd, setRevealCmd] = useState(false);
   const [os, setOs] = useState<OS>("linux");
 
-  // Install base URL: defaults to the dashboard origin, but the operator can
-  // point it at a VPN/LAN address so workers enroll directly (bypassing any
-  // public CDN in front of the dashboard). Persisted per browser.
-  const INSTALL_URL_KEY = "huginn.installUrl";
-  const [installUrl, setInstallUrl] = useState(() => {
-    return localStorage.getItem(INSTALL_URL_KEY) || window.location.origin;
-  });
-  const onUrlChange = (v: string) => {
-    setInstallUrl(v);
-    localStorage.setItem(INSTALL_URL_KEY, v);
-  };
+  // Install base URL: configured server-side in Settings (enrollment_base_url),
+  // falls back to the dashboard origin when empty.
+  const { data: settings } = useSettings();
+  const [installUrl, setInstallUrl] = useState("");
+  const effectiveUrl = settings?.enrollment_base_url || window.location.origin;
+  const onUrlChange = (v: string) => setInstallUrl(v);
+  const base = (installUrl || effectiveUrl).replace(/\/$/, "");
 
-  const base = installUrl.replace(/\/$/, "");
+
   const copy = (text: string, what: string) => {
     navigator.clipboard?.writeText(text);
     toast("ok", what);
@@ -117,7 +113,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
           <label className="lbl" style={{ marginBottom: 4 }}>Install URL</label>
           <input
             className="field"
-            value={installUrl}
+            value={installUrl || effectiveUrl}
             onChange={(e) => onUrlChange(e.target.value)}
             placeholder={window.location.origin}
             spellCheck={false}
