@@ -17,7 +17,9 @@ import {
 } from "../api/hooks";
 import { ACTION_CATALOG, type ExecMode, type Task } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
-import { ModeBadge, StateBadge, TagBadge, TaskStatusTag } from "../components/badges";
+import { BrowserAutomation } from "../components/BrowserAutomation";
+import { ModeBadge, StateBadge, TagBadge } from "../components/badges";
+import { TaskResultView } from "../components/TaskOutput";
 import { Modal } from "../components/Dialog";
 import { useToast } from "../components/Toast";
 import { fmtTime, timeAgo } from "../lib/format";
@@ -29,24 +31,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
         {label}
       </div>
       <div style={{ fontSize: 13 }}>{children}</div>
-    </div>
-  );
-}
-
-function ResultView({ task }: { task: Task }) {
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div className="row" style={{ gap: 12, marginBottom: 6 }}>
-        <TaskStatusTag status={task.status} />
-        {task.exit_code !== null && <span className="muted tiny">exit {task.exit_code}</span>}
-      </div>
-      {task.stdout && <pre className="codeblock">{task.stdout}</pre>}
-      {task.stderr && (
-        <pre className="codeblock" style={{ borderColor: "rgba(255,77,77,0.3)", marginTop: 8 }}>
-          {task.stderr}
-        </pre>
-      )}
-      {task.error && <div style={{ color: "var(--blood)", marginTop: 8 }}>{task.error}</div>}
     </div>
   );
 }
@@ -384,8 +368,11 @@ export function VMDetailPage() {
               </div>
             )}
 
-            {result && <ResultView task={result} />}
+            {result && <TaskResultView task={result} />}
           </motion.div>
+
+          {/* Browser automation — per-VM gate, engine install, step runner */}
+          <BrowserAutomation vm={vm} />
         </div>
 
         {/* RIGHT COLUMN — audit */}

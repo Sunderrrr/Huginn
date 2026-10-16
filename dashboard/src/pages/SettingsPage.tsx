@@ -182,6 +182,21 @@ export function SettingsPage() {
                 workers connect directly. Leave empty to use the dashboard origin.
               </Hint>
             </Field>
+            {isAdmin && (
+              <Field label="Browser engine version (pinned)">
+                <input
+                  className="field"
+                  value={settings?.browser_engine_version ?? ""}
+                  disabled
+                  readOnly
+                  spellCheck={false}
+                  style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
+                />
+                <Hint>
+                  The Obscura release "Install browser engine" downloads on Linux workers.
+                </Hint>
+              </Field>
+            )}
           </div>
         </motion.div>
 
