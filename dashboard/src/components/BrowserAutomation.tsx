@@ -23,11 +23,20 @@ const KNOWN_ACTIONS = [
   "navigate",
   "click",
   "type",
+  "press_key",
+  "hover",
+  "scroll",
   "eval",
+  "set_viewport",
   "screenshot",
+  "pdf",
   "get_text",
   "get_html",
+  "title",
   "wait_for",
+  "wait_for_text",
+  "get_cookies",
+  "set_cookies",
 ];
 const MAX_STEPS = 50;
 const MIN_TIMEOUT = 1;
@@ -47,13 +56,19 @@ const PRESET_STEPS = {
     null,
     2,
   ),
+  pdf: JSON.stringify(
+    [{ action: "navigate", url: "https://example.com" }, { action: "pdf" }],
+    null,
+    2,
+  ),
 } as const;
 
-type Preset = "shot" | "text" | "custom";
+type Preset = "shot" | "text" | "pdf" | "custom";
 
 const PRESET_BUTTONS: { id: Preset; label: string }[] = [
   { id: "shot", label: "Screenshot" },
   { id: "text", label: "Page text" },
+  { id: "pdf", label: "PDF" },
   { id: "custom", label: "Custom" },
 ];
 

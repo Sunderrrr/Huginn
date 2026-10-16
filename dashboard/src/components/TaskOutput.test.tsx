@@ -59,6 +59,16 @@ describe("TaskOutput", () => {
     expect(screen.getByRole("img", { name: "screenshot 2" })).toBeInTheDocument();
     expect(screen.getByText("[...output truncated...]")).toBeInTheDocument();
   });
+
+  it("renders pdf lines as download links, not images", () => {
+    const pdf = "data:application/pdf;base64,JVBERi0xLjQK";
+    render(<TaskOutput stdout={`step 3 (pdf): ${pdf}`} />);
+    const link = screen.getByText("📄 PDF export 1 (download)");
+    expect(link).toBeInTheDocument();
+    expect(link.closest("a")).toHaveAttribute("download", "huginn-export-1.pdf");
+    // No <img> for a PDF.
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
 });
 
 describe("TaskResultView", () => {
