@@ -68,10 +68,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build + push huginn-mcp
+        env:
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ github.ref_name }}
         run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/huginn-mcp:${{ github.ref_name }} -t ghcr.io/${{ github.repository_owner }}/huginn-mcp:latest mcp-rs
-          docker push ghcr.io/${{ github.repository_owner }}/huginn-mcp:${{ github.ref_name }}
-          docker push ghcr.io/${{ github.repository_owner }}/huginn-mcp:latest
+          owner="${OWNER,,}"   # GHCR requires lowercase repository names
+          docker build -t "ghcr.io/${owner}/huginn-mcp:${VERSION}" -t "ghcr.io/${owner}/huginn-mcp:latest" mcp-rs
+          docker push "ghcr.io/${owner}/huginn-mcp:${VERSION}"
+          docker push "ghcr.io/${owner}/huginn-mcp:latest"
 
   build-hub-rs:
     runs-on: ubuntu-latest
@@ -105,16 +109,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build + push huginn-hub
+        env:
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ github.ref_name }}
         run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/huginn-hub:${{ github.ref_name }} -t ghcr.io/${{ github.repository_owner }}/huginn-hub:latest hub-rs
-          docker push ghcr.io/${{ github.repository_owner }}/huginn-hub:${{ github.ref_name }}
-          docker push ghcr.io/${{ github.repository_owner }}/huginn-hub:latest
+          owner="${OWNER,,}"   # GHCR requires lowercase repository names
+          docker build -t "ghcr.io/${owner}/huginn-hub:${VERSION}" -t "ghcr.io/${owner}/huginn-hub:latest" hub-rs
+          docker push "ghcr.io/${owner}/huginn-hub:${VERSION}"
+          docker push "ghcr.io/${owner}/huginn-hub:latest"
       - name: Boot smoke (migrations + /healthz)
+        env:
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ github.ref_name }}
         run: |
+          owner="${OWNER,,}"
           docker run -d --name hub --network host \
             -e HUGINN_ENV=dev \
             -e HUGINN_DATABASE_URL="postgresql://huginn:huginn@127.0.0.1:5432/huginn" \
-            huginn-hub:${{ github.ref_name }}
+            "ghcr.io/${owner}/huginn-hub:${VERSION}"
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/healthz; then
               echo
