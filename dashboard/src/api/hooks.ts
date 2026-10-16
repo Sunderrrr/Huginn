@@ -9,6 +9,7 @@ import { api } from "./client";
 // helper keeps a forged `x?y` from ever reaching the router.
 const enc = (v: string) => encodeURIComponent(v);
 
+import { TERMINAL_TASK_STATUS } from "./types";
 import type {
   BackupList,
   BackupRunResult,
@@ -74,6 +75,21 @@ export function useSettings() {
   return useQuery({
     queryKey: ["settings"],
     queryFn: () => api.get<Settings>("/api/settings"),
+  });
+}
+
+// A single queued task, polled until it reaches a terminal state — the
+// progress display for endpoints that answer 202 + a pending task
+// (browser runs, engine installs).
+export function useTask(id: string | null) {
+  return useQuery({
+    queryKey: ["task", id],
+    queryFn: () => api.get<Task>(`/api/tasks/${enc(id as string)}`),
+    enabled: !!id,
+    refetchInterval: (query) =>
+      query.state.data && TERMINAL_TASK_STATUS.has(query.state.data.status)
+        ? false
+        : 2_000,
   });
 }
 
@@ -203,6 +219,43 @@ export function useTriggerUpdate() {
   const invalidate = useInvalidate(["vms", "vm", "audit"]);
   return useMutation({
     mutationFn: (id: string) => api.post<Task>(`/api/vms/${enc(id)}/update`),
+    onSuccess: invalidate,
+  });
+}
+
+// --- Browser automation (per-VM gate + engine install + step runner) ---
+
+// Admin-only: flip the per-VM browser automation gate.
+export function useSetBrowserEnabled() {
+  const invalidate = useInvalidate(["vms", "vm", "audit"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; enabled: boolean }) =>
+      api.put<VM>(`/api/vms/${enc(vars.id)}/browser-enabled`, { enabled: vars.enabled }),
+    onSuccess: invalidate,
+  });
+}
+
+// Admin-only: queue the pinned engine download (~70 MiB). Deliberately no
+// body — the release coordinates live in the fleet settings, and this POST
+// must not carry a Content-Type at all (the hub expects an empty body).
+export function useInstallBrowserEngine() {
+  const invalidate = useInvalidate(["audit"]);
+  return useMutation({
+    mutationFn: (id: string) => api.post<Task>(`/api/vms/${enc(id)}/browser-install`),
+    onSuccess: invalidate,
+  });
+}
+
+// Operator+: queue an Obscura step run. The hub answers 202 + the pending
+// task; the caller follows it with useTask (the hub re-validates the steps).
+export function useRunBrowserTask() {
+  const invalidate = useInvalidate(["audit"]);
+  return useMutation({
+    mutationFn: (vars: { id: string; steps: unknown[]; timeout: number }) =>
+      api.post<Task>(`/api/vms/${enc(vars.id)}/browser`, {
+        steps: vars.steps,
+        timeout: vars.timeout,
+      }),
     onSuccess: invalidate,
   });
 }

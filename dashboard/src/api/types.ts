@@ -116,12 +116,14 @@ export interface VM {
   approved_at: string | null;
   created_at: string;
   tags: Tag[];
+  // Browser automation gate (off by default; an admin flips it per VM).
+  browser_enabled: boolean;
 }
 
 export interface Task {
   id: string;
   vm_id: string;
-  type: "action" | "command" | "update" | "uninstall";
+  type: "action" | "command" | "update" | "uninstall" | "browser" | "browser_install";
   action_name: string | null;
   status: TaskStatus;
   exit_code: number | null;
@@ -131,6 +133,15 @@ export interface Task {
   created_at: string;
   finished_at: string | null;
 }
+
+// Statuses a task never leaves — used to stop task polling.
+export const TERMINAL_TASK_STATUS: ReadonlySet<TaskStatus> = new Set([
+  "succeeded",
+  "failed",
+  "timeout",
+  "dead_letter",
+  "cancelled",
+]);
 
 export interface EnrollmentToken {
   id: string;
@@ -200,6 +211,9 @@ export interface Settings {
   backup_s3_secret_key_configured?: boolean;
   backup_s3_retention_days?: number | null;
   enrollment_base_url?: string | null;
+  // Browser automation: the pinned Obscura engine release `browser_install`
+  // tasks download (admin-only read; workers get it via the task payload).
+  browser_engine_version?: string;
   // SSO / OIDC / LDAP / notifications fields are admin-only and optional here.
   oidc_provider_name?: string;
   notifications_enabled?: boolean;
