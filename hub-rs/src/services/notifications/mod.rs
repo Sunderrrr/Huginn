@@ -517,6 +517,7 @@ pub(crate) mod testing {
             backup_s3_access_key: String::new(),
             backup_s3_secret_key: None,
             backup_s3_retention_days: 30,
+            enrollment_base_url: String::new(),
         }
     }
 }

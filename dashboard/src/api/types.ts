@@ -199,6 +199,7 @@ export interface Settings {
   backup_s3_secret_key?: string | null;
   backup_s3_secret_key_configured?: boolean;
   backup_s3_retention_days?: number | null;
+  enrollment_base_url?: string | null;
   // SSO / OIDC / LDAP / notifications fields are admin-only and optional here.
   oidc_provider_name?: string;
   notifications_enabled?: boolean;

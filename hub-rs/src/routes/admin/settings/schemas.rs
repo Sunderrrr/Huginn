@@ -60,6 +60,7 @@ pub struct SettingsOut {
     pub backup_s3_access_key: String,
     pub backup_s3_secret_key_configured: bool,
     pub backup_s3_retention_days: i32,
+    pub enrollment_base_url: String,
 }
 
 impl SettingsOut {
@@ -102,6 +103,7 @@ impl SettingsOut {
             backup_s3_access_key: row.backup_s3_access_key.clone(),
             backup_s3_secret_key_configured: row.backup_s3_secret_configured(),
             backup_s3_retention_days: row.backup_s3_retention_days,
+        enrollment_base_url: row.enrollment_base_url.clone(),
         }
     }
 }
@@ -423,6 +425,7 @@ pub fn values_from(row: &Setting) -> SettingValues {
         backup_s3_access_key: row.backup_s3_access_key.clone(),
         backup_s3_secret_key: row.backup_s3_secret_key.clone(),
         backup_s3_retention_days: row.backup_s3_retention_days,
+        enrollment_base_url: row.enrollment_base_url.clone(),
     }
 }
 
@@ -471,5 +474,6 @@ pub fn setting_row(values: SettingValues, updated_at: DateTime<Utc>) -> Setting 
         backup_s3_access_key: values.backup_s3_access_key,
         backup_s3_secret_key: values.backup_s3_secret_key,
         backup_s3_retention_days: values.backup_s3_retention_days,
+        enrollment_base_url: values.enrollment_base_url.clone(),
     }
 }

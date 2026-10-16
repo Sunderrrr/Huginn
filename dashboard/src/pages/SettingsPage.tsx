@@ -19,6 +19,7 @@ export function SettingsPage() {
   const [repo, setRepo] = useState("");
   const [domains, setDomains] = useState("");
   const [autoUpdate, setAutoUpdate] = useState(false);
+  const [enrollmentUrl, setEnrollmentUrl] = useState("");
 
   // SSO / OIDC
   const [oidcEnabled, setOidcEnabled] = useState(false);
@@ -53,6 +54,7 @@ export function SettingsPage() {
       setRepo(settings.target_release_repo);
       setDomains(settings.allowed_release_domains.join(", "));
       setAutoUpdate(!!settings.auto_update_enabled);
+      setEnrollmentUrl(settings.enrollment_base_url || "");
     }
   }, [settings]);
 
@@ -98,6 +100,7 @@ export function SettingsPage() {
         target_release_repo: repo,
         allowed_release_domains: domains.split(",").map((d) => d.trim()).filter(Boolean),
         auto_update_enabled: autoUpdate,
+        enrollment_base_url: enrollmentUrl,
         oidc_enabled: oidcEnabled,
         oidc_provider_name: oidcProviderName,
         oidc_issuer: oidcIssuer,
@@ -271,7 +274,24 @@ export function SettingsPage() {
               <Hint>Receives a JSON payload: {"{ event, message, vm, task, ts }"}.</Hint>
             </Field>
             <div>
-              <label className="lbl">Events</label>
+              
+            <label className="lbl" style={{ marginTop: 16 }}>Enrollment install URL</label>
+            <input
+              className="field"
+              type="text"
+              value={enrollmentUrl}
+              onChange={(e) => setEnrollmentUrl(e.target.value)}
+              placeholder={window.location.origin}
+              spellCheck={false}
+              style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
+            />
+            <p className="muted tiny" style={{ marginTop: 4, lineHeight: 1.5 }}>
+              The address workers use to download the installer and enroll (shown in the
+              "Add VM" modal). Set it to your VPN/LAN IP so workers connect directly.
+              Leave empty to use the dashboard origin.
+            </p>
+
+<label className="lbl">Events</label>
               <div className="stack" style={{ gap: 8, marginTop: 4 }}>
                 <label className="row" style={{ gap: 8, cursor: "pointer" }}>
                   <input type="checkbox" checked={notifyOffline} onChange={(e) => setNotifyOffline(e.target.checked)} disabled={!isAdmin} />
