@@ -14,6 +14,7 @@
 //! | `POST   /api/vms/{vm_id}/actions`       | `execution.run_action`               |
 //! | `POST   /api/vms/{vm_id}/commands`      | `execution.run_command`              |
 //! | `POST   /api/vms/{vm_id}/update`        | `execution.trigger_update`           |
+//! | `POST   /api/vms/{vm_id}/browser`       | `browser.run_browser` (hub-rs ext)   |
 //! | `GET    /api/tasks/{task_id}`           | `tasks.get_task`                     |
 //! | `GET    /api/tasks/{task_id}/wait`      | `tasks.wait_task`                    |
 //! | `GET    /api/audit`                     | `audit.list_audit`                   |
@@ -32,6 +33,7 @@
 //! (the `WWW-Authenticate: Bearer` challenge, which FastAPI sends on 401).
 
 pub mod audit;
+pub mod browser;
 pub mod events;
 pub mod execution;
 pub mod tasks;
@@ -276,6 +278,7 @@ impl FleetState {
 pub fn router(state: FleetState) -> Router {
     vms::router(state.clone())
         .merge(execution::router(state.clone()))
+        .merge(browser::router(state.clone()))
         .merge(tasks::router(state.clone()))
         .merge(audit::router(state.clone()))
         .merge(events::router(state))
