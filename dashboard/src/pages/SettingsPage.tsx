@@ -165,6 +165,23 @@ export function SettingsPage() {
               </label>
               <Hint>When on, the hub queues an update for any worker whose version differs from the target — no manual click needed.</Hint>
             </div>
+            <Field label="Enrollment install URL">
+              <input
+                className="field"
+                type="text"
+                value={enrollmentUrl}
+                onChange={(e) => setEnrollmentUrl(e.target.value)}
+                disabled={!isAdmin}
+                placeholder={window.location.origin}
+                spellCheck={false}
+                style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
+              />
+              <Hint>
+                The address workers use to download the installer and enroll (shown in the
+                "Add VM" modal). Set it to your VPN/LAN IP (e.g. https://100.73.x.x) so
+                workers connect directly. Leave empty to use the dashboard origin.
+              </Hint>
+            </Field>
           </div>
         </motion.div>
 
@@ -273,24 +290,6 @@ export function SettingsPage() {
               <input className="field" value={genericUrl} onChange={(e) => setGenericUrl(e.target.value)} disabled={!isAdmin} placeholder="https://example.com/hook (Slack, n8n, custom)" />
               <Hint>Receives a JSON payload: {"{ event, message, vm, task, ts }"}.</Hint>
             </Field>
-            <div>
-              
-            <label className="lbl" style={{ marginTop: 16 }}>Enrollment install URL</label>
-            <input
-              className="field"
-              type="text"
-              value={enrollmentUrl}
-              onChange={(e) => setEnrollmentUrl(e.target.value)}
-              placeholder={window.location.origin}
-              spellCheck={false}
-              style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
-            />
-            <p className="muted tiny" style={{ marginTop: 4, lineHeight: 1.5 }}>
-              The address workers use to download the installer and enroll (shown in the
-              "Add VM" modal). Set it to your VPN/LAN IP so workers connect directly.
-              Leave empty to use the dashboard origin.
-            </p>
-
 <label className="lbl">Events</label>
               <div className="stack" style={{ gap: 8, marginTop: 4 }}>
                 <label className="row" style={{ gap: 8, cursor: "pointer" }}>
@@ -306,7 +305,7 @@ export function SettingsPage() {
                   <span style={{ fontSize: 13 }}>Task failed</span>
                 </label>
               </div>
-            </div>
+
           </div>
         </motion.div>
 
