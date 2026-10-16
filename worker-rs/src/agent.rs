@@ -241,6 +241,22 @@ impl Agent {
                     (failure("browser not supported on this OS"), false)
                 }
             }
+            // Engine install (admin-triggered, hub-pinned version + SHA-256):
+            // downloads the Obscura release into the Huginn-managed root.
+            // Linux-only with the rest of the browser feature.
+            "browser_install" => {
+                #[cfg(target_os = "linux")]
+                {
+                    (
+                        crate::browser::run_browser_install_task(&task, &self.state_dir).await,
+                        false,
+                    )
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    (failure("browser not supported on this OS"), false)
+                }
+            }
             other => (failure(&format!("unknown task type: {other}")), false),
         }
     }
@@ -433,10 +449,20 @@ impl Agent {
         let binary_path = self.state.lock().await.binary_location();
         let _ = std::fs::remove_file(&binary_path);
         let _ = std::fs::remove_dir_all(config::DEFAULT_STATE_DIR);
+        let mut notes = vec!["worker service removed, binary and state cleaned up".to_owned()];
+        // The browser engine (Obscura) lives under its own managed roots;
+        // uninstall it with the rest (Linux only — the feature answers
+        // "not supported" everywhere else, leaving nothing to clean).
+        #[cfg(target_os = "linux")]
+        {
+            for root in crate::browser::uninstall_cleanup(&self.state_dir) {
+                notes.push(format!("browser engine removed: {root}"));
+            }
+        }
         TaskResult {
             status: "succeeded".into(),
             exit_code: Some(0),
-            stdout: "worker service removed, binary and state cleaned up".into(),
+            stdout: notes.join("; "),
             ..Default::default()
         }
     }

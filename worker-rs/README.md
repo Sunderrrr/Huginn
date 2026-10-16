@@ -34,7 +34,16 @@ worker-rs/
     ├── exec.rs        # execute fixed argv vectors (never sh -c) or gated shell
     ├── whitelist.rs   # built-in actions -> argv vectors + param validation
     ├── update.rs      # self-update: allowlisted download, SHA-256, atomic swap
-    └── systemd.rs     # install/enable the systemd unit
+    ├── systemd.rs     # install/enable the systemd unit
+    └── browser/       # browser automation via Obscura (Linux only)
+        ├── mod.rs     #   task handler + install discovery (<root>/<version>/obscura)
+        ├── process.rs #   `obscura serve` child: ephemeral loopback port, CDP token,
+        │              #   process-group kill, memory/connection caps
+        ├── cdp.rs     #   minimal CDP client (tokio-tungstenite, ~8 methods)
+        ├── steps.rs   #   step parsing + worker-side re-validation
+        ├── install.rs #   `browser_install` task: pinned download, SHA-256, strict
+        │              #   extraction, license, smoke test
+        └── tests.rs / e2e.rs  # unit tests + real-Obscura E2E (HUGINN_OBSCURA_E2E=1)
 ```
 
 ## CLI
@@ -63,6 +72,17 @@ environment. State lives at `/etc/huginn/worker.json` (mode `0600`).
   `allow_insecure` (dev).
 - **Self-update** — downloads only from the SSRF allowlist, verifies SHA-256, and
   swaps the binary atomically with rollback.
+- **Browser automation (Linux only)** — `browser` tasks drive a local
+  [Obscura](https://github.com/h4ckf0r0day/obscura) headless browser over CDP
+  (loopback-only, random bearer token, own process group, hard kill on every
+  exit path). The engine itself is **not embedded**: an admin triggers a
+  `browser_install` task, which downloads the hub-pinned release from GitHub
+  (SSRF-allowlisted, SHA-256 verified, glibc ≥ 2.35 checked), extracts strictly
+  (only the two engine binaries, no links, no traversal) into
+  `/opt/huginn/obscura/<version>/` with its Apache-2.0 license, and smoke-tests
+  `obscura --version`. Uninstall removes the engine with the rest. Windows and
+  non-Linux builds answer "browser not supported on this OS". See
+  [../docs/browser.md](../docs/browser.md).
 
 See `PARITY.md` for the behaviour/test map against the reference worker, and
 [../CONTRIBUTING.md](../CONTRIBUTING.md) for how to add an action.
