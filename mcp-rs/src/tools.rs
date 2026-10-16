@@ -24,10 +24,13 @@ pub const INSTRUCTIONS: &str = r#"Huginn — fleet control. How to use these too
    for a single one-off status check, not for busy-waiting.
 4. Every action is audited and attributed to your user. Stay within scope.
 5. Browser automation (Linux VMs only): browser_start executes a sequence of steps
-   on a headless browser (navigate → click → type → eval → screenshot). For a
-   quick page text, use browser_navigate. For a screenshot, use browser_screenshot.
-   The Obscura engine must first be installed with browser_install (admin) and
-   the VM's browser capability enabled by an admin (dashboard) — a 403
+   on a headless browser — navigate, click, type, press_key, hover, scroll,
+   eval, set_viewport, screenshot (jpeg/png/full-page), pdf, get_text,
+   get_html, title, wait_for, wait_for_text, get_cookies, set_cookies.
+   Shortcuts: browser_navigate (page text), browser_screenshot (image),
+   browser_eval (JS result), browser_pdf (PDF export). The Obscura engine
+   must first be installed with browser_install (admin) and the VM's
+   browser capability enabled by an admin (dashboard) — a 403
    "browser automation is disabled" means that step is missing.
 "#;
 
@@ -153,8 +156,137 @@ fn validate_steps(steps: &Value) -> Result<(), Value> {
                     ));
                 }
             }
-            // Parameterless steps; screenshot params are validated hub-side.
-            "screenshot" | "get_text" | "get_html" => {}
+            // Parameterless reads/captures; their parameters are validated
+            // hub- and worker-side (format/quality/full_page, pdf paper).
+            "screenshot" | "pdf" | "get_text" | "get_html" | "title" | "get_cookies" => {}
+            "press_key" => {
+                let Some(key) = field("key") else {
+                    return Err(tool_error(400, format!("step {n}: press_key requires key")));
+                };
+                let named = [
+                    "enter",
+                    "tab",
+                    "escape",
+                    "backspace",
+                    "delete",
+                    "home",
+                    "end",
+                    "pageup",
+                    "pagedown",
+                    "arrowup",
+                    "arrowdown",
+                    "arrowleft",
+                    "arrowright",
+                ];
+                let ok = named.contains(&key.to_lowercase().as_str())
+                    || (key.len() == 1 && key.as_bytes()[0].is_ascii_graphic());
+                if !ok {
+                    return Err(tool_error(
+                        400,
+                        format!(
+                            "step {n}: press_key key must be a named key or a single ASCII char"
+                        ),
+                    ));
+                }
+            }
+            "hover" => {
+                let Some(sel) = field("selector") else {
+                    return Err(tool_error(
+                        400,
+                        format!("step {n}: hover requires selector"),
+                    ));
+                };
+                if sel.len() > BROWSER_MAX_SELECTOR {
+                    return Err(tool_error(
+                        400,
+                        format!("step {n}: selector exceeds {BROWSER_MAX_SELECTOR} chars"),
+                    ));
+                }
+            }
+            "scroll" => {
+                let sel = field("selector");
+                let to = field("to");
+                match (sel, to) {
+                    (Some(s), None) if s.len() <= BROWSER_MAX_SELECTOR => {}
+                    (None, Some(t)) if t == "top" || t == "bottom" => {}
+                    _ => {
+                        return Err(tool_error(
+                            400,
+                            format!("step {n}: scroll takes either selector or to (top|bottom)"),
+                        ));
+                    }
+                }
+            }
+            "set_viewport" => {
+                let (w, h) = (
+                    obj.get("width").and_then(Value::as_u64),
+                    obj.get("height").and_then(Value::as_u64),
+                );
+                match (w, h) {
+                    (Some(w), Some(h))
+                        if (200..=5000).contains(&w) && (200..=5000).contains(&h) => {}
+                    _ => {
+                        return Err(tool_error(
+                            400,
+                            format!("step {n}: set_viewport requires width and height (200-5000)"),
+                        ));
+                    }
+                }
+            }
+            "wait_for_text" => {
+                let Some(text) = field("text") else {
+                    return Err(tool_error(
+                        400,
+                        format!("step {n}: wait_for_text requires text"),
+                    ));
+                };
+                if text.len() > 512 {
+                    return Err(tool_error(400, format!("step {n}: text exceeds 512 chars")));
+                }
+            }
+            "set_cookies" => {
+                let Some(cookies) = obj.get("cookies").and_then(Value::as_array) else {
+                    return Err(tool_error(
+                        400,
+                        format!("step {n}: set_cookies requires a cookies array"),
+                    ));
+                };
+                if cookies.is_empty() || cookies.len() > 20 {
+                    return Err(tool_error(
+                        400,
+                        format!("step {n}: set_cookies takes 1-20 cookies"),
+                    ));
+                }
+                for (ci, spec) in cookies.iter().enumerate() {
+                    let Some(c) = spec.as_object() else {
+                        return Err(tool_error(
+                            400,
+                            format!("step {n}: cookie {} must be an object", ci + 1),
+                        ));
+                    };
+                    let name = c.get("name").and_then(Value::as_str).unwrap_or("");
+                    let value = c.get("value").and_then(Value::as_str).unwrap_or("");
+                    let url = c.get("url").and_then(Value::as_str).unwrap_or("");
+                    if name.is_empty() || name.len() > 256 {
+                        return Err(tool_error(
+                            400,
+                            format!("step {n}: cookie {} name must be 1-256 chars", ci + 1),
+                        ));
+                    }
+                    if value.len() > 4 * 1024 {
+                        return Err(tool_error(
+                            400,
+                            format!("step {n}: cookie {} value exceeds 4 KiB", ci + 1),
+                        ));
+                    }
+                    if !safe_url(url) {
+                        return Err(tool_error(
+                            400,
+                            format!("step {n}: cookie {} url must be http(s)://", ci + 1),
+                        ));
+                    }
+                }
+            }
             other => {
                 return Err(tool_error(
                     400,
@@ -535,6 +667,32 @@ pub async fn call_tool(
             let steps = json!([{"action": "navigate", "url": url}, {"action": "eval", "js": js}]);
             run_browser_steps(&hub, ctx, vm, steps, timeout).await
         }
+        "browser_pdf" => {
+            let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
+                return tool_error(400, "vm_id is required");
+            };
+            let Some(url) = args.get("url").and_then(Value::as_str) else {
+                return tool_error(400, "url is required");
+            };
+            if !safe_url(url) {
+                return tool_error(
+                    400,
+                    format!("url must be http(s):// and at most {BROWSER_MAX_URL} chars"),
+                );
+            }
+            let timeout = match browser_timeout(args) {
+                Ok(t) => t,
+                Err(e) => return e,
+            };
+            // Shortcut: navigate, then export the page as a PDF (Obscura's
+            // Page.printToPDF) — the base64 PDF rides stdout as a
+            // data:application/pdf;base64 tag.
+            let steps = json!([
+                {"action": "navigate", "url": url},
+                {"action": "pdf", "landscape": false, "print_background": true}
+            ]);
+            run_browser_steps(&hub, ctx, vm, steps, timeout).await
+        }
         "trigger_update" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
                 return tool_error(400, "vm_id is required");
@@ -716,7 +874,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "browser_start",
-            "description": "Open a headless browser on a VM and execute a sequence of steps in one tab\n(``vm_id`` may be a VM id or its name; Linux VMs only — the browser capability\nmust be enabled on the VM by an admin).\n\nSteps run in order: navigate{url}, click{selector}, type{selector,text},\neval{js}, screenshot{format,quality}, get_text, get_html,\nwait_for{selector,timeout_ms}. Example:\n\n    steps=[{\"action\":\"navigate\",\"url\":\"https://example.com\"},\n           {\"action\":\"type\",\"selector\":\"#q\",\"text\":\"rust\"},\n           {\"action\":\"click\",\"selector\":\"#go\"},\n           {\"action\":\"get_text\"}]\n\nReturns the task with the step results inline — page text/HTML, eval results,\nand the screenshot as base64 in stdout when requested.",
+            "description": "Open a headless browser on a VM and execute a sequence of steps in one tab\n(``vm_id`` may be a VM id or its name; Linux VMs only — the browser capability\nmust be enabled on the VM by an admin, and the engine installed with\nbrowser_install).\n\nSteps run in order: navigate{url}, click{selector}, type{selector,text},\npress_key{key}, hover{selector}, scroll{selector|to}, eval{js},\nset_viewport{width,height}, screenshot{format,quality,full_page},\npdf{landscape,print_background,paper_width,paper_height}, get_text, get_html,\ntitle, wait_for{selector,timeout_ms}, wait_for_text{text,timeout_ms},\nget_cookies, set_cookies{cookies:[{name,value,url}]}. Example:\n\n    steps=[{\"action\":\"navigate\",\"url\":\"https://example.com\"},\n           {\"action\":\"type\",\"selector\":\"#q\",\"text\":\"rust\"},\n           {\"action\":\"click\",\"selector\":\"#go\"},\n           {\"action\":\"get_text\"}]\n\nReturns the task with the step results inline — page text/HTML, eval results,\nand captures (screenshots, PDF) as base64 data: tags in stdout.\nNote: set_cookies fills Obscura's request cookie jar (carried by subsequent\nnavigations), not the page's document.cookie.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -770,6 +928,19 @@ pub fn tool_definitions() -> Value {
                     "timeout": {"type": "integer", "default": 120, "description": "seconds (1-300)"}
                 },
                 "required": ["vm_id", "url", "js"]
+            }
+        },
+        {
+            "name": "browser_pdf",
+            "description": "Export a web page as a PDF on a VM: navigate to the URL, render the page\n(Obscura's Page.printToPDF), and return the base64 PDF as a\ndata:application/pdf tag in stdout (``vm_id`` may be a VM id or its name;\nLinux VMs only — the browser capability must be enabled on the VM by an\nadmin, and the engine installed with browser_install).\n\nShortcut for browser_start with a navigate + pdf step sequence.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm_id": {"type": "string"},
+                    "url": {"type": "string", "description": "http(s) URL to load"},
+                    "timeout": {"type": "integer", "default": 120, "description": "seconds (1-300)"}
+                },
+                "required": ["vm_id", "url"]
             }
         }
     ])
@@ -1202,6 +1373,148 @@ mod tests {
 
     /// `browser_install` resolves the VM by name and POSTs the (bodyless)
     /// install route — the coordinates stay hub-pinned.
+    /// The full Obscura step vocabulary passes validation and reaches the
+    /// hub untouched.
+    #[tokio::test]
+    async fn browser_start_accepts_the_full_step_vocabulary() {
+        let server = wiremock::MockServer::start().await;
+        let body = wiremock::matchers::body_partial_json(json!({
+            "steps": [
+                {"action": "navigate", "url": "https://example.com"},
+                {"action": "press_key", "key": "enter"},
+                {"action": "hover", "selector": "#menu"},
+                {"action": "scroll", "to": "bottom"},
+                {"action": "scroll", "selector": "#footer"},
+                {"action": "set_viewport", "width": 1280, "height": 800},
+                {"action": "screenshot", "format": "png", "full_page": true},
+                {"action": "pdf", "landscape": true},
+                {"action": "title"},
+                {"action": "wait_for_text", "text": "done", "timeout_ms": 3000},
+                {"action": "get_cookies"},
+                {"action": "set_cookies", "cookies": [
+                    {"name": "s", "value": "v", "url": "https://example.com/"}
+                ]}
+            ],
+            "timeout": 60
+        }));
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/55555555-5555-5555-5555-555555555555/browser",
+            ))
+            .and(body)
+            .respond_with(
+                wiremock::ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "id": "t1", "type": "browser", "status": "pending"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_start",
+            &tool_args(&[
+                ("vm_id", json!("55555555-5555-5555-5555-555555555555")),
+                (
+                    "steps",
+                    json!([
+                        {"action": "navigate", "url": "https://example.com"},
+                        {"action": "press_key", "key": "enter"},
+                        {"action": "hover", "selector": "#menu"},
+                        {"action": "scroll", "to": "bottom"},
+                        {"action": "scroll", "selector": "#footer"},
+                        {"action": "set_viewport", "width": 1280, "height": 800},
+                        {"action": "screenshot", "format": "png", "full_page": true},
+                        {"action": "pdf", "landscape": true},
+                        {"action": "title"},
+                        {"action": "wait_for_text", "text": "done", "timeout_ms": 3000},
+                        {"action": "get_cookies"},
+                        {"action": "set_cookies", "cookies": [
+                            {"name": "s", "value": "v", "url": "https://example.com/"}
+                        ]}
+                    ]),
+                ),
+                ("timeout", json!(60)),
+            ]),
+        )
+        .await;
+        assert_eq!(out["status"], "pending");
+    }
+
+    /// The new step fields are guarded before any hub call.
+    #[test]
+    fn browser_start_guards_the_new_step_fields() {
+        for bad in [
+            json!([{"action": "press_key", "key": "ctrl+a"}]),
+            json!([{"action": "press_key"}]),
+            json!([{"action": "hover"}]),
+            json!([{"action": "scroll"}]),
+            json!([{"action": "scroll", "to": "side"}]),
+            json!([{"action": "scroll", "selector": "#a", "to": "bottom"}]),
+            json!([{"action": "set_viewport", "width": 10, "height": 800}]),
+            json!([{"action": "set_viewport", "width": 1280}]),
+            json!([{"action": "wait_for_text"}]),
+            json!([{"action": "wait_for_text", "text": "x".repeat(513)}]),
+            json!([{"action": "set_cookies"}]),
+            json!([{"action": "set_cookies", "cookies": []}]),
+            json!([{"action": "set_cookies", "cookies": [
+                {"name": "s", "value": "v", "url": "file:///etc"}
+            ]}]),
+            json!([{"action": "teleport", "to": "mars"}]),
+        ] {
+            let err = validate_steps(&bad).unwrap_err();
+            assert_eq!(err["error"]["status"], 400, "{bad} must be refused");
+        }
+        // The valid forms pass.
+        assert!(validate_steps(&json!([
+            {"action": "press_key", "key": "Enter"},
+            {"action": "press_key", "key": "a"},
+        ]))
+        .is_ok());
+    }
+
+    /// `browser_pdf` posts a navigate + pdf step sequence.
+    #[tokio::test]
+    async fn browser_pdf_posts_navigate_pdf_steps() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/55555555-5555-5555-5555-555555555555/browser",
+            ))
+            .and(wiremock::matchers::body_json(json!({
+                "steps": [
+                    {"action": "navigate", "url": "https://example.com/report"},
+                    {"action": "pdf", "landscape": false, "print_background": true}
+                ],
+                "timeout": 90
+            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "id": "t1", "type": "browser", "status": "pending"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_pdf",
+            &tool_args(&[
+                ("vm_id", json!("55555555-5555-5555-5555-555555555555")),
+                ("url", json!("https://example.com/report")),
+                ("timeout", json!(90)),
+            ]),
+        )
+        .await;
+        assert_eq!(out["status"], "pending");
+    }
+
     #[tokio::test]
     async fn browser_install_posts_the_install_route() {
         let server = wiremock::MockServer::start().await;

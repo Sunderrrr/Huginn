@@ -170,7 +170,7 @@ mod tests {
                 .unwrap();
         let resp = handle_message(&s, &ctx, &list).await.unwrap();
         let tools_arr = resp["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools_arr.len(), 14, "14 tools expected");
+        assert_eq!(tools_arr.len(), 15, "15 tools expected");
         let names: Vec<&str> = tools_arr
             .iter()
             .filter_map(|t| t["name"].as_str())
