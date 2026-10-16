@@ -24,6 +24,14 @@ regex = "1"
 # crates, and a Windows build pulls no libc.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Browser automation (Linux only — the Windows build answers "browser not
+# supported on this OS"): the minimal CDP client in src/browser.rs speaks
+# JSON-RPC over a loopback WebSocket, so no browser SDK is pulled in.
+# tokio-tungstenite's rustls feature set keeps the TLS types available for
+# wss:// without changing the loopback ws:// path used here.
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tungstenite = "0.24"
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 # Windows service (SCM) management + the service dispatcher.

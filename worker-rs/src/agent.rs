@@ -27,6 +27,11 @@ pub struct Agent {
     pub client: Option<Arc<Client>>,
     pub runner: Arc<dyn Runner>,
     pub state: Arc<Mutex<State>>,
+    /// The --state-dir this worker runs with (widens the Obscura install
+    /// search for browser tasks). Read only on Linux — the only OS where
+    /// browser tasks execute.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub state_dir: Arc<String>,
     pub heartbeat_interval: Duration,
     pub poll_interval: Duration,
     /// How long the hub holds an empty /tasks/next request. 0 disables
@@ -43,11 +48,17 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(client: Arc<Client>, state: State, shutdown: watch::Receiver<()>) -> Self {
+    pub fn new(
+        client: Arc<Client>,
+        state: State,
+        state_dir: &str,
+        shutdown: watch::Receiver<()>,
+    ) -> Self {
         Self {
             client: Some(client),
             runner: Arc::new(crate::exec::CommandRunner),
             state: Arc::new(Mutex::new(state)),
+            state_dir: Arc::new(state_dir.to_owned()),
             heartbeat_interval: Duration::from_secs(30),
             poll_interval: Duration::from_secs(2),
             long_poll_seconds: 25,
@@ -65,6 +76,7 @@ impl Agent {
             client: None,
             runner,
             state: Arc::new(Mutex::new(State::default())),
+            state_dir: Arc::new(config::DEFAULT_STATE_DIR.to_string()),
             heartbeat_interval: Duration::from_secs(30),
             poll_interval: Duration::from_secs(2),
             long_poll_seconds: 25,
@@ -213,6 +225,22 @@ impl Agent {
             "command" => (self.run_command(&task).await, false),
             "update" => self.run_update(&task).await,
             "uninstall" => (self.run_uninstall().await, false),
+            // Browser automation is Linux-only: the worker drives a local
+            // Obscura headless-browser process over CDP. Every other OS
+            // answers a clean failure instead of queue-losing.
+            "browser" => {
+                #[cfg(target_os = "linux")]
+                {
+                    (
+                        crate::browser::run_browser_task(&task, &self.state_dir).await,
+                        false,
+                    )
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    (failure("browser not supported on this OS"), false)
+                }
+            }
             other => (failure(&format!("unknown task type: {other}")), false),
         }
     }
