@@ -12,8 +12,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-use super::steps::ScreenshotFormat;
-use super::{truncate_chars, MAX_SCREENSHOT_B64};
+use super::steps::{CookieSpec, PdfOptions, ScreenshotFormat};
+use super::{truncate_chars, MAX_PDF_B64, MAX_SCREENSHOT_B64};
 use tokio::net::TcpStream;
 
 /// Per-CDP-command timeouts.
@@ -21,6 +21,7 @@ const CMD_TIMEOUT: Duration = Duration::from_secs(30);
 const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(60);
 const EVAL_TIMEOUT: Duration = Duration::from_secs(45);
 const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(60);
+const PDF_TIMEOUT: Duration = Duration::from_secs(90);
 /// Extra wait for the load event after `Page.navigate` answered.
 const LOAD_EVENT_GRACE: Duration = Duration::from_secs(10);
 
@@ -255,17 +256,19 @@ impl CdpClient {
     /// `Page.captureScreenshot`. Obscura encodes JPEG natively (`format`
     /// jpeg/png + `quality`), so no PNG→JPEG conversion happens here; the
     /// base64 payload is validated (decodes, right magic, non-empty) and
-    /// capped at [`MAX_SCREENSHOT_B64`].
+    /// capped at [`MAX_SCREENSHOT_B64`]. `full_page` adds
+    /// `captureBeyondViewport` (content below the fold included).
     pub async fn screenshot(
         &mut self,
         format: ScreenshotFormat,
         quality: u8,
+        full_page: bool,
     ) -> Result<String, String> {
         let fmt = match format {
             ScreenshotFormat::Jpeg => "jpeg",
             ScreenshotFormat::Png => "png",
         };
-        let mut params = json!({ "format": fmt });
+        let mut params = json!({ "format": fmt, "captureBeyondViewport": full_page });
         if format == ScreenshotFormat::Jpeg {
             params["quality"] = json!(quality);
         }
@@ -295,6 +298,236 @@ impl CdpClient {
             return Err("screenshot is not a valid image".into());
         }
         Ok(data)
+    }
+
+    /// `Page.printToPDF` — Obscura's PDF export (render build). The base64
+    /// payload is validated (decodes, `%PDF` magic) and capped at
+    /// [`MAX_PDF_B64`].
+    pub async fn pdf(&mut self, options: &PdfOptions) -> Result<String, String> {
+        let params = json!({
+            "landscape": options.landscape,
+            "printBackground": options.print_background,
+            "paperWidth": options.paper_width,
+            "paperHeight": options.paper_height,
+        });
+        let res = self
+            .send_session("Page.printToPDF", params, PDF_TIMEOUT)
+            .await?;
+        // Some encoders wrap base64 with newlines — strip all whitespace
+        // before validating (a stray separator would break the decode).
+        let data: String = res
+            .get("data")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "cdp printToPDF: missing data".to_owned())?
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        if data.len() > MAX_PDF_B64 {
+            return Err(format!(
+                "pdf too large ({} KiB base64, cap {} KiB)",
+                data.len() / 1024,
+                MAX_PDF_B64 / 1024
+            ));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&data)
+            .map_err(|e| format!("pdf decode failed: {e}"))?;
+        if !bytes.starts_with(b"%PDF") {
+            return Err("pdf export is not a valid PDF".into());
+        }
+        Ok(data)
+    }
+
+    /// `Input.dispatchKeyEvent` pair (keyDown + keyUp) for one normalized
+    /// key spec (see [`super::steps::key_spec`]). Verified against Obscura.
+    pub async fn press_key(
+        &mut self,
+        normalized: &str,
+        chrome: &str,
+        vk: u16,
+    ) -> Result<(), String> {
+        // Enter carries a text payload like Chrome does; other control keys
+        // have none. Printable characters ride `text` on the keyDown.
+        let text = if normalized == "enter" {
+            "\r"
+        } else if normalized.len() == 1 {
+            normalized
+        } else {
+            ""
+        };
+        self.send_session(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": "keyDown",
+                "key": chrome,
+                "windowsVirtualKeyCode": vk,
+                "nativeVirtualKeyCode": vk,
+                "text": text,
+            }),
+            CMD_TIMEOUT,
+        )
+        .await?;
+        self.send_session(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": "keyUp",
+                "key": chrome,
+                "windowsVirtualKeyCode": vk,
+                "nativeVirtualKeyCode": vk,
+            }),
+            CMD_TIMEOUT,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Move the mouse to the element's center (`Input.dispatchMouseEvent`
+    /// type `mouseMoved`) — the coordinates come from a `getBoundingClientRect`
+    /// eval, so no JS event is synthesized: it is a trusted mouse move.
+    pub async fn hover_selector(&mut self, selector: &str) -> Result<(), String> {
+        let js = format!(
+            "(function(){{var el=document.querySelector({});\
+             if(!el){{return 'not-found'}};var r=el.getBoundingClientRect();\
+             var cx=r.left+r.width/2;var cy=r.top+r.height/2;return cx+','+cy}})()",
+            js_string(selector)
+        );
+        let coords = self.eval(&js).await.and_then(value_to_string)?;
+        if coords == "not-found" {
+            return Err(format!(
+                "selector not found for hover: {}",
+                truncate_chars(selector, 120)
+            ));
+        }
+        let mut parts = coords.splitn(2, ',');
+        let x = parts
+            .next()
+            .and_then(|s| s.parse::<f64>().ok())
+            .ok_or("hover: bad element coordinates")?;
+        let y = parts
+            .next()
+            .and_then(|s| s.parse::<f64>().ok())
+            .ok_or("hover: bad element coordinates")?;
+        self.send_session(
+            "Input.dispatchMouseEvent",
+            json!({ "type": "mouseMoved", "x": x, "y": y, "button": "none" }),
+            CMD_TIMEOUT,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// `el.scrollIntoView({block:"center"})` — returns the page's scrollY
+    /// after the scroll.
+    pub async fn scroll_into_view(&mut self, selector: &str) -> Result<f64, String> {
+        let js = format!(
+            "(function(){{var el=document.querySelector({});\
+             if(!el){{return 'not-found'}};el.scrollIntoView({{block:'center'}});\
+             return window.scrollY}})()",
+            js_string(selector)
+        );
+        let y = self.eval(&js).await.and_then(value_to_string)?;
+        if y == "not-found" {
+            return Err(format!(
+                "selector not found for scroll: {}",
+                truncate_chars(selector, 120)
+            ));
+        }
+        y.parse::<f64>()
+            .map_err(|_| "scroll: bad scrollY".to_string())
+    }
+
+    /// `window.scrollTo` top/bottom — returns the page's scrollY after.
+    pub async fn scroll_to(&mut self, bottom: bool) -> Result<f64, String> {
+        let js = if bottom {
+            "(function(){window.scrollTo(0, document.documentElement.scrollHeight);return window.scrollY})()"
+        } else {
+            "(function(){window.scrollTo(0, 0);return window.scrollY})()"
+        };
+        self.eval(js)
+            .await
+            .and_then(value_to_string)?
+            .parse::<f64>()
+            .map_err(|_| "scroll: bad scrollY".to_string())
+    }
+
+    /// `document.title`.
+    pub async fn get_title(&mut self) -> Result<String, String> {
+        self.eval("document.title").await.and_then(value_to_string)
+    }
+
+    /// Poll `document.body.innerText.includes(text)` every 100 ms until it
+    /// matches or `timeout` elapses.
+    pub async fn wait_for_text(&mut self, text: &str, timeout: Duration) -> Result<(), String> {
+        let js = format!(
+            "document.body && document.body.innerText.includes({})",
+            js_string(text)
+        );
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.eval(&js).await? == Value::Bool(true) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "timeout waiting for text {}",
+                    js_string(&truncate_chars(text, 120))
+                ));
+            }
+            tokio::time::sleep(super::POLL_INTERVAL).await;
+        }
+    }
+
+    /// `Network.getCookies` — the page's cookies as a compact JSON array.
+    /// Values can be session credentials; they reach stdout only because
+    /// the operator explicitly asked for them (the audit chain records the
+    /// step count, never the content).
+    pub async fn get_cookies(&mut self) -> Result<String, String> {
+        let res = self
+            .send_session("Network.getCookies", json!({}), CMD_TIMEOUT)
+            .await?;
+        let cookies = res.get("cookies").cloned().unwrap_or_else(|| json!([]));
+        Ok(cookies.to_string())
+    }
+
+    /// `Network.setCookie` for every spec — returns how many were set.
+    pub async fn set_cookies(&mut self, cookies: &[CookieSpec]) -> Result<usize, String> {
+        let mut set = 0usize;
+        for spec in cookies {
+            let res = self
+                .send_session(
+                    "Network.setCookie",
+                    json!({
+                        "name": spec.name,
+                        "value": spec.value,
+                        "url": spec.url,
+                    }),
+                    CMD_TIMEOUT,
+                )
+                .await?;
+            if res.get("success").and_then(Value::as_bool) == Some(true)
+                || res.get("success").is_none()
+            {
+                set += 1;
+            }
+        }
+        Ok(set)
+    }
+
+    /// `Emulation.setDeviceMetricsOverride` — the viewport the page renders
+    /// into (screenshots and layout follow it).
+    pub async fn set_viewport(&mut self, width: u64, height: u64) -> Result<(), String> {
+        self.send_session(
+            "Emulation.setDeviceMetricsOverride",
+            json!({
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": 1,
+                "mobile": false,
+            }),
+            CMD_TIMEOUT,
+        )
+        .await?;
+        Ok(())
     }
 
     /// Click the first element matching `selector` (via `Runtime.evaluate`).

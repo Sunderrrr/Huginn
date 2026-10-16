@@ -85,6 +85,9 @@ pub const MAX_TIMEOUT_SECONDS: u64 = 300;
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 /// A screenshot's base64 payload must stay under this, else the step fails.
 pub const MAX_SCREENSHOT_B64: usize = 900 * 1024;
+/// A PDF's base64 payload must stay under this (smaller than the screenshot
+/// cap: the whole task stdout is itself capped at 1 MiB).
+pub const MAX_PDF_B64: usize = 768 * 1024;
 /// Default JPEG quality for screenshots.
 pub const DEFAULT_JPEG_QUALITY: u8 = 80;
 /// Default (and maximum) `wait_for` step timeout in milliseconds.
@@ -288,13 +291,50 @@ async fn drive_steps(
                 .type_selector(selector, text)
                 .await
                 .map(|_| Some(selector.clone())),
+            BrowserStep::PressKey { key } => match steps::key_spec(key) {
+                Some((normalized, chrome, vk)) => client
+                    .press_key(&normalized, &chrome, vk)
+                    .await
+                    .map(|_| Some(format!("pressed {normalized}"))),
+                None => Err(format!("invalid press_key {key:?}")),
+            },
+            BrowserStep::Hover { selector } => client
+                .hover_selector(selector)
+                .await
+                .map(|_| Some(selector.clone())),
+            BrowserStep::Scroll { selector, to } => match (selector, to) {
+                (Some(sel), _) => client
+                    .scroll_into_view(sel)
+                    .await
+                    .map(|y| Some(format!("scrolled to {sel} (scrollY {y})"))),
+                (None, Some(steps::ScrollTarget::Bottom)) => client
+                    .scroll_to(true)
+                    .await
+                    .map(|y| Some(format!("scrolled to bottom (scrollY {y})"))),
+                (None, _) => client
+                    .scroll_to(false)
+                    .await
+                    .map(|y| Some(format!("scrolled to top (scrollY {y})"))),
+            },
             BrowserStep::Eval { js } => client.eval(js).await.map(|v| Some(v.to_string())),
-            BrowserStep::Screenshot { format, quality } => client
-                .screenshot(*format, *quality)
+            BrowserStep::SetViewport { width, height } => client
+                .set_viewport(*width, *height)
+                .await
+                .map(|_| Some(format!("{width}x{height}"))),
+            BrowserStep::Screenshot {
+                format,
+                quality,
+                full_page,
+            } => client
+                .screenshot(*format, *quality, *full_page)
                 .await
                 .map(|data| Some(data_uri(*format, &data))),
+            BrowserStep::Pdf { options } => {
+                client.pdf(options).await.map(|data| Some(pdf_uri(&data)))
+            }
             BrowserStep::GetText => client.get_text().await.map(Some),
             BrowserStep::GetHtml => client.get_html().await.map(Some),
+            BrowserStep::Title => client.get_title().await.map(Some),
             BrowserStep::WaitFor {
                 selector,
                 timeout_ms,
@@ -302,11 +342,30 @@ async fn drive_steps(
                 .wait_for_selector(selector, std::time::Duration::from_millis(*timeout_ms))
                 .await
                 .map(|_| Some(selector.clone())),
+            BrowserStep::WaitForText { text, timeout_ms } => client
+                .wait_for_text(text, std::time::Duration::from_millis(*timeout_ms))
+                .await
+                .map(|_| Some(text.clone())),
+            BrowserStep::GetCookies => client.get_cookies().await.map(Some),
+            BrowserStep::SetCookies { cookies } => client
+                .set_cookies(cookies)
+                .await
+                .map(|n| Some(format!("{n} cookie(s) set"))),
         };
         match outcome {
             Ok(detail) => {
+                // Captures (screenshot/pdf data URIs) are bounded by their own
+                // validated size at the CDP layer; they ride the TOTAL
+                // stdout budget, not the per-step text cap — truncating a
+                // base64 payload mid-string would corrupt it. Text steps
+                // (get_text, get_html, eval) keep the per-step cap.
+                let max_detail = if matches!(action, "screenshot" | "pdf") {
+                    usize::MAX
+                } else {
+                    MAX_STEP_OUTPUT
+                };
                 let line = match detail {
-                    Some(text) => truncate_chars(&text, MAX_STEP_OUTPUT),
+                    Some(text) => truncate_chars(&text, max_detail),
                     None => String::new(),
                 };
                 push_step_line(stdout, position, action, &line);
@@ -327,14 +386,22 @@ pub(crate) fn data_uri(format: ScreenshotFormat, base64_data: &str) -> String {
     }
 }
 
+/// `data:` URI tag for an exported PDF.
+pub(crate) fn pdf_uri(base64_data: &str) -> String {
+    format!("data:application/pdf;base64,{base64_data}")
+}
+
 /// Append one `step N (action): detail` line, keeping the total stdout under
 /// [`MAX_STDOUT`] (the hub truncates too; the worker keeps the submit payload
-/// bounded).
+/// bounded). Multi-line details (get_text, get_html) are escaped to `\n`
+/// sequences so every step is exactly ONE line — the format stays
+/// deterministic for the dashboard and MCP consumers.
 fn push_step_line(stdout: &mut String, position: usize, action: &str, detail: &str) {
     if stdout.len() >= MAX_STDOUT {
         return; // already at the cap
     }
-    let line = format!("step {position} ({action}): {detail}\n");
+    let single_line = detail.replace('\r', "").replace('\n', "\\n");
+    let line = format!("step {position} ({action}): {single_line}\n");
     if stdout.len() + line.len() > MAX_STDOUT {
         stdout.push_str("[...output truncated...]\n");
         return;
