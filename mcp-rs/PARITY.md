@@ -48,5 +48,6 @@ Le hub voit exactement les mêmes appels REST (mêmes headers, mêmes corps).
 | `browser_install(vm_id)` | Queues the Obscura engine install (admin-only hub route, hub-pinned version + SHA-256). |
 | `browser_start(vm_id, steps, timeout)` | Executes a step sequence on a headless browser (navigate, click, type, eval, wait_for, screenshot, get_text, get_html). |
 | `browser_navigate(vm_id, url, timeout)` | Shortcut: navigate + get_text. |
-| `browser_screenshot(vm_id, url, quality, timeout)` | Shortcut: navigate + screenshot (JPEG). |
+| `browser_screenshot(vm_id, url, quality, timeout)` | Shortcut: navigate + screenshot (JPEG/PNG, optional full page). |
+| `browser_pdf(vm_id, url, timeout)` | Shortcut: navigate + pdf (Page.printToPDF, base64 PDF in stdout). |
 | `browser_eval(vm_id, url, js, timeout)` | Shortcut: navigate + eval. |
