@@ -43,9 +43,19 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [revealCmd, setRevealCmd] = useState(false);
   const [os, setOs] = useState<OS>("linux");
 
-  // Same-origin installer; -k fetches the script despite the hub's internal-CA
-  // cert, then the script trust-on-first-use installs the CA.
-  const base = window.location.origin;
+  // Install base URL: defaults to the dashboard origin, but the operator can
+  // point it at a VPN/LAN address so workers enroll directly (bypassing any
+  // public CDN in front of the dashboard). Persisted per browser.
+  const INSTALL_URL_KEY = "huginn.installUrl";
+  const [installUrl, setInstallUrl] = useState(() => {
+    return localStorage.getItem(INSTALL_URL_KEY) || window.location.origin;
+  });
+  const onUrlChange = (v: string) => {
+    setInstallUrl(v);
+    localStorage.setItem(INSTALL_URL_KEY, v);
+  };
+
+  const base = installUrl.replace(/\/$/, "");
   const copy = (text: string, what: string) => {
     navigator.clipboard?.writeText(text);
     toast("ok", what);
@@ -101,6 +111,22 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
             {created.max_uses === 0
               ? "Run this on every machine you want to enroll — this token is reusable. The secret is shown only once."
               : "Run this on the new machine. The token is single-use and shown only once."}
+          </p>
+
+          {/* Install base URL */}
+          <label className="lbl" style={{ marginBottom: 4 }}>Install URL</label>
+          <input
+            className="field"
+            value={installUrl}
+            onChange={(e) => onUrlChange(e.target.value)}
+            placeholder={window.location.origin}
+            spellCheck={false}
+            style={{ marginBottom: 12, fontFamily: "var(--font-mono)", fontSize: 13 }}
+          />
+          <p className="muted tiny" style={{ marginBottom: 12, lineHeight: 1.5 }}>
+            The address workers use to download the installer and enroll. Point it at your
+            VPN/LAN IP (e.g. https://100.73.x.x) so workers connect directly instead of
+            through a public domain.
           </p>
 
           {/* OS selector */}
