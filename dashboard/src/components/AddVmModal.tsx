@@ -40,6 +40,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [autoApprove, setAutoApprove] = useState(false);
   const [created, setCreated] = useState<EnrollmentTokenCreated | null>(null);
   const [reveal, setReveal] = useState(false);
+  const [revealCmd, setRevealCmd] = useState(false);
   const [os, setOs] = useState<OS>("linux");
 
   // Same-origin installer; -k fetches the script despite the hub's internal-CA
@@ -53,6 +54,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
   function reset() {
     setCreated(null);
     setReveal(false);
+    setRevealCmd(false);
     setLabel("");
     setReusable(false);
     setAutoApprove(false);
@@ -69,6 +71,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
         auto_approve: autoApprove,
       });
       setReveal(false);
+      setRevealCmd(false);
       setCreated(t);
       toast("ok", "invitation created");
     } catch {
@@ -85,9 +88,10 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
       new Date(t.expires_at).getTime() > Date.now(),
   );
 
-  // The token masked in the command (the full token is shown in the Token
-  // field below with its own reveal toggle).
-  const cmdToken = created ? created.token : "";
+  // The token is masked in the install command by default; the full token
+  // is available in the Token field below (its own reveal toggle) and in the
+  // copy action.
+  const cmdToken = created ? (revealCmd ? created.token : mask(created.token)) : "";
 
   return (
     <Modal open={open} onClose={() => { reset(); onClose(); }} title="Add a VM" width={640}>
@@ -130,6 +134,9 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
             >
               {installCommand(os, base, cmdToken)}
             </div>
+            <button className="btn btn--sm" onClick={() => setRevealCmd((v) => !v)}>
+              {revealCmd ? "hide" : "reveal"}
+            </button>
             <button className="btn btn--sm" onClick={() => copy(installCommand(os, base, created.token), "command copied")}>
               copy
             </button>
