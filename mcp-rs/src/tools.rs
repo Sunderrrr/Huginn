@@ -1,4 +1,4 @@
-//! The 9 MCP tools and their hub delegation. Mirrors mcp/app/server.py tool
+//! The 13 MCP tools and their hub delegation. Mirrors mcp/app/server.py tool
 //! by tool (signatures, docstrings, result shaping). No business logic is
 //! duplicated here; `_resolve_vm` accepts an id or a name.
 
@@ -23,6 +23,9 @@ pub const INSTRUCTIONS: &str = r#"Huginn — fleet control. How to use these too
    returns still-running (timeout) should you call wait_for_task again. get_task is
    for a single one-off status check, not for busy-waiting.
 4. Every action is audited and attributed to your user. Stay within scope.
+5. Browser automation (Linux VMs only): browser_start executes a sequence of steps
+   on a headless browser (navigate → click → type → eval → screenshot). For a
+   quick page text, use browser_navigate. For a screenshot, use browser_screenshot.
 "#;
 
 /// Strict identifier validation before any value is interpolated into a hub
@@ -38,6 +41,141 @@ fn safe_id(v: &str) -> bool {
 
 fn safe_slug(v: &str) -> bool {
     !v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+}
+
+/// Browser automation guards (defense in depth — the hub re-validates every
+/// step; these fail fast before any hub call). Exact step contract — see
+/// docs/browser.md: navigate{url}, click{selector}, type{selector,text},
+/// eval{js}, screenshot{format,quality}, get_text, get_html,
+/// wait_for{selector,timeout_ms}.
+const BROWSER_MAX_STEPS: usize = 50;
+const BROWSER_MAX_URL: usize = 2048;
+const BROWSER_MAX_SELECTOR: usize = 512;
+const BROWSER_MAX_TEXT_BYTES: usize = 10 * 1024;
+const BROWSER_MAX_JS_BYTES: usize = 64 * 1024;
+const BROWSER_TIMEOUT_MIN_SECS: u64 = 1;
+const BROWSER_TIMEOUT_MAX_SECS: u64 = 300;
+const BROWSER_SCREENSHOT_QUALITY_DEFAULT: u64 = 80;
+
+/// http(s) URLs only, non-empty, bounded length, no control characters —
+/// refuses file://, javascript:, data: and friends before a step ever
+/// reaches a worker.
+fn safe_url(u: &str) -> bool {
+    let rest = u
+        .strip_prefix("http://")
+        .or_else(|| u.strip_prefix("https://"))
+        .unwrap_or("");
+    !rest.is_empty() && u.len() <= BROWSER_MAX_URL && !u.chars().any(|c| c.is_control())
+}
+
+/// Validates a browser step sequence BEFORE it is sent to the hub: non-empty
+/// array, at most 50 steps, known actions, per-field caps (url http(s) ≤ 2048
+/// chars, selector ≤ 512 chars, text ≤ 10 KiB, js ≤ 64 KiB). Returns the
+/// structured error dict for the first invalid step.
+fn validate_steps(steps: &Value) -> Result<(), Value> {
+    let Some(list) = steps.as_array() else {
+        return Err(tool_error(400, "steps must be a non-empty array"));
+    };
+    if list.is_empty() {
+        return Err(tool_error(400, "steps must be a non-empty array"));
+    }
+    if list.len() > BROWSER_MAX_STEPS {
+        return Err(tool_error(
+            400,
+            format!("too many steps: {} (max {BROWSER_MAX_STEPS})", list.len()),
+        ));
+    }
+    for (i, step) in list.iter().enumerate() {
+        let n = i + 1;
+        let Some(obj) = step.as_object() else {
+            return Err(tool_error(400, format!("step {n} must be an object")));
+        };
+        let field = |name: &str| obj.get(name).and_then(Value::as_str);
+        match field("action").unwrap_or("") {
+            "navigate" => {
+                let Some(url) = field("url") else {
+                    return Err(tool_error(400, format!("step {n}: navigate requires url")));
+                };
+                if !safe_url(url) {
+                    return Err(tool_error(
+                        400,
+                        format!(
+                            "step {n}: url must be http(s):// and at most {BROWSER_MAX_URL} chars"
+                        ),
+                    ));
+                }
+            }
+            "click" | "wait_for" => {
+                let Some(sel) = field("selector") else {
+                    return Err(tool_error(400, format!("step {n}: selector is required")));
+                };
+                if sel.len() > BROWSER_MAX_SELECTOR {
+                    return Err(tool_error(
+                        400,
+                        format!("step {n}: selector exceeds {BROWSER_MAX_SELECTOR} chars"),
+                    ));
+                }
+            }
+            "type" => {
+                let Some(sel) = field("selector") else {
+                    return Err(tool_error(400, format!("step {n}: type requires selector")));
+                };
+                if sel.len() > BROWSER_MAX_SELECTOR {
+                    return Err(tool_error(
+                        400,
+                        format!("step {n}: selector exceeds {BROWSER_MAX_SELECTOR} chars"),
+                    ));
+                }
+                let Some(text) = field("text") else {
+                    return Err(tool_error(400, format!("step {n}: type requires text")));
+                };
+                if text.len() > BROWSER_MAX_TEXT_BYTES {
+                    return Err(tool_error(
+                        400,
+                        format!(
+                            "step {n}: text exceeds {} KiB",
+                            BROWSER_MAX_TEXT_BYTES / 1024
+                        ),
+                    ));
+                }
+            }
+            "eval" => {
+                let Some(js) = field("js") else {
+                    return Err(tool_error(400, format!("step {n}: eval requires js")));
+                };
+                if js.len() > BROWSER_MAX_JS_BYTES {
+                    return Err(tool_error(
+                        400,
+                        format!("step {n}: js exceeds {} KiB", BROWSER_MAX_JS_BYTES / 1024),
+                    ));
+                }
+            }
+            // Parameterless steps; screenshot params are validated hub-side.
+            "screenshot" | "get_text" | "get_html" => {}
+            other => {
+                return Err(tool_error(
+                    400,
+                    format!("step {n}: unknown action {other:?}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Browser task budget in seconds: default 120, allowed 1-300.
+fn browser_timeout(args: &HashMap<String, Value>) -> Result<u64, Value> {
+    let t = args.get("timeout").and_then(Value::as_u64).unwrap_or(120);
+    if (BROWSER_TIMEOUT_MIN_SECS..=BROWSER_TIMEOUT_MAX_SECS).contains(&t) {
+        Ok(t)
+    } else {
+        Err(tool_error(
+            400,
+            format!(
+                "timeout must be {BROWSER_TIMEOUT_MIN_SECS}-{BROWSER_TIMEOUT_MAX_SECS} seconds"
+            ),
+        ))
+    }
 }
 
 /// Structured tool error, matching the Python `{"error": {"status", "detail"}}`.
@@ -103,6 +241,24 @@ async fn resolve_vm(hub: &HubClient, ctx: &CallCtx, vm: &str) -> Result<String, 
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| tool_error(500, "VM record has no id"))
+}
+
+/// Shared tail of the browser tools: resolve the VM (id or name), run the
+/// step sequence on the hub, and return the task with its results.
+async fn run_browser_steps(
+    hub: &HubClient,
+    ctx: &CallCtx,
+    vm: &str,
+    steps: Value,
+    timeout: u64,
+) -> Value {
+    match resolve_vm(hub, ctx, vm).await {
+        Err(e) => e,
+        Ok(id) => match hub.execute_browser(ctx, &id, steps, timeout).await {
+            Ok(v) => v,
+            Err(e) => from_hub_error(e),
+        },
+    }
 }
 
 fn brief_action(a: &Value) -> Value {
@@ -263,6 +419,104 @@ pub async fn call_tool(
                     Err(e) => from_hub_error(e),
                 },
             }
+        }
+        "browser_start" => {
+            let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
+                return tool_error(400, "vm_id is required");
+            };
+            let Some(steps) = args.get("steps") else {
+                return tool_error(400, "steps is required");
+            };
+            if let Err(e) = validate_steps(steps) {
+                return e;
+            }
+            let timeout = match browser_timeout(args) {
+                Ok(t) => t,
+                Err(e) => return e,
+            };
+            run_browser_steps(&hub, ctx, vm, steps.clone(), timeout).await
+        }
+        "browser_navigate" => {
+            let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
+                return tool_error(400, "vm_id is required");
+            };
+            let Some(url) = args.get("url").and_then(Value::as_str) else {
+                return tool_error(400, "url is required");
+            };
+            if !safe_url(url) {
+                return tool_error(
+                    400,
+                    format!("url must be http(s):// and at most {BROWSER_MAX_URL} chars"),
+                );
+            }
+            let timeout = match browser_timeout(args) {
+                Ok(t) => t,
+                Err(e) => return e,
+            };
+            // Shortcut: one navigate step, then read the page text.
+            let steps = json!([{"action": "navigate", "url": url}, {"action": "get_text"}]);
+            run_browser_steps(&hub, ctx, vm, steps, timeout).await
+        }
+        "browser_screenshot" => {
+            let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
+                return tool_error(400, "vm_id is required");
+            };
+            let Some(url) = args.get("url").and_then(Value::as_str) else {
+                return tool_error(400, "url is required");
+            };
+            if !safe_url(url) {
+                return tool_error(
+                    400,
+                    format!("url must be http(s):// and at most {BROWSER_MAX_URL} chars"),
+                );
+            }
+            let quality = match args.get("quality") {
+                None => BROWSER_SCREENSHOT_QUALITY_DEFAULT,
+                Some(v) => match v.as_u64() {
+                    Some(q) if (1..=100).contains(&q) => q,
+                    _ => return tool_error(400, "quality must be an integer between 1 and 100"),
+                },
+            };
+            let timeout = match browser_timeout(args) {
+                Ok(t) => t,
+                Err(e) => return e,
+            };
+            // Shortcut: navigate, then capture a JPEG screenshot.
+            let steps = json!([
+                {"action": "navigate", "url": url},
+                {"action": "screenshot", "format": "jpeg", "quality": quality},
+            ]);
+            run_browser_steps(&hub, ctx, vm, steps, timeout).await
+        }
+        "browser_eval" => {
+            let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
+                return tool_error(400, "vm_id is required");
+            };
+            let Some(url) = args.get("url").and_then(Value::as_str) else {
+                return tool_error(400, "url is required");
+            };
+            if !safe_url(url) {
+                return tool_error(
+                    400,
+                    format!("url must be http(s):// and at most {BROWSER_MAX_URL} chars"),
+                );
+            }
+            let Some(js) = args.get("js").and_then(Value::as_str) else {
+                return tool_error(400, "js is required");
+            };
+            if js.len() > BROWSER_MAX_JS_BYTES {
+                return tool_error(
+                    400,
+                    format!("js exceeds {} KiB", BROWSER_MAX_JS_BYTES / 1024),
+                );
+            }
+            let timeout = match browser_timeout(args) {
+                Ok(t) => t,
+                Err(e) => return e,
+            };
+            // Shortcut: navigate, then evaluate the JavaScript.
+            let steps = json!([{"action": "navigate", "url": url}, {"action": "eval", "js": js}]);
+            run_browser_steps(&hub, ctx, vm, steps, timeout).await
         }
         "trigger_update" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
@@ -431,6 +685,64 @@ pub fn tool_definitions() -> Value {
                     "limit": {"type": "integer", "default": 100}
                 }
             }
+        },
+        {
+            "name": "browser_start",
+            "description": "Open a headless browser on a VM and execute a sequence of steps in one tab\n(``vm_id`` may be a VM id or its name; Linux VMs only — the browser capability\nmust be enabled on the VM by an admin).\n\nSteps run in order: navigate{url}, click{selector}, type{selector,text},\neval{js}, screenshot{format,quality}, get_text, get_html,\nwait_for{selector,timeout_ms}. Example:\n\n    steps=[{\"action\":\"navigate\",\"url\":\"https://example.com\"},\n           {\"action\":\"type\",\"selector\":\"#q\",\"text\":\"rust\"},\n           {\"action\":\"click\",\"selector\":\"#go\"},\n           {\"action\":\"get_text\"}]\n\nReturns the task with the step results inline — page text/HTML, eval results,\nand the screenshot as base64 in stdout when requested.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm_id": {"type": "string"},
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "1-50 steps, e.g. {\"action\":\"navigate\",\"url\":\"https://example.com\"}"
+                    },
+                    "timeout": {"type": "integer", "default": 120, "description": "seconds (1-300)"}
+                },
+                "required": ["vm_id", "steps"]
+            }
+        },
+        {
+            "name": "browser_navigate",
+            "description": "Load a URL in a headless browser on a VM and return the page's text\n(``vm_id`` may be a VM id or its name; Linux VMs only — the browser capability\nmust be enabled on the VM by an admin).\n\nShortcut for browser_start with a single navigate + get_text step sequence.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm_id": {"type": "string"},
+                    "url": {"type": "string", "description": "http(s) URL to load"},
+                    "timeout": {"type": "integer", "default": 120, "description": "seconds (1-300)"}
+                },
+                "required": ["vm_id", "url"]
+            }
+        },
+        {
+            "name": "browser_screenshot",
+            "description": "Take a screenshot of a web page on a VM: navigate to the URL, capture a JPEG,\nand return it as base64 in the task result's stdout (``vm_id`` may be a VM id\nor its name; Linux VMs only — the browser capability must be enabled on the VM\nby an admin).\n\nShortcut for browser_start with a navigate + screenshot step sequence.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm_id": {"type": "string"},
+                    "url": {"type": "string", "description": "http(s) URL to capture"},
+                    "quality": {"type": "integer", "default": 80, "description": "JPEG quality (1-100)"},
+                    "timeout": {"type": "integer", "default": 120, "description": "seconds (1-300)"}
+                },
+                "required": ["vm_id", "url"]
+            }
+        },
+        {
+            "name": "browser_eval",
+            "description": "Run JavaScript on a web page on a VM: navigate to the URL, evaluate ``js``,\nand return the result (``vm_id`` may be a VM id or its name; Linux VMs only —\nthe browser capability must be enabled on the VM by an admin).\n\nShortcut for browser_start with a navigate + eval step sequence.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm_id": {"type": "string"},
+                    "url": {"type": "string", "description": "http(s) URL to load"},
+                    "js": {"type": "string", "description": "JavaScript to evaluate (max 64 KiB)"},
+                    "timeout": {"type": "integer", "default": 120, "description": "seconds (1-300)"}
+                },
+                "required": ["vm_id", "url", "js"]
+            }
         }
     ])
 }
@@ -537,5 +849,407 @@ mod tests {
         let hub2 = HubClient::new(&settings2);
         let err = resolve_vm(&hub2, &ctx, "twin").await.unwrap_err();
         assert_eq!(err["error"]["status"], 409);
+    }
+
+    fn test_settings(hub_url: String) -> crate::config::Settings {
+        crate::config::Settings {
+            hub_url,
+            service_token: "svc".into(),
+            transport: "stdio".into(),
+            host: "127.0.0.1".into(),
+            port: 0,
+            trust_proxy: false,
+        }
+    }
+
+    fn tool_args(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn browser_url_guards() {
+        assert!(safe_url("http://example.com"));
+        assert!(safe_url("https://example.com/docs?q=rust#top"));
+        assert!(!safe_url("file:///etc/passwd"), "file:// must be refused");
+        assert!(
+            !safe_url("javascript:alert(1)"),
+            "javascript: must be refused"
+        );
+        assert!(!safe_url("data:text/html,<h1>hi"));
+        assert!(!safe_url("ftp://example.com"));
+        assert!(!safe_url("https://"), "scheme with no host");
+        assert!(!safe_url(""));
+        let ok = format!("https://{}", "a".repeat(BROWSER_MAX_URL - 8));
+        assert_eq!(ok.len(), BROWSER_MAX_URL);
+        assert!(safe_url(&ok), "exactly 2048 chars is accepted");
+        let too_long = format!("https://{}", "a".repeat(BROWSER_MAX_URL - 7));
+        assert!(!safe_url(&too_long), "over 2048 chars must be refused");
+        assert!(!safe_url("http://ex\nample.com"), "control chars");
+    }
+
+    #[tokio::test]
+    async fn browser_start_rejects_invalid_steps() {
+        // Dead hub + UUID vm_id: resolve_vm never calls the hub, so a 400 can
+        // only come from local validation; a 0 means the (valid) call tried
+        // the hub and hit the dead port.
+        let hub = Arc::new(HubClient::new(&test_settings("http://127.0.0.1:1".into())));
+        let ctx = CallCtx::default();
+        let vm = json!("55555555-5555-5555-5555-555555555555");
+
+        let call = |pairs: &[(&str, Value)]| {
+            let (hub, ctx) = (hub.clone(), ctx.clone());
+            let args = tool_args(pairs);
+            async move { call_tool(hub, &ctx, "browser_start", &args).await }
+        };
+
+        // missing steps
+        assert_eq!(call(&[("vm_id", vm.clone())]).await["error"]["status"], 400);
+        // empty steps
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", json!([]))]).await["error"]["status"],
+            400
+        );
+        // steps not an array
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", json!("get_text"))]).await["error"]["status"],
+            400
+        );
+        // > 50 steps
+        let too_many: Vec<Value> = (0..=50).map(|_| json!({"action": "get_text"})).collect();
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", json!(too_many))]).await["error"]["status"],
+            400
+        );
+        // a non-object step
+        let junk = json!(["get_text"]);
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", junk)]).await["error"]["status"],
+            400
+        );
+        // unknown action
+        let unknown = json!([{"action": "format_disk"}]);
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", unknown)]).await["error"]["status"],
+            400
+        );
+        // navigate with a non-http(s) url
+        let bad_url = json!([{"action": "navigate", "url": "file:///etc/passwd"}]);
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", bad_url)]).await["error"]["status"],
+            400
+        );
+        // selector over 512 chars
+        let long_sel =
+            json!([{"action": "click", "selector": "a".repeat(BROWSER_MAX_SELECTOR + 1)}]);
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", long_sel)]).await["error"]["status"],
+            400
+        );
+        // text over 10 KiB
+        let long_text = json!([
+            {"action": "type", "selector": "#q", "text": "x".repeat(BROWSER_MAX_TEXT_BYTES + 1)}
+        ]);
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", long_text)]).await["error"]["status"],
+            400
+        );
+        // js over 64 KiB
+        let long_js = json!([{"action": "eval", "js": "1".repeat(BROWSER_MAX_JS_BYTES + 1)}]);
+        assert_eq!(
+            call(&[("vm_id", vm.clone()), ("steps", long_js)]).await["error"]["status"],
+            400
+        );
+        // timeout out of range (0 and 301)
+        let ok_steps = json!([{"action": "get_text"}]);
+        for bad in [0u64, 301] {
+            assert_eq!(
+                call(&[
+                    ("vm_id", vm.clone()),
+                    ("steps", ok_steps.clone()),
+                    ("timeout", json!(bad))
+                ])
+                .await["error"]["status"],
+                400,
+                "timeout {bad} must be refused"
+            );
+        }
+        // boundary values pass validation and reach the hub (status 0: dead hub)
+        let fifty: Vec<Value> = (0..BROWSER_MAX_STEPS)
+            .map(|i| json!({"action": "navigate", "url": format!("https://example.com/{i}")}))
+            .collect();
+        let max_js = json!([
+            {"action": "navigate", "url": "https://example.com"},
+            {"action": "eval", "js": "0".repeat(BROWSER_MAX_JS_BYTES)}
+        ]);
+        for steps in [json!(fifty), max_js] {
+            assert_eq!(
+                call(&[
+                    ("vm_id", vm.clone()),
+                    ("steps", steps),
+                    ("timeout", json!(BROWSER_TIMEOUT_MAX_SECS))
+                ])
+                .await["error"]["status"],
+                0,
+                "valid input must reach the hub (dead hub → status 0)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_shortcut_input_guards() {
+        let hub = Arc::new(HubClient::new(&test_settings("http://127.0.0.1:1".into())));
+        let ctx = CallCtx::default();
+        let vm = json!("55555555-5555-5555-5555-555555555555");
+
+        // navigate: file:// refused
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "browser_navigate",
+                &tool_args(&[("vm_id", vm.clone()), ("url", json!("file:///etc/passwd"))])
+            )
+            .await["error"]["status"],
+            400
+        );
+        // navigate: missing url
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "browser_navigate",
+                &tool_args(&[("vm_id", vm.clone())])
+            )
+            .await["error"]["status"],
+            400
+        );
+        // screenshot: quality out of range / not an integer
+        for bad in [json!(0), json!(101), json!("high")] {
+            assert_eq!(
+                call_tool(
+                    hub.clone(),
+                    &ctx,
+                    "browser_screenshot",
+                    &tool_args(&[
+                        ("vm_id", vm.clone()),
+                        ("url", json!("https://example.com")),
+                        ("quality", bad.clone())
+                    ])
+                )
+                .await["error"]["status"],
+                400,
+                "quality {bad} must be refused"
+            );
+        }
+        // eval: js missing / oversized
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "browser_eval",
+                &tool_args(&[("vm_id", vm.clone()), ("url", json!("https://example.com"))])
+            )
+            .await["error"]["status"],
+            400
+        );
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "browser_eval",
+                &tool_args(&[
+                    ("vm_id", vm.clone()),
+                    ("url", json!("https://example.com")),
+                    ("js", json!("0".repeat(BROWSER_MAX_JS_BYTES + 1)))
+                ])
+            )
+            .await["error"]["status"],
+            400
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_start_posts_steps_and_obo_to_hub() {
+        let server = wiremock::MockServer::start().await;
+        let steps = json!([
+            {"action": "navigate", "url": "https://example.com"},
+            {"action": "type", "selector": "#q", "text": "rust lang"},
+            {"action": "click", "selector": "#go"},
+            {"action": "get_text"}
+        ]);
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/55555555-5555-5555-5555-555555555555/browser",
+            ))
+            .and(wiremock::matchers::body_json(json!({
+                "steps": steps,
+                "timeout": 120
+            })))
+            .and(wiremock::matchers::header(
+                "X-MCP-On-Behalf-Of",
+                "user-token-1",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "t-browser-1",
+                    "status": "succeeded",
+                    "result": {"stdout": "rust lang results"}
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx {
+            obo_token: Some("user-token-1".into()),
+            client_ip: None,
+        };
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_start",
+            &tool_args(&[
+                ("vm_id", json!("55555555-5555-5555-5555-555555555555")),
+                ("steps", steps),
+            ]),
+        )
+        .await;
+        assert_eq!(out["status"], "succeeded");
+        assert_eq!(out["result"]["stdout"], "rust lang results");
+    }
+
+    #[tokio::test]
+    async fn browser_navigate_is_a_navigate_get_text_shortcut() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/vms"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([vm(
+                    "11111111-1111-1111-1111-111111111111",
+                    "web-01",
+                    "active"
+                )])),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/11111111-1111-1111-1111-111111111111/browser",
+            ))
+            .and(wiremock::matchers::body_json(json!({
+                "steps": [
+                    {"action": "navigate", "url": "https://example.com"},
+                    {"action": "get_text"}
+                ],
+                "timeout": 45
+            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "t1",
+                    "status": "succeeded",
+                    "result": {"stdout": "Example Domain"}
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_navigate",
+            &tool_args(&[
+                ("vm_id", json!("web-01")),
+                ("url", json!("https://example.com")),
+                ("timeout", json!(45)),
+            ]),
+        )
+        .await;
+        assert_eq!(out["result"]["stdout"], "Example Domain");
+    }
+
+    #[tokio::test]
+    async fn browser_screenshot_posts_navigate_screenshot_steps() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/55555555-5555-5555-5555-555555555555/browser",
+            ))
+            .and(wiremock::matchers::body_json(json!({
+                "steps": [
+                    {"action": "navigate", "url": "https://example.com"},
+                    {"action": "screenshot", "format": "jpeg", "quality": 80}
+                ],
+                "timeout": 120
+            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "t2",
+                    "status": "succeeded",
+                    "result": {"stdout": "<base64 jpeg>"}
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        // No quality/timeout: defaults (80 / 120) must be sent.
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_screenshot",
+            &tool_args(&[
+                ("vm_id", json!("55555555-5555-5555-5555-555555555555")),
+                ("url", json!("https://example.com")),
+            ]),
+        )
+        .await;
+        assert_eq!(out["result"]["stdout"], "<base64 jpeg>");
+    }
+
+    #[tokio::test]
+    async fn browser_eval_posts_navigate_eval_steps() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/55555555-5555-5555-5555-555555555555/browser",
+            ))
+            .and(wiremock::matchers::body_json(json!({
+                "steps": [
+                    {"action": "navigate", "url": "https://example.com"},
+                    {"action": "eval", "js": "document.title"}
+                ],
+                "timeout": 90
+            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "t3",
+                    "status": "succeeded",
+                    "result": {"stdout": "Example Domain"}
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_eval",
+            &tool_args(&[
+                ("vm_id", json!("55555555-5555-5555-5555-555555555555")),
+                ("url", json!("https://example.com")),
+                ("js", json!("document.title")),
+                ("timeout", json!(90)),
+            ]),
+        )
+        .await;
+        assert_eq!(out["result"]["stdout"], "Example Domain");
     }
 }

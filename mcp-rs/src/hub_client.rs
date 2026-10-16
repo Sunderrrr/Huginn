@@ -104,6 +104,36 @@ impl HubClient {
             .await
     }
 
+    /// `POST /api/vms/{vm_id}/browser` — run a headless-browser step sequence
+    /// (task type `browser`). The hub holds the request until the worker
+    /// finishes the steps — up to `timeout` seconds — and returns the task
+    /// with its results inline (page text/HTML, eval results, screenshot
+    /// base64 in stdout), so the per-request budget must cover the whole run,
+    /// not the default 30s hub timeout.
+    pub async fn execute_browser(
+        &self,
+        ctx: &CallCtx,
+        vm_id: &str,
+        steps: Value,
+        timeout: u64,
+    ) -> Result<Value, HubError> {
+        let body = serde_json::json!({"steps": steps, "timeout": timeout});
+        // Like wait_task: cap the window defensively (the tools validate
+        // 1-300) and add slack for worker pickup, obscura startup, and
+        // result submission.
+        let budget = Duration::from_secs(timeout.min(300) + 30);
+        let headers = ctx_headers(ctx);
+        self.request_with_timeout(
+            Method::POST,
+            &format!("/api/vms/{vm_id}/browser"),
+            Some(&body),
+            &headers,
+            true,
+            budget,
+        )
+        .await
+    }
+
     pub async fn trigger_update(&self, ctx: &CallCtx, vm_id: &str) -> Result<Value, HubError> {
         self.post(ctx, &format!("/api/vms/{vm_id}/update"), &Value::Null)
             .await
