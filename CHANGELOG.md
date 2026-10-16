@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Browser automation on Linux workers (Obscura)**: drive a headless browser
+  on any Linux VM from the dashboard or through MCP tools (`browser_start`,
+  `browser_navigate`, `browser_screenshot`, `browser_eval`). Steps: navigate,
+  click, type, eval, wait_for, get_text, get_html, screenshot. The engine is
+  Obscura (Apache-2.0, third-party notice added) downloaded on-demand —
+  never embedded in the worker binary. Linux only; Windows responds
+  "not supported". See docs/browser.md.
+
 ### Removed
 - **The superseded Python/Go implementations — `hub/`, `mcp/`, `worker/` — are
   removed**; they are fully replaced by `hub-rs/`, `mcp-rs/`, and `worker-rs/`,
