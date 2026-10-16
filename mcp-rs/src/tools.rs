@@ -26,6 +26,9 @@ pub const INSTRUCTIONS: &str = r#"Huginn — fleet control. How to use these too
 5. Browser automation (Linux VMs only): browser_start executes a sequence of steps
    on a headless browser (navigate → click → type → eval → screenshot). For a
    quick page text, use browser_navigate. For a screenshot, use browser_screenshot.
+   The Obscura engine must first be installed with browser_install (admin) and
+   the VM's browser capability enabled by an admin (dashboard) — a 403
+   "browser automation is disabled" means that step is missing.
 "#;
 
 /// Strict identifier validation before any value is interpolated into a hub
@@ -420,6 +423,20 @@ pub async fn call_tool(
                 },
             }
         }
+        "browser_install" => {
+            let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
+                return tool_error(400, "vm_id is required");
+            };
+            // The hub route is admin-only (RBAC enforced hub-side, audited);
+            // the engine coordinates (version + SHA-256) are hub-pinned.
+            match resolve_vm(&hub, ctx, vm).await {
+                Err(e) => e,
+                Ok(id) => match hub.install_browser_engine(ctx, &id).await {
+                    Ok(v) => v,
+                    Err(e) => from_hub_error(e),
+                },
+            }
+        }
         "browser_start" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
                 return tool_error(400, "vm_id is required");
@@ -684,6 +701,17 @@ pub fn tool_definitions() -> Value {
                     "event_type": {"type": "string"},
                     "limit": {"type": "integer", "default": 100}
                 }
+            }
+        },
+        {
+            "name": "browser_install",
+            "description": "Install the pinned Obscura headless-browser engine on a VM's worker\n(admin only; Linux VMs only). Downloads the hub-pinned release\n(~70 MB) from GitHub, verifies its SHA-256, installs it under the\nHuginn-managed directory with its Apache-2.0 license, and smoke-tests\n``obscura --version``. Run this once before browser_start and friends —\nand make sure the VM's browser capability is enabled by an admin\n(dashboard), else browser tasks answer 403 \"browser automation is\ndisabled\".\n\nReturns the created task; poll it with get_task for the install result.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm_id": {"type": "string", "description": "VM id or name"}
+                },
+                "required": ["vm_id"]
             }
         },
         {
@@ -1170,6 +1198,54 @@ mod tests {
         )
         .await;
         assert_eq!(out["result"]["stdout"], "Example Domain");
+    }
+
+    /// `browser_install` resolves the VM by name and POSTs the (bodyless)
+    /// install route — the coordinates stay hub-pinned.
+    #[tokio::test]
+    async fn browser_install_posts_the_install_route() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/vms"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([vm(
+                    "11111111-1111-1111-1111-111111111111",
+                    "web-01",
+                    "active"
+                )])),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/11111111-1111-1111-1111-111111111111/browser-install",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "id": "t9",
+                    "type": "browser_install",
+                    "status": "pending"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_install",
+            &tool_args(&[("vm_id", json!("web-01"))]),
+        )
+        .await;
+        assert_eq!(out["type"], "browser_install");
+        assert_eq!(out["status"], "pending");
+
+        // No vm_id → 400 before any hub call.
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let out = call_tool(hub, &ctx, "browser_install", &HashMap::new()).await;
+        assert_eq!(out["error"]["status"], 400);
     }
 
     #[tokio::test]
