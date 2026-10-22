@@ -268,6 +268,17 @@ pub async fn create_browser_install_task(
     created_by: &str,
 ) -> Result<(Task, String), ExecError> {
     require_active(vm)?;
+    // Ensure the engine pin exists: when no version is pinned (auto mode)
+    // or auto-update is on, fetch the latest release from GitHub first so
+    // the worker always installs a verified (version + SHA-256) build.
+    let settings = crate::models::setting::get_settings_row(&state.pool)
+        .await?
+        .ok_or(ExecError::Settings)?;
+    if settings.browser_engine_version.is_empty() {
+        crate::services::browser_engine::check_for_update(&state.pool)
+            .await
+            .map_err(|e| ExecError::Input(format!("could not resolve the browser engine version: {e}")))?;
+    }
     let settings = crate::models::setting::get_settings_row(&state.pool)
         .await?
         .ok_or(ExecError::Settings)?;

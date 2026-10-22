@@ -555,6 +555,15 @@ pub async fn call_tool(
                 },
             }
         }
+        "browser_engine_check" => {
+            // Admin-only hub route (RBAC enforced hub-side); triggers an
+            // immediate Obscura release check and re-pins the settings when
+            // a newer release ships.
+            match hub.check_browser_engine(ctx).await {
+                Ok(v) => v,
+                Err(e) => from_hub_error(e),
+            }
+        }
         "browser_install" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
                 return tool_error(400, "vm_id is required");
@@ -870,6 +879,14 @@ pub fn tool_definitions() -> Value {
                     "vm_id": {"type": "string", "description": "VM id or name"}
                 },
                 "required": ["vm_id"]
+            }
+        },
+        {
+            "name": "browser_engine_check",
+            "description": "Trigger an immediate Obscura engine update check (admin only): fetches the\nlatest Obscura release from GitHub, verifies both arch tarballs by\nSHA-256, and re-pins the fleet settings when a newer release ships.\nReturns {\"result\": \"up to date: v…\"} or {\"result\": \"updated to v…\"}.\n\nThe daily check (settings browser_engine_auto_update + browser_engine_check_time)\nruns this automatically.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
             }
         },
         {

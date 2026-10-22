@@ -14,6 +14,7 @@ pub mod task_events;
 
 pub use task_events::{PendingQueueWakes, QueueWaiter, TaskEvents, TaskWaiter};
 pub mod backup;
+pub mod browser_engine;
 pub mod ldap;
 pub mod metrics;
 pub mod notifications;

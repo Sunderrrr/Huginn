@@ -68,6 +68,18 @@ async fn main() {
     bootstrap_admin(&pool, &config).await;
     ensure_settings(&pool, &config).await;
 
+    // Best-effort: if the browser engine version is unset, fetch the latest
+    // Obscura release from GitHub so `browser_install` works out of the box
+    // ("latest by default" — no manual pin needed).
+    if let Ok(Some(settings)) = models::setting::get_settings_row(&pool).await {
+        if settings.browser_engine_version.is_empty() {
+            match services::browser_engine::check_for_update(&pool).await {
+                Ok(msg) => tracing::info!("browser engine bootstrap: {msg}"),
+                Err(e) => tracing::warn!("browser engine bootstrap failed (will retry later): {e}"),
+            }
+        }
+    }
+
     // One event bus shared by the worker long-poll and the fleet routes: a
     // task created on either side wakes the right worker instantly.
     // `TaskEvents::new()` already hands out a shared handle.
@@ -261,6 +273,24 @@ async fn sweeper(pool: sqlx::PgPool, config: Config, events: Arc<TaskEvents>, bu
         let report = crate::services::backup::sweep_backup(&pool).await;
         if let Some(reason) = report.skipped {
             tracing::debug!("backup sweep skipped: {reason}");
+        }
+
+        // 5. Browser engine (Obscura) auto-update check — best-effort, never
+        //    breaks the loop. Runs only when the admin enabled it, at the
+        //    configured UTC time, at most once per day.
+        if let Ok(Some(settings)) = crate::models::setting::get_settings_row(&pool).await {
+            let now = chrono::Utc::now();
+            if crate::services::browser_engine::should_check_now(
+                settings.browser_engine_auto_update,
+                &settings.browser_engine_check_time,
+                settings.browser_engine_last_check_at,
+                now,
+            ) {
+                match crate::services::browser_engine::check_for_update(&pool).await {
+                    Ok(msg) => tracing::info!("browser engine check: {msg}"),
+                    Err(e) => tracing::warn!("browser engine check failed: {e}"),
+                }
+            }
         }
     }
 }

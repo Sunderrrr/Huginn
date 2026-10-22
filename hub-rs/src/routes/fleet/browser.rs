@@ -101,6 +101,7 @@ pub fn router(state: FleetState) -> Router {
             "/api/vms/{vm_id}/browser-install",
             post(run_browser_install),
         )
+        .route("/api/browser-engine/check", post(check_browser_engine))
         .with_state(state)
 }
 
@@ -182,6 +183,22 @@ async fn run_browser(
 
     let task = maybe_wait(&state, task, body.wait).await;
     Ok((StatusCode::ACCEPTED, Json(TaskOut::from(task))))
+}
+
+/// `POST /api/browser-engine/check` — trigger an immediate update check
+/// (admin only). Returns `{"result": "up to date: v0.2.4"}` or
+/// `{"result": "updated to v0.2.5"}` (or an error detail).
+async fn check_browser_engine(
+    State(state): State<FleetState>,
+    headers: HeaderMap,
+    peer: Peer,
+) -> Result<impl IntoResponse, RouteError> {
+    let ip = client_ip(&headers, &state.config, peer_addr(peer));
+    let _principal = require_admin(&state, &headers, ip.as_deref()).await?;
+    let result = crate::services::browser_engine::check_for_update(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "result": result })))
 }
 
 /// `ExecError` → the status codes `run_browser` answers (mirrors

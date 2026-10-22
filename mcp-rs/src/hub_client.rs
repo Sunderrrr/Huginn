@@ -151,6 +151,13 @@ impl HubClient {
         .await
     }
 
+    /// Trigger an immediate Obscura engine update check (admin). Returns
+    /// `{"result": "up to date: v0.2.4"}` or `{"result": "updated to v0.2.5"}`.
+    pub async fn check_browser_engine(&self, ctx: &CallCtx) -> Result<Value, HubError> {
+        self.post(ctx, "/api/browser-engine/check", &Value::Null)
+            .await
+    }
+
     pub async fn trigger_update(&self, ctx: &CallCtx, vm_id: &str) -> Result<Value, HubError> {
         self.post(ctx, &format!("/api/vms/{vm_id}/update"), &Value::Null)
             .await

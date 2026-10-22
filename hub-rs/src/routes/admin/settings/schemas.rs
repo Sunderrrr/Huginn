@@ -69,6 +69,12 @@ pub struct SettingsOut {
     pub browser_engine_version: String,
     pub browser_engine_sha256_amd64: String,
     pub browser_engine_sha256_arm64: String,
+
+    // Browser engine auto-update (migrations/0006).
+    pub browser_engine_auto_update: bool,
+    pub browser_engine_check_time: String,
+    pub browser_engine_last_check_at: Option<DateTime<Utc>>,
+    pub browser_engine_last_check_result: String,
 }
 
 impl SettingsOut {
@@ -115,6 +121,10 @@ impl SettingsOut {
             browser_engine_version: row.browser_engine_version.clone(),
             browser_engine_sha256_amd64: row.browser_engine_sha256_amd64.clone(),
             browser_engine_sha256_arm64: row.browser_engine_sha256_arm64.clone(),
+            browser_engine_auto_update: row.browser_engine_auto_update,
+            browser_engine_check_time: row.browser_engine_check_time.clone(),
+            browser_engine_last_check_at: row.browser_engine_last_check_at,
+            browser_engine_last_check_result: row.browser_engine_last_check_result.clone(),
         }
     }
 }
@@ -205,6 +215,10 @@ pub struct SettingsUpdate {
     pub browser_engine_version: Option<String>,
     pub browser_engine_sha256_amd64: Option<String>,
     pub browser_engine_sha256_arm64: Option<String>,
+
+    // Browser engine auto-update (migrations/0006).
+    pub browser_engine_auto_update: Option<bool>,
+    pub browser_engine_check_time: Option<String>,
 }
 
 impl SettingsUpdate {
@@ -311,6 +325,14 @@ impl SettingsUpdate {
                         "{field} must be 64 hex characters"
                     )));
                 }
+            }
+        }
+        // Auto-update check time: "HH:MM" in UTC.
+        if let Some(t) = &self.browser_engine_check_time {
+            if crate::services::browser_engine::parse_check_time(t).is_none() {
+                return Err(RouteError::unprocessable_entity(
+                    "browser_engine_check_time must be HH:MM (UTC)",
+                ));
             }
         }
         Ok(())
@@ -462,6 +484,13 @@ impl SettingsUpdate {
         if let Some(v) = &self.browser_engine_sha256_arm64 {
             push("browser_engine_sha256_arm64", v.clone().into());
         }
+        // Auto-update settings.
+        if let Some(v) = self.browser_engine_auto_update {
+            push("browser_engine_auto_update", v.into());
+        }
+        if let Some(v) = &self.browser_engine_check_time {
+            push("browser_engine_check_time", v.clone().into());
+        }
         serde_json::Value::Object(detail)
     }
 }
@@ -513,6 +542,10 @@ pub fn values_from(row: &Setting) -> SettingValues {
         browser_engine_version: row.browser_engine_version.clone(),
         browser_engine_sha256_amd64: row.browser_engine_sha256_amd64.clone(),
         browser_engine_sha256_arm64: row.browser_engine_sha256_arm64.clone(),
+        browser_engine_auto_update: row.browser_engine_auto_update,
+        browser_engine_check_time: row.browser_engine_check_time.clone(),
+        browser_engine_last_check_at: row.browser_engine_last_check_at,
+        browser_engine_last_check_result: row.browser_engine_last_check_result.clone(),
     }
 }
 
@@ -565,5 +598,9 @@ pub fn setting_row(values: SettingValues, updated_at: DateTime<Utc>) -> Setting 
         browser_engine_version: values.browser_engine_version.clone(),
         browser_engine_sha256_amd64: values.browser_engine_sha256_amd64.clone(),
         browser_engine_sha256_arm64: values.browser_engine_sha256_arm64.clone(),
+        browser_engine_auto_update: values.browser_engine_auto_update,
+        browser_engine_check_time: values.browser_engine_check_time.clone(),
+        browser_engine_last_check_at: values.browser_engine_last_check_at,
+        browser_engine_last_check_result: values.browser_engine_last_check_result.clone(),
     }
 }
