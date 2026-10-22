@@ -133,10 +133,18 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(machine_hostname);
     let allow_insecure = std::env::var("HUGINN_ALLOW_INSECURE").as_deref() == Ok("1");
+    // install.sh fetches the hub's self-signed root to a known path and
+    // exports HUB_CA_CERT; honour it (and the explicit env) so a hub
+    // reached via its IP/localhost enrols without HUGINN_ALLOW_INSECURE.
+    let ca_cert_path = std::env::var("HUGINN_CA_CERT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("HUB_CA_CERT").ok().filter(|s| !s.is_empty()));
 
     let client = match Client::new(Options {
         base_url: hub_url.clone(),
         allow_insecure,
+        ca_cert_path: ca_cert_path.clone(),
         ..Default::default()
     }) {
         Ok(c) => c,
@@ -170,6 +178,7 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
         worker_id: resp.worker_id.clone(),
         worker_secret: resp.worker_secret,
         allow_insecure_transport: allow_insecure,
+        ca_cert_path: ca_cert_path.clone(),
         ..Default::default()
     };
     if let Err(e) = config::save(&config::state_path(state_dir), &state) {
@@ -246,6 +255,7 @@ async fn run_agent(state_dir: &str, shutdown_rx: watch::Receiver<()>) -> i32 {
         worker_id: state.worker_id.clone(),
         worker_secret: state.worker_secret.clone(),
         allow_insecure: state.allow_insecure_transport,
+        ca_cert_path: state.ca_cert_path.clone(),
     }) {
         Ok(c) => c,
         Err(e) => {
