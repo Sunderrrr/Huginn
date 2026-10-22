@@ -78,8 +78,13 @@ main() {
   esac
 
   log "enrolling with ${HUB_URL}"
-  HUB_URL="$HUB_URL" TOKEN="$TOKEN" NAME="${NAME:-}" \
-    "${BIN_DIR}/${BINARY_NAME}" enroll --state-dir "${STATE_DIR}"
+  if [ -n "${HUB_CA_CERT_PATH}" ]; then
+    HUB_URL="$HUB_URL" TOKEN="$TOKEN" NAME="${NAME:-}" HUB_CA_CERT="$HUB_CA_CERT_PATH" \
+      "${BIN_DIR}/${BINARY_NAME}" enroll --state-dir "${STATE_DIR}"
+  else
+    HUB_URL="$HUB_URL" TOKEN="$TOKEN" NAME="${NAME:-}" \
+      "${BIN_DIR}/${BINARY_NAME}" enroll --state-dir "${STATE_DIR}"
+  fi
 
   log "installing systemd service"
   "${BIN_DIR}/${BINARY_NAME}" install-service --state-dir "${STATE_DIR}" "${BIN_DIR}/${BINARY_NAME}"
@@ -103,6 +108,9 @@ detect_arch() {
 #   SUSE           /etc/pki/trust/anchors/           + update-ca-certificates
 #   Arch           /etc/ca-certificates/trust-source/anchors/ + trust
 #   Alpine         /usr/local/share/ca-certificates/ + update-ca-certificates
+# On success, sets HUB_CA_CERT_PATH so the worker (rustls) can trust the
+# hub even though rustls does not read the OS trust store.
+HUB_CA_CERT_PATH=""
 ensure_hub_trust() {
   case "$HUB_URL" in
     http://*) return 0 ;;
@@ -137,6 +145,7 @@ ensure_hub_trust() {
   curl -fsSLk "${HUB_URL}/caddy-root.crt" -o "${ca_dst}" \
     || err "could not fetch the hub CA from ${HUB_URL}/caddy-root.crt"
   ${ca_cmd} >/dev/null 2>&1 || true
+  HUB_CA_CERT_PATH="${ca_dst}"
   curl -fsS "${HUB_URL}/healthz" >/dev/null 2>&1 \
     || err "hub still not trusted after installing its CA"
 }

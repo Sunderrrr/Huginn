@@ -54,6 +54,13 @@ pub struct State {
     pub binary_path: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_insecure_transport: bool,
+    /// Path to a PEM-encoded CA certificate the hub's TLS certificate was
+    /// signed with (self-signed/internal CAs, e.g. the Caddy root served at
+    /// /caddy-root.crt). None = use the bundled Mozilla root store, which
+    /// covers publicly trusted hubs (the FQDN behind Cloudflare) but not an
+    /// IP/localhost hub. Set by install.sh from HUB_CA_CERT / HUB_URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_cert_path: Option<String>,
 }
 
 fn is_false(v: &bool) -> bool {

@@ -12,6 +12,26 @@ use serde_json::Value;
 
 /// Timeout applied to every hub request (mirrors http.Client{Timeout: 70s}).
 const HTTP_TIMEOUT: Duration = Duration::from_secs(70);
+
+/// Build the reqwest client: bundled Mozilla roots always, plus any CA
+/// certificate provided (self-signed/internal hub CAs). rustls does not
+/// read the OS trust store, so a self-signed hub CA must be handed in
+/// explicitly (install.sh fetches it from /caddy-root.crt and writes it to
+/// a known path, then sets HUB_CA_CERT / state).
+fn build_http_client(
+    _allow_insecure: bool,
+    ca_cert_path: Option<&str>,
+) -> Result<reqwest::Client, reqwest::Error> {
+    let mut builder = reqwest::Client::builder().timeout(HTTP_TIMEOUT);
+    if let Some(path) = ca_cert_path {
+        if let Ok(pem) = std::fs::read(path) {
+            if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
+                builder = builder.add_root_certificate(cert);
+            }
+        }
+    }
+    builder.build()
+}
 /// Response bodies are read with a hard 4 MiB cap (mirrors io.LimitReader).
 const MAX_RESPONSE_BYTES: usize = 4 << 20;
 
@@ -79,6 +99,9 @@ pub struct Options {
     pub worker_id: String,
     pub worker_secret: String,
     pub allow_insecure: bool,
+    /// Optional path to a PEM CA file that signed the hub's certificate
+    /// (self-signed/internal CAs). None = bundled Mozilla roots only.
+    pub ca_cert_path: Option<String>,
 }
 
 impl Client {
@@ -90,9 +113,7 @@ impl Client {
                 "hub URL must use https (got {base:?}); set allow_insecure for dev"
             )));
         }
-        let http = reqwest::Client::builder()
-            .timeout(HTTP_TIMEOUT)
-            .build()
+        let http = build_http_client(opts.allow_insecure, opts.ca_cert_path.as_deref())
             .map_err(Error::Http)?;
         Ok(Self {
             base_url: base,
@@ -316,6 +337,7 @@ mod tests {
         Client::new(Options {
             base_url: server.uri(),
             allow_insecure: true,
+            ca_cert_path: None,
             ..Default::default()
         })
         .expect("client")
@@ -325,6 +347,7 @@ mod tests {
     fn test_new_rejects_plaintext_by_default() {
         let err = Client::new(Options {
             base_url: "http://hub.local".into(),
+            ca_cert_path: None,
             ..Default::default()
         });
         assert!(
@@ -338,6 +361,7 @@ mod tests {
         let client = Client::new(Options {
             base_url: "http://hub.local".into(),
             allow_insecure: true,
+            ca_cert_path: None,
             ..Default::default()
         });
         assert!(client.is_ok(), "unexpected error: {client:?}");
@@ -364,6 +388,7 @@ mod tests {
             worker_id: "vm-1".into(),
             worker_secret: "sekret".into(),
             allow_insecure: true,
+            ca_cert_path: None,
         })
         .expect("client");
 
