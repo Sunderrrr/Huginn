@@ -522,6 +522,10 @@ pub(crate) mod testing {
             browser_engine_version: String::new(),
             browser_engine_sha256_amd64: String::new(),
             browser_engine_sha256_arm64: String::new(),
+            browser_engine_auto_update: false,
+            browser_engine_check_time: "03:00".to_owned(),
+            browser_engine_last_check_at: None,
+            browser_engine_last_check_result: String::new(),
         }
     }
 }

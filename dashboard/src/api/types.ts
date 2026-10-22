@@ -214,6 +214,10 @@ export interface Settings {
   // Browser automation: the pinned Obscura engine release `browser_install`
   // tasks download (admin-only read; workers get it via the task payload).
   browser_engine_version?: string;
+  browser_engine_auto_update?: boolean;
+  browser_engine_check_time?: string;
+  browser_engine_last_check_at?: string;
+  browser_engine_last_check_result?: string;
   // SSO / OIDC / LDAP / notifications fields are admin-only and optional here.
   oidc_provider_name?: string;
   notifications_enabled?: boolean;

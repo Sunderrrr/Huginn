@@ -237,7 +237,7 @@ mod e2e_tests {
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["result"]["tools"].as_array().unwrap().len(), 15);
+        assert_eq!(json["result"]["tools"].as_array().unwrap().len(), 16);
     }
 
     #[tokio::test]

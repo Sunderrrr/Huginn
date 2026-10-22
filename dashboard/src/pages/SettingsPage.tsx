@@ -21,6 +21,10 @@ export function SettingsPage() {
   const [autoUpdate, setAutoUpdate] = useState(false);
   const [enrollmentUrl, setEnrollmentUrl] = useState("");
 
+  // Browser engine auto-update (Obscura)
+  const [engineAutoUpdate, setEngineAutoUpdate] = useState(false);
+  const [engineCheckTime, setEngineCheckTime] = useState("03:00");
+
   // SSO / OIDC
   const [oidcEnabled, setOidcEnabled] = useState(false);
   const [oidcProviderName, setOidcProviderName] = useState("SSO");
@@ -55,6 +59,9 @@ export function SettingsPage() {
       setDomains(settings.allowed_release_domains.join(", "));
       setAutoUpdate(!!settings.auto_update_enabled);
       setEnrollmentUrl(settings.enrollment_base_url || "");
+      setEngineAutoUpdate(!!settings.browser_engine_auto_update);
+      const t = settings.browser_engine_check_time;
+      if (typeof t === "string" && t) setEngineCheckTime(t);
     }
   }, [settings]);
 
@@ -101,6 +108,8 @@ export function SettingsPage() {
         allowed_release_domains: domains.split(",").map((d) => d.trim()).filter(Boolean),
         auto_update_enabled: autoUpdate,
         enrollment_base_url: enrollmentUrl,
+        browser_engine_auto_update: engineAutoUpdate,
+        browser_engine_check_time: engineCheckTime,
         oidc_enabled: oidcEnabled,
         oidc_provider_name: oidcProviderName,
         oidc_issuer: oidcIssuer,
@@ -183,19 +192,49 @@ export function SettingsPage() {
               </Hint>
             </Field>
             {isAdmin && (
-              <Field label="Browser engine version (pinned)">
-                <input
-                  className="field"
-                  value={settings?.browser_engine_version ?? ""}
-                  disabled
-                  readOnly
-                  spellCheck={false}
-                  style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
-                />
-                <Hint>
-                  The Obscura release "Install browser engine" downloads on Linux workers.
-                </Hint>
-              </Field>
+              <>
+                <Field label="Browser engine version (pinned)">
+                  <input
+                    className="field"
+                    value={settings?.browser_engine_version ?? ""}
+                    disabled
+                    readOnly
+                    spellCheck={false}
+                    style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
+                  />
+                  <Hint>
+                    The Obscura release "Install browser engine" downloads on Linux workers.
+                    Last check: {String(settings?.browser_engine_last_check_result ?? "never")}.
+                  </Hint>
+                </Field>
+                <div>
+                  <label className="row" style={{ gap: 8, cursor: isAdmin ? "pointer" : "default" }}>
+                    <input
+                      type="checkbox"
+                      checked={engineAutoUpdate}
+                      onChange={(e) => setEngineAutoUpdate(e.target.checked)}
+                      disabled={!isAdmin}
+                    />
+                    <span style={{ fontSize: 13 }}>Auto-update Obscura engine</span>
+                  </label>
+                  <Hint>
+                    When on, the hub checks GitHub daily at the configured UTC time and
+                    re-pins the engine when a newer Obscura release ships.
+                  </Hint>
+                </div>
+                <Field label="Daily check time (UTC, HH:MM)">
+                  <input
+                    className="field"
+                    type="text"
+                    value={engineCheckTime}
+                    onChange={(e) => setEngineCheckTime(e.target.value)}
+                    disabled={!isAdmin || !engineAutoUpdate}
+                    placeholder="03:00"
+                    spellCheck={false}
+                    style={{ fontFamily: "var(--font-mono)", fontSize: 13, width: 120 }}
+                  />
+                </Field>
+              </>
             )}
           </div>
         </motion.div>

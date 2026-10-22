@@ -30,7 +30,9 @@ const COLUMNS: &str = "id, target_worker_version, target_release_repo, allowed_r
                       backup_s3_prefix, backup_s3_access_key, backup_s3_secret_key, \
                       backup_s3_retention_days, enrollment_base_url, \
                       browser_engine_version, browser_engine_sha256_amd64, \
-                      browser_engine_sha256_arm64";
+                      browser_engine_sha256_arm64, browser_engine_auto_update, \
+                      browser_engine_check_time, browser_engine_last_check_at, \
+                      browser_engine_last_check_result";
 
 /// Fleet-wide configuration (one row).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, sqlx::FromRow)]
@@ -103,6 +105,23 @@ pub struct Setting {
     pub browser_engine_sha256_amd64: String,
     #[serde(default)]
     pub browser_engine_sha256_arm64: String,
+    /// Auto-update: daily check against GitHub for a newer Obscura release.
+    #[serde(default)]
+    pub browser_engine_auto_update: bool,
+    /// Daily check time (UTC, "HH:MM"). Ignored when auto-update is off.
+    #[serde(default = "default_browser_engine_check_time")]
+    pub browser_engine_check_time: String,
+    /// When the last update check ran (None = never).
+    #[serde(default)]
+    pub browser_engine_last_check_at: Option<DateTime<Utc>>,
+    /// Human-readable result of the last check ("up to date: v0.2.4",
+    /// "updated to v0.2.5", or an error message).
+    #[serde(default)]
+    pub browser_engine_last_check_result: String,
+}
+
+fn default_browser_engine_check_time() -> String {
+    "03:00".to_owned()
 }
 
 impl Setting {
@@ -171,6 +190,11 @@ pub struct SettingValues {
     pub browser_engine_version: String,
     pub browser_engine_sha256_amd64: String,
     pub browser_engine_sha256_arm64: String,
+    /// Auto-update (migrations/0006).
+    pub browser_engine_auto_update: bool,
+    pub browser_engine_check_time: String,
+    pub browser_engine_last_check_at: Option<DateTime<Utc>>,
+    pub browser_engine_last_check_result: String,
 }
 
 /// Defaults mirror the SQLAlchemy column defaults.
@@ -220,6 +244,10 @@ impl Default for SettingValues {
             browser_engine_version: String::new(),
             browser_engine_sha256_amd64: String::new(),
             browser_engine_sha256_arm64: String::new(),
+            browser_engine_auto_update: false,
+            browser_engine_check_time: "03:00".to_owned(),
+            browser_engine_last_check_at: None,
+            browser_engine_last_check_result: String::new(),
         }
     }
 }
@@ -231,6 +259,61 @@ pub async fn get_settings_row(pool: &PgPool) -> Result<Option<Setting>, DbError>
             .fetch_optional(pool)
             .await?;
     Ok(row)
+}
+
+/// Build a `SettingValues` from a `Setting` row (the inverse of `upsert`'s
+/// row mapping). Used by services that patch a single field without losing
+/// the rest. Mirrors `routes::admin::settings::schemas::values_from`.
+pub fn values_from(row: &Setting) -> SettingValues {
+    SettingValues {
+        target_worker_version: row.target_worker_version.clone(),
+        target_release_repo: row.target_release_repo.clone(),
+        allowed_release_domains: row.allowed_release_domains.clone(),
+        updated_by: row.updated_by,
+        oidc_enabled: row.oidc_enabled,
+        oidc_issuer: row.oidc_issuer.clone(),
+        oidc_client_id: row.oidc_client_id.clone(),
+        oidc_client_secret: row.oidc_client_secret.clone(),
+        oidc_redirect_url: row.oidc_redirect_url.clone(),
+        oidc_post_login_redirect: row.oidc_post_login_redirect.clone(),
+        ldap_enabled: row.ldap_enabled,
+        ldap_server_url: row.ldap_server_url.clone(),
+        ldap_bind_dn: row.ldap_bind_dn.clone(),
+        ldap_bind_password: row.ldap_bind_password.clone(),
+        ldap_user_search_base: row.ldap_user_search_base.clone(),
+        ldap_user_search_filter: row.ldap_user_search_filter.clone(),
+        ldap_start_tls: row.ldap_start_tls,
+        ldap_use_ldaps: row.ldap_use_ldaps,
+        notifications_enabled: row.notifications_enabled,
+        discord_webhook_url: row.discord_webhook_url.clone(),
+        generic_webhook_url: row.generic_webhook_url.clone(),
+        notify_vm_offline: row.notify_vm_offline,
+        notify_vm_recovered: row.notify_vm_recovered,
+        notify_task_failure: row.notify_task_failure,
+        auto_update_enabled: row.auto_update_enabled,
+        oidc_provider_name: row.oidc_provider_name.clone(),
+        require_admin_mfa: row.require_admin_mfa,
+        allow_password_login: row.allow_password_login,
+        webauthn_rp_id: row.webauthn_rp_id.clone(),
+        webauthn_rp_name: row.webauthn_rp_name.clone(),
+        webauthn_origin: row.webauthn_origin.clone(),
+        backup_s3_enabled: row.backup_s3_enabled,
+        backup_s3_endpoint: row.backup_s3_endpoint.clone(),
+        backup_s3_region: row.backup_s3_region.clone(),
+        backup_s3_bucket: row.backup_s3_bucket.clone(),
+        backup_s3_prefix: row.backup_s3_prefix.clone(),
+        backup_s3_access_key: row.backup_s3_access_key.clone(),
+        backup_s3_secret_key: row.backup_s3_secret_key.clone(),
+        backup_s3_retention_days: row.backup_s3_retention_days,
+        enrollment_base_url: row.enrollment_base_url.clone(),
+        browser_engine_version: row.browser_engine_version.clone(),
+        browser_engine_sha256_amd64: row.browser_engine_sha256_amd64.clone(),
+        browser_engine_sha256_arm64: row.browser_engine_sha256_arm64.clone(),
+        browser_engine_auto_update: row.browser_engine_auto_update,
+        browser_engine_check_time: row.browser_engine_check_time.clone(),
+        browser_engine_last_check_at: row.browser_engine_last_check_at,
+        browser_engine_last_check_result: row.browser_engine_last_check_result.clone(),
+    }
 }
 
 /// Insert or replace the singleton settings row.
@@ -248,10 +331,12 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
          backup_s3_enabled, backup_s3_endpoint, backup_s3_region, backup_s3_bucket, \
          backup_s3_prefix, backup_s3_access_key, backup_s3_secret_key, backup_s3_retention_days, \
          enrollment_base_url, browser_engine_version, browser_engine_sha256_amd64, \
-         browser_engine_sha256_arm64) \
+         browser_engine_sha256_arm64, browser_engine_auto_update, \
+         browser_engine_check_time, browser_engine_last_check_at, \
+         browser_engine_last_check_result) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
          $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, \
-         $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45) \
+         $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48) \
          ON CONFLICT (id) DO UPDATE SET \
          target_worker_version = EXCLUDED.target_worker_version, \
          target_release_repo = EXCLUDED.target_release_repo, \
@@ -296,7 +381,11 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
          enrollment_base_url = EXCLUDED.enrollment_base_url, \
          browser_engine_version = EXCLUDED.browser_engine_version, \
          browser_engine_sha256_amd64 = EXCLUDED.browser_engine_sha256_amd64, \
-         browser_engine_sha256_arm64 = EXCLUDED.browser_engine_sha256_arm64 \
+         browser_engine_sha256_arm64 = EXCLUDED.browser_engine_sha256_arm64, \
+         browser_engine_auto_update = EXCLUDED.browser_engine_auto_update, \
+         browser_engine_check_time = EXCLUDED.browser_engine_check_time, \
+         browser_engine_last_check_at = EXCLUDED.browser_engine_last_check_at, \
+         browser_engine_last_check_result = EXCLUDED.browser_engine_last_check_result \
          RETURNING {COLUMNS}"
     ))
     .bind(SETTINGS_SINGLETON_ID)
@@ -344,6 +433,10 @@ pub async fn upsert(pool: &PgPool, values: SettingValues) -> Result<Setting, DbE
     .bind(&values.browser_engine_version)
     .bind(&values.browser_engine_sha256_amd64)
     .bind(&values.browser_engine_sha256_arm64)
+    .bind(values.browser_engine_auto_update)
+    .bind(&values.browser_engine_check_time)
+    .bind(values.browser_engine_last_check_at)
+    .bind(&values.browser_engine_last_check_result)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -421,6 +514,10 @@ mod tests {
             browser_engine_version: String::new(),
             browser_engine_sha256_amd64: String::new(),
             browser_engine_sha256_arm64: String::new(),
+            browser_engine_auto_update: false,
+            browser_engine_check_time: "03:00".to_owned(),
+            browser_engine_last_check_at: None,
+            browser_engine_last_check_result: String::new(),
         };
         assert_eq!(
             s.allowed_release_domains_vec(),

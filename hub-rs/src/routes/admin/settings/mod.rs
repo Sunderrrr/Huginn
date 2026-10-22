@@ -277,6 +277,13 @@ async fn update_settings_endpoint(
     if let Some(v) = &body.browser_engine_sha256_arm64 {
         values.browser_engine_sha256_arm64 = v.clone();
     }
+    // Auto-update settings (migrations/0006).
+    if let Some(v) = body.browser_engine_auto_update {
+        values.browser_engine_auto_update = v;
+    }
+    if let Some(v) = &body.browser_engine_check_time {
+        values.browser_engine_check_time = v.clone();
+    }
     // `row.updated_by = principal.user.id` when a real user is behind it.
     values.updated_by = caller.principal.user.as_ref().map(|u| u.id);
     // Never write secrets into the audit log.
