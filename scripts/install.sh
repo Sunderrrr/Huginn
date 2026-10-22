@@ -89,6 +89,15 @@ main() {
   log "installing systemd service"
   "${BIN_DIR}/${BINARY_NAME}" install-service --state-dir "${STATE_DIR}" "${BIN_DIR}/${BINARY_NAME}"
 
+  # install-service enables the unit but does not restart an already-running
+  # instance: a worker from a previous install (or an upgraded binary) would
+  # keep running with the old in-memory state and never pick up the new
+  # hub URL / CA. Restart so the enrolled state is loaded immediately.
+  if systemctl is-active --quiet huginn-worker 2>/dev/null; then
+    log "restarting huginn-worker to pick up the new state"
+    systemctl restart huginn-worker || true
+  fi
+
   log "done. Approve this VM in the dashboard to activate it."
 }
 
