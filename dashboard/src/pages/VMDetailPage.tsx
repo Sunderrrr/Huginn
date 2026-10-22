@@ -181,10 +181,29 @@ export function VMDetailPage() {
             Revoke node
           </button>
         )}
-        {isAdmin && vm.state === "revoked" && (
-          <button className="btn btn--danger btn--sm" onClick={() => setConfirmDelete(true)}>
-            Delete permanently
-          </button>
+        {isAdmin && (
+          <details style={{ marginTop: 8 }}>
+            <summary className="muted tiny" style={{ cursor: "pointer" }}>
+              Uninstall worker from a machine (curl one-liner)
+            </summary>
+            <code
+              className="codeblock"
+              style={{
+                display: "block",
+                marginTop: 6,
+                fontSize: 12,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
+            >
+              curl -fsSL https://huginn.example.com/uninstall.sh | bash
+            </code>
+            <div className="muted tiny" style={{ marginTop: 4 }}>
+              Stops and removes the worker service, binary, state, hub CA and the
+              Obscura engine. Use the self-signed variant (curl -k) when
+              connecting by IP.
+            </div>
+          </details>
         )}
       </div>
 

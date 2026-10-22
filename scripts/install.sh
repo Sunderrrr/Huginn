@@ -99,6 +99,7 @@ main() {
   fi
 
   log "done. Approve this VM in the dashboard to activate it."
+  log "to remove Huginn from this machine later: curl -fsSLk ${HUB_URL}/uninstall.sh | bash"
 }
 
 detect_arch() {
