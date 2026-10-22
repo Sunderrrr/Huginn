@@ -81,6 +81,10 @@
 		root * /srv
 		file_server
 	}
+	handle /uninstall.sh {
+		root * /srv
+		file_server
+	}
 	handle /install.ps1 {
 		root * /srv
 		file_server
