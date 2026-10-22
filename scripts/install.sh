@@ -115,32 +115,37 @@ ensure_hub_trust() {
   case "$HUB_URL" in
     http://*) return 0 ;;
   esac
-  if curl -fsS "${HUB_URL}/healthz" >/dev/null 2>&1; then
-    return 0
-  fi
-  log "hub certificate not trusted; installing the hub CA (trust-on-first-use)"
 
+  # Resolve the distro-specific CA destination up front, so we can hand its
+  # path to the worker (rustls does not read the OS trust store) even when
+  # the hub is already trusted by the system store.
   local ca_dst="" ca_cmd=""
   if command -v update-ca-trust >/dev/null 2>&1; then
-    # RHEL, CentOS, Fedora, Rocky, Alma — also Arch (trust)
     ca_dst="/etc/pki/ca-trust/source/anchors/huginn-hub-ca.crt"
     ca_cmd="update-ca-trust extract"
   elif [ -d /etc/pki/trust/anchors ] 2>/dev/null; then
-    # openSUSE / SLES
     ca_dst="/etc/pki/trust/anchors/huginn-hub-ca.crt"
     ca_cmd="update-ca-certificates"
   elif [ -d /etc/ca-certificates/trust-source/anchors ] 2>/dev/null; then
-    # Arch / Manjaro (p11-kit)
     ca_dst="/etc/ca-certificates/trust-source/anchors/huginn-hub-ca.crt"
     ca_cmd="trust extract-compat"
   elif command -v update-ca-certificates >/dev/null 2>&1; then
-    # Debian, Ubuntu, Alpine (all use the same tool)
     ca_dst="/usr/local/share/ca-certificates/huginn-hub-ca.crt"
     ca_cmd="update-ca-certificates"
   else
     err "no CA trust store found (tried update-ca-trust, /etc/pki/trust, /etc/ca-certificates, update-ca-certificates)"
   fi
 
+  if curl -fsS "${HUB_URL}/healthz" >/dev/null 2>&1; then
+    # Already trusted (system store has the CA, or a previous run fetched
+    # it). Expose the file path so rustls can use it too.
+    if [ -s "${ca_dst}" ]; then
+      HUB_CA_CERT_PATH="${ca_dst}"
+    fi
+    return 0
+  fi
+
+  log "hub certificate not trusted; installing the hub CA (trust-on-first-use)"
   log "installing hub CA to ${ca_dst}"
   curl -fsSLk "${HUB_URL}/caddy-root.crt" -o "${ca_dst}" \
     || err "could not fetch the hub CA from ${HUB_URL}/caddy-root.crt"
