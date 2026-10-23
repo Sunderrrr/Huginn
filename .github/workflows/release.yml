@@ -15,13 +15,17 @@ jobs:
       run:
         working-directory: worker-rs
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # No token left in .git/config — a build script must not be able
+          # to exfiltrate the job's GITHUB_TOKEN.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
-      - uses: taiki-e/install-action@cargo-zigbuild
+      - uses: taiki-e/install-action@d2bea38207d08b13b798c8a031b0912d13e2a802 # cargo-zigbuild
       - name: Install zig (cross-linker for musl targets)
-        run: pip install ziglang
+        run: pip install --no-cache-dir ziglang==0.17.0
       - name: Cross-compile static worker binaries
         env:
           VERSION: ${{ github.ref_name }}
@@ -53,8 +57,12 @@ jobs:
   build-mcp-rs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # No token left in .git/config — a build script must not be able
+          # to exfiltrate the job's GITHUB_TOKEN.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - name: Build + test MCP server
         working-directory: mcp-rs
         run: |
@@ -94,8 +102,12 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # No token left in .git/config — a build script must not be able
+          # to exfiltrate the job's GITHUB_TOKEN.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - name: Build + test hub
         working-directory: hub-rs
         run: |
