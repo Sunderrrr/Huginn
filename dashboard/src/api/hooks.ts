@@ -268,6 +268,7 @@ export function useCreateToken() {
       ttl_seconds: number;
       max_uses: number;
       auto_approve?: boolean;
+      install_browser?: boolean;
     }) => api.post<EnrollmentTokenCreated>("/api/enrollment-tokens", vars),
     onSuccess: invalidate,
   });

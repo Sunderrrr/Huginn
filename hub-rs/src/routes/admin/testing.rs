@@ -479,6 +479,7 @@ impl AdminStore for MockStore {
                 created_at: now,
                 updated_at: now,
                 auto_approve: new.auto_approve,
+                install_browser: new.install_browser,
             };
             db.enrollment_tokens.insert(row.id, row.clone());
             Ok(row)

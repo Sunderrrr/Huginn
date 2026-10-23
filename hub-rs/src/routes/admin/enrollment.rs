@@ -44,6 +44,8 @@ pub struct EnrollmentTokenCreate {
     pub max_uses: i32,
     #[serde(default)]
     pub auto_approve: bool,
+    #[serde(default)]
+    pub install_browser: bool,
 }
 
 fn default_ttl() -> i64 {
@@ -83,6 +85,7 @@ pub struct EnrollmentTokenOut {
     pub max_uses: i32,
     pub uses_count: i32,
     pub auto_approve: bool,
+    pub install_browser: bool,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -96,6 +99,7 @@ impl From<&EnrollmentToken> for EnrollmentTokenOut {
             max_uses: token.max_uses,
             uses_count: token.uses_count,
             auto_approve: token.auto_approve,
+            install_browser: token.install_browser,
             expires_at: token.expires_at,
             revoked_at: token.revoked_at,
             created_at: token.created_at,
@@ -111,6 +115,7 @@ pub struct EnrollmentTokenCreated {
     pub max_uses: i32,
     pub uses_count: i32,
     pub auto_approve: bool,
+    pub install_browser: bool,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -158,6 +163,7 @@ async fn create_token(
             ttl_seconds: body.ttl_seconds,
             max_uses: body.max_uses,
             auto_approve: body.auto_approve,
+            install_browser: body.install_browser,
         })
         .await?;
     audit_record(
@@ -180,6 +186,7 @@ async fn create_token(
             max_uses: token.max_uses,
             uses_count: token.uses_count,
             auto_approve: token.auto_approve,
+            install_browser: token.install_browser,
             expires_at: token.expires_at,
             revoked_at: token.revoked_at,
             created_at: token.created_at,
@@ -291,6 +298,7 @@ mod tests {
                 "created_at",
                 "expires_at",
                 "id",
+                "install_browser",
                 "label",
                 "max_uses",
                 "revoked_at",

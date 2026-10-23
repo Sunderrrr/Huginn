@@ -38,6 +38,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
   // otherwise the token is single-use.
   const [reusable, setReusable] = useState(false);
   const [autoApprove, setAutoApprove] = useState(false);
+  const [installBrowser, setInstallBrowser] = useState(false);
   const [created, setCreated] = useState<EnrollmentTokenCreated | null>(null);
   const [reveal, setReveal] = useState(false);
   const [revealCmd, setRevealCmd] = useState(false);
@@ -64,6 +65,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
     setLabel("");
     setReusable(false);
     setAutoApprove(false);
+    setInstallBrowser(false);
     setOs("linux");
   }
 
@@ -75,6 +77,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
         ttl_seconds: ttl,
         max_uses: reusable ? 0 : 1,
         auto_approve: autoApprove,
+        install_browser: installBrowser,
       });
       setReveal(false);
       setRevealCmd(false);
@@ -258,6 +261,23 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
                 <span className="muted tiny" style={{ display: "block" }}>
                   Enrolled VMs become active immediately, skipping manual approval. Anyone holding
                   this token can add a live worker — keep it secret and revoke when done.
+                </span>
+              </span>
+            </label>
+            <label className="row" style={{ gap: 10, cursor: "pointer", alignItems: "flex-start" }}>
+              <input
+                type="checkbox"
+                checked={installBrowser}
+                onChange={(e) => setInstallBrowser(e.target.checked)}
+                disabled={!autoApprove}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <span style={{ fontSize: 13 }}>Install Obscura engine on enrollment</span>
+                <span className="muted tiny" style={{ display: "block" }}>
+                  Auto-queues a browser_install task for the new VM (Linux only, needs an
+                  auto-approved token). The engine is downloaded from the hub's pinned
+                  release (~70 MB) after enrollment.
                 </span>
               </span>
             </label>
