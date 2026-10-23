@@ -6,13 +6,15 @@ describe("token storage", () => {
     setToken(null);
   });
 
-  it("persists and clears the token", () => {
+  it("persists and clears the token in sessionStorage (never localStorage)", () => {
     setToken("abc.def.ghi");
     expect(getToken()).toBe("abc.def.ghi");
-    expect(localStorage.getItem("huginn.token")).toBe("abc.def.ghi");
+    expect(sessionStorage.getItem("huginn.token")).toBe("abc.def.ghi");
+    // The token must not outlive the tab: localStorage is off-limits.
+    expect(localStorage.getItem("huginn.token")).toBeNull();
     setToken(null);
     expect(getToken()).toBeNull();
-    expect(localStorage.getItem("huginn.token")).toBeNull();
+    expect(sessionStorage.getItem("huginn.token")).toBeNull();
   });
 });
 

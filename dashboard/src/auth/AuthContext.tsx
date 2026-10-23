@@ -35,7 +35,9 @@ const AuthContext = createContext<AuthValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const { data: user, isLoading } = useMe();
-  // Held in memory only — never persisted to localStorage.
+  // The MFA challenge and the forced-setup token are held in memory only —
+  // they are short-lived and never persisted. The *access* token lives in the
+  // API client (module state + tab-scoped sessionStorage).
   const [challengeToken, setChallengeToken] = useState<string | null>(null);
   const [setupToken, setSetupToken] = useState<string | null>(null);
 
