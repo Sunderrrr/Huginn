@@ -509,7 +509,7 @@ async fn webauthn_not_configured_fails_closed() {
 #[tokio::test]
 async fn webauthn_rejects_an_ip_rp_id() {
     let Some((state, _guard)) = fresh_state(Config {
-        webauthn_rp_id: "172.16.2.5".into(),
+        webauthn_rp_id: "192.0.2.1".into(),
         webauthn_origin: "https://172.16.2.5".into(),
         ..Config::default()
     })

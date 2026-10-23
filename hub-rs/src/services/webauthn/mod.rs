@@ -487,7 +487,7 @@ mod tests {
     fn rp_id_must_be_a_registrable_domain() {
         assert!(is_registrable_domain("huginn.example.com"));
         assert!(is_registrable_domain("example.com"));
-        assert!(!is_registrable_domain("172.16.2.5"));
+        assert!(!is_registrable_domain("192.0.2.1"));
         assert!(!is_registrable_domain("2001:db8::1"));
         assert!(!is_registrable_domain("localhost"));
         assert!(!is_registrable_domain("com"));

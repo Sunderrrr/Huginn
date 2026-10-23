@@ -121,7 +121,7 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
           />
           <p className="muted tiny" style={{ marginBottom: 12, lineHeight: 1.5 }}>
             The address workers use to download the installer and enroll. Point it at your
-            VPN/LAN IP (e.g. https://100.73.x.x) so workers connect directly instead of
+            VPN/LAN IP (e.g. https://10.x.x.x) so workers connect directly instead of
             through a public domain.
           </p>
 

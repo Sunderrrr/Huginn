@@ -553,7 +553,7 @@ mod tests {
 
         let mut values = SettingValues {
             target_worker_version: "v9.9.9".into(),
-            enrollment_base_url: "https://100.73.17.140".into(),
+            enrollment_base_url: "https://192.0.2.1".into(),
             browser_engine_version: "v0.2.5".into(),
             browser_engine_sha256_amd64: "a".repeat(64),
             browser_engine_sha256_arm64: "b".repeat(64),
@@ -564,7 +564,7 @@ mod tests {
         // INSERT path (no row yet).
         let row = upsert(&pool, values.clone()).await.expect("insert upsert");
         assert_eq!(row.target_worker_version, "v9.9.9");
-        assert_eq!(row.enrollment_base_url, "https://100.73.17.140");
+        assert_eq!(row.enrollment_base_url, "https://192.0.2.1");
         assert_eq!(row.browser_engine_version, "v0.2.5");
         assert_eq!(row.browser_engine_sha256_amd64, "a".repeat(64));
         assert_eq!(row.browser_engine_sha256_arm64, "b".repeat(64));

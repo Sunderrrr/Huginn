@@ -187,7 +187,7 @@ export function SettingsPage() {
               />
               <Hint>
                 The address workers use to download the installer and enroll (shown in the
-                "Add VM" modal). Set it to your VPN/LAN IP (e.g. https://100.73.x.x) so
+                "Add VM" modal). Set it to your VPN/LAN IP (e.g. https://10.x.x.x) so
                 workers connect directly. Leave empty to use the dashboard origin.
               </Hint>
             </Field>
