@@ -689,6 +689,7 @@ mod tests {
             ldap_dn: None,
             role: UserRole::Readonly,
             is_active: true,
+            session_epoch: 0,
             last_login_at: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),

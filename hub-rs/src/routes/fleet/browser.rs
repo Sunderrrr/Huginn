@@ -403,7 +403,12 @@ mod tests {
             state
                 .security
                 .jwt()
-                .create_access_token(&user.id.to_string(), user.role.as_str(), 60)
+                .create_access_token(
+                    &user.id.to_string(),
+                    user.role.as_str(),
+                    60,
+                    user.session_epoch,
+                )
                 .unwrap()
         };
         let post = |uri: String, body: serde_json::Value, token: &str| {

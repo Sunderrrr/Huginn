@@ -7,6 +7,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Security
+- **Server-side session revocation** (audit finding F-08): a per-user
+  `session_epoch` counter now travels in the access token and is compared
+  with the stored value on every request. A logout, a password change or an
+  MFA reset therefore kills the sessions opened with the old credentials —
+  immediately, with no denylist to store or purge. Tokens issued before the
+  migration carry no epoch and count as epoch 0 (they stay valid until they
+  expire, exactly as before). The access-token payload gains one claim
+  (`epoch`); the endpoint parity gate is unaffected (JWTs are normalized),
+  and the frozen Python byte-vector test now pins the encoder rather than
+  the whole claim set.
 - **Full security audit** (OWASP WSTG + ASVS, four parallel deep-dive reviews
   plus an infrastructure and supply-chain pass). 8 high-severity findings and
   ~30 medium/low ones were fixed, each with a regression test. See

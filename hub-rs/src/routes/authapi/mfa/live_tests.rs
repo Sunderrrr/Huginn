@@ -164,7 +164,7 @@ async fn webauthn_register_and_login_ceremonies_end_to_end() {
     let token = state
         .security
         .jwt()
-        .create_access_token(&user_id.to_string(), "readonly", 5)
+        .create_access_token(&user_id.to_string(), "readonly", 5, 0)
         .unwrap();
     let auth = Some(token.as_str());
     let key = FabricatedKey::es256();
@@ -394,12 +394,12 @@ async fn webauthn_challenges_are_bound_to_their_user() {
     let token_a = state
         .security
         .jwt()
-        .create_access_token(&user_a.to_string(), "readonly", 5)
+        .create_access_token(&user_a.to_string(), "readonly", 5, 0)
         .unwrap();
     let token_b = state
         .security
         .jwt()
-        .create_access_token(&user_b.to_string(), "readonly", 5)
+        .create_access_token(&user_b.to_string(), "readonly", 5, 0)
         .unwrap();
 
     let (status, options) = send(
@@ -528,7 +528,7 @@ async fn webauthn_not_configured_fails_closed() {
     let token = state
         .security
         .jwt()
-        .create_access_token(&user_id.to_string(), "readonly", 5)
+        .create_access_token(&user_id.to_string(), "readonly", 5, 0)
         .unwrap();
     let (status, body) = send(
         &state,
@@ -559,7 +559,7 @@ async fn webauthn_rejects_an_ip_rp_id() {
     let token = state
         .security
         .jwt()
-        .create_access_token(&user_id.to_string(), "readonly", 5)
+        .create_access_token(&user_id.to_string(), "readonly", 5, 0)
         .unwrap();
     let (status, body) = send(
         &state,
@@ -598,7 +598,7 @@ async fn webauthn_settings_row_overrides_the_env_config() {
     let token = state
         .security
         .jwt()
-        .create_access_token(&user_id.to_string(), "readonly", 5)
+        .create_access_token(&user_id.to_string(), "readonly", 5, 0)
         .unwrap();
     let (status, options) = send(
         &state,

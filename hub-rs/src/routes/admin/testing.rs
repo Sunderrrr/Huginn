@@ -553,6 +553,7 @@ pub fn make_user(username: &str, role: UserRole) -> User {
         ldap_dn: None,
         role,
         is_active: true,
+        session_epoch: 0,
         last_login_at: None,
         created_at: now,
         updated_at: now,
@@ -602,7 +603,12 @@ pub fn bearer(state: &AdminState, user: &User) -> String {
     state
         .security
         .jwt()
-        .create_access_token(&user.id.to_string(), user.role.as_str(), 15)
+        .create_access_token(
+            &user.id.to_string(),
+            user.role.as_str(),
+            15,
+            user.session_epoch,
+        )
         .unwrap()
 }
 

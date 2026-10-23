@@ -133,9 +133,13 @@ pub async fn get_principal(
     if scope_of(&payload).is_some_and(|s| MFA_SCOPES.contains(&s)) {
         return Err(ApiError::unauthorized("token not valid for API access"));
     }
-    load_active_user(state, user_id)
-        .await
-        .map(Principal::from_user)
+    let user = load_active_user(state, user_id).await?;
+    // The session epoch must still match: a logout, a password change or
+    // an MFA reset bumps it and kills the tokens issued before (F-08).
+    if !crate::security::session_is_current(&payload, user.session_epoch) {
+        return Err(ApiError::unauthorized("session revoked"));
+    }
+    Ok(Principal::from_user(user))
 }
 
 /// Decode an access token for a business-API caller: returns the `sub` user id
@@ -436,7 +440,7 @@ mod tests {
         let expired = state
             .security
             .jwt()
-            .create_access_token_at(&sub, "admin", -5, 1_700_000_000)
+            .create_access_token_at(&sub, "admin", -5, 0, 1_700_000_000)
             .unwrap();
         let err = decode_principal_token(&state.security, &expired).unwrap_err();
         assert_eq!(err.status(), axum::http::StatusCode::UNAUTHORIZED);
