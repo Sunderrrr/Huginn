@@ -809,7 +809,16 @@ mod tests {
     #[test]
     fn health_check_kills_a_hanging_child() {
         let dir = crate::config::testutil::temp_dir("healthcheck-hang");
-        let script = dir.join("hang.sh");
+        // The file name carries a timestamp: the script is executed by the
+        // health check, and a runner that reuses a PID (and a test binary
+        // that restarts its counter) would otherwise rebuild the very same
+        // path — writing it back would fail with ETXTBSY while a leftover
+        // child still holds it open.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let script = dir.join(format!("hang-{stamp}.sh"));
         std::fs::write(&script, "#!/bin/sh\nsleep 300\n").expect("write script");
         {
             use std::os::unix::fs::PermissionsExt;
