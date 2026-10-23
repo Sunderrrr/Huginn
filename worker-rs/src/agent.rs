@@ -808,24 +808,11 @@ mod tests {
     /// process, and must fail the update.
     #[test]
     fn health_check_kills_a_hanging_child() {
-        let dir = crate::config::testutil::temp_dir("healthcheck-hang");
-        // The file name carries a timestamp: the script is executed by the
-        // health check, and a runner that reuses a PID (and a test binary
-        // that restarts its counter) would otherwise rebuild the very same
-        // path — writing it back would fail with ETXTBSY while a leftover
-        // child still holds it open.
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let script = dir.join(format!("hang-{stamp}.sh"));
-        std::fs::write(&script, "#!/bin/sh\nsleep 300\n").expect("write script");
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        // A real binary that hangs, instead of a script file: executing a
+        // file the test just wrote can fail with ETXTBSY (the file is open
+        // for execution) and leaves a process behind when it does.
         let started = std::time::Instant::now();
-        let err = run_healthcheck_sync(script.to_str().unwrap(), &[], Duration::from_millis(300))
+        let err = run_healthcheck_sync("/bin/sleep", &["300"], Duration::from_millis(300))
             .expect_err("a hanging health check must fail");
         assert!(err.contains("timed out"), "{err}");
         assert!(
@@ -838,14 +825,8 @@ mod tests {
     /// A health check that succeeds is reported as such.
     #[test]
     fn health_check_accepts_a_successful_child() {
-        let dir = crate::config::testutil::temp_dir("healthcheck-ok");
-        let script = dir.join("ok.sh");
-        std::fs::write(&script, "#!/bin/sh\necho ok\n").expect("write script");
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        run_healthcheck_sync(script.to_str().unwrap(), &[], Duration::from_secs(10))
+        // A real binary that exits 0 (no script file to execute).
+        run_healthcheck_sync("/bin/true", &[], Duration::from_secs(10))
             .expect("the health check must succeed");
     }
 
