@@ -6,6 +6,54 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- **Full security audit** (OWASP WSTG + ASVS, four parallel deep-dive reviews
+  plus an infrastructure and supply-chain pass). 8 high-severity findings and
+  ~30 medium/low ones were fixed, each with a regression test. See
+  [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for the complete report.
+  - Hub: a JWT without `exp` was accepted (permanent credential) — `exp` is
+    now mandatory; the login throttle was per-IP only (distributed brute-force
+    against one account was unthrottled) — a second per-account window was
+    added; the LDAP fallback was allowed over cleartext `ldap://` — an
+    encrypted transport is now required; the OIDC id_token nonce check was
+    skipped when the cookie was missing — it is now mandatory; the
+    `webauthn_challenges` table was never purged — expired rows are now
+    purged; the MCP service token was compared fail-open on an empty value —
+    both sides now refuse an empty token; the Obscura engine download now
+    goes through an outbound policy (HTTPS only, GitHub host allowlist, every
+    redirect hop re-validated, byte caps); the enrollment token is the
+    authority for the browser-engine install; `password_hash` /
+    `totp_secret_enc` are never serialized by the row model; the prod
+    fail-closed secret gate now detects placeholders case-insensitively and
+    also checks the database password.
+  - Worker: the root worker resolved `systemctl`/`apt-get`/`sh` through the
+    inherited PATH (local code execution as root) — every child now runs with
+    a pinned PATH; the Obscura tarball extraction was unbounded and followed
+    symlinks — it is now a bounded, `O_NOFOLLOW`, 0700→0755 write; the
+    process-group kill could race with the child's reaping; a hanging
+    health-check left a root child alive; the downloaded update could be a
+    script (ELF magic is now required); the CDP port could be pre-bound by a
+    local attacker (ownership is now verified through /proc); `worker.json`
+    could be written through a symlink; the task id was interpolated raw into
+    the result URL; the systemd unit accepted control characters in a path.
+  - MCP: the service token was never validated locally (an empty token was
+    relayed and accepted by a hub configured with one — an unauthenticated
+    fleet-control proxy); the client IP came from the first
+    `X-Forwarded-For` hop (client-controlled, so IP-pinned tokens were
+    forgeable) — the last-hop rule and a trusted-proxy list now apply;
+    authentication failures were not rate-limited; the resolved VM id was not
+    filtered before being interpolated into a URL.
+  - Dashboard: the access token was persisted in `localStorage` — it now
+    lives in `sessionStorage`; routes were not role-guarded — they now mirror
+    the hub's policy; `react-router-dom` 6.30.4 → 6.30.6 (open redirect
+    leading to XSS); the CSP gained `form-action` and `frame-src`.
+  - CI/CD: every action is pinned to a commit SHA, the workflows declare
+    `permissions: contents: read`, checkouts no longer persist the job
+    token, installs use `npm ci`, and a new `security` workflow runs
+    gitleaks, cargo/npm audits and Trivy image/IaC scans. `.dockerignore`
+    files stop `COPY . .` from baking `node_modules` and local `.env` files
+    into an image layer.
+
 ### Added
 - **Full Obscura step vocabulary** (v1.7.0): `press_key` (Enter/Tab/arrows or
   one ASCII char — forms submit for real), `hover` (trusted mouse move),
