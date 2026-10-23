@@ -99,8 +99,12 @@ services:
       HUGINN_MCP_HUB_URL: http://hub:8000
       HUGINN_MCP_SERVICE_TOKEN: ${HUGINN_MCP_SERVICE_TOKEN}
       HUGINN_MCP_TRANSPORT: streamable-http
-      # The bundled Caddyfile stamps X-Real-IP (header_up) — trust it.
+      # The bundled Caddyfile stamps X-Real-IP (header_up) — trust it, but
+      # ONLY from the edge's network range: without this the MCP would take
+      # the client-supplied X-Forwarded-For at face value and an IP-pinned
+      # MCP token could be used from any address.
       HUGINN_MCP_TRUST_PROXY: "true"
+      HUGINN_MCP_TRUSTED_PROXY_CIDRS: ${HUGINN_MCP_TRUSTED_PROXY_CIDRS:-10.88.0.0/16,10.89.0.0/16,127.0.0.0/8,172.16.0.0/12}
       HUGINN_MCP_HOST: 0.0.0.0
       HUGINN_MCP_PORT: "9000"
     expose:

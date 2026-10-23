@@ -49,6 +49,7 @@ fn normalize(v: &Value) -> Value {
                         && !key.starts_with("browser_engine_")
                         && key != "browser_enabled"
                         && key != "enrollment_base_url"
+                        && key != "install_browser"
                 })
                 .map(|(k, val)| (k.clone(), normalize(val)))
                 .collect(),

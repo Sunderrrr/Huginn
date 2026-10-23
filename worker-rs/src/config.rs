@@ -192,6 +192,11 @@ fn restrict_dir_acl(dir: &Path) {
 /// Creates the secret-bearing temp file with restrictive permissions before
 /// the atomic rename: 0600 from creation on Unix (mirroring
 /// os.WriteFile(tmp, data, 0o600)), default inherited ACLs on Windows.
+///
+/// On Unix the file is opened `O_NOFOLLOW`: a pre-placed symlink at the temp
+/// path is refused instead of being written through — the state file
+/// carries the worker secret, and following a symlink would write it
+/// wherever the link points.
 fn create_secret_file(path: &Path) -> Result<std::fs::File, Error> {
     #[cfg(unix)]
     {
@@ -200,6 +205,7 @@ fn create_secret_file(path: &Path) -> Result<std::fs::File, Error> {
             .truncate(true)
             .write(true)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(path)?)
     }
     #[cfg(windows)]
@@ -298,6 +304,38 @@ mod tests {
             0o600,
             "permissions = {:o}, want 600 (secrets must not be world-readable)",
             mode & 0o777
+        );
+    }
+
+    /// The state file holds the worker secret: the temp file it is written
+    /// through must never be a pre-placed symlink (which would divert the
+    /// secret to an arbitrary path).
+    #[cfg(unix)]
+    #[test]
+    fn test_save_refuses_to_write_through_a_symlink() {
+        let dir = testutil::temp_dir("symlink");
+        let path = state_path(dir.to_str().unwrap());
+        let outside = dir.join("outside");
+        std::fs::write(&outside, b"untouched").expect("write outside");
+        // Pre-place a symlink where the temp file would go.
+        let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+        std::os::unix::fs::symlink(&outside, &tmp).expect("symlink");
+
+        let err = save(
+            &path,
+            &State {
+                hub_url: "https://hub.example.com".into(),
+                worker_id: "w1".into(),
+                worker_secret: "s3cr3t".into(),
+                ..Default::default()
+            },
+        )
+        .expect_err("a symlinked temp file must be refused");
+        assert!(matches!(err, Error::Io(_)), "{err:?}");
+        assert_eq!(
+            std::fs::read(&outside).unwrap(),
+            b"untouched",
+            "the symlink target must not be written through"
         );
     }
 

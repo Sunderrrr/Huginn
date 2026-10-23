@@ -143,6 +143,13 @@ impl Updater {
                 "checksum mismatch: got {sum} want {expected}"
             )));
         }
+        // The staged file must be an executable image, not a script: on Unix
+        // the worker is a static ELF binary, and a shell script that merely
+        // answers the health check would otherwise be installed as the
+        // root-privileged worker. (The checksum already pins the bytes; this
+        // is the second, independent gate.)
+        #[cfg(unix)]
+        verify_elf_image(tmp).await?;
         // On Unix the staged file needs the executable bit; on Windows
         // executability is not a permission bit.
         #[cfg(unix)]
@@ -408,16 +415,41 @@ async fn file_sha256(path: &Path) -> std::io::Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Unix only: the staged update must be an ELF image. The worker binary is
+/// a static ELF executable — a shell script (or any other non-ELF file)
+/// would be executed with the worker's privileges, so it is refused before
+/// the atomic swap.
+#[cfg(unix)]
+async fn verify_elf_image(path: &Path) -> Result<(), Error> {
+    use tokio::io::AsyncReadExt as _;
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| Error::msg(format!("open staged binary: {e}")))?;
+    let mut magic = [0u8; 4];
+    let n = file
+        .read(&mut magic)
+        .await
+        .map_err(|e| Error::msg(format!("read staged binary: {e}")))?;
+    if n != 4 || &magic != b"\x7fELF" {
+        return Err(Error::msg(
+            "staged binary is not an ELF executable — refusing to install it as the worker",
+        ));
+    }
+    Ok(())
+}
+
 async fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
     let mut input = tokio::fs::File::open(src).await?;
     // 0755 on Unix (the backup keeps being executable); inherited ACLs on
-    // Windows.
+    // Windows. O_NOFOLLOW: the destination must be a regular file — a
+    // pre-placed symlink is refused instead of being written through.
     #[cfg(unix)]
     let mut out = tokio::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .mode(0o755)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(dst)
         .await?;
     #[cfg(windows)]
@@ -440,7 +472,7 @@ async fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 /// Constant-time byte comparison (Go: subtle.ConstantTimeCompare != 1).
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -585,6 +617,14 @@ mod tests {
         hex::encode(Sha256::digest(bytes))
     }
 
+    /// A staged update must be an ELF image on Unix — the tests use a
+    /// payload that starts with the ELF magic.
+    fn elf_bytes(payload: &[u8]) -> Vec<u8> {
+        let mut out = b"\x7fELF".to_vec();
+        out.extend_from_slice(payload);
+        out
+    }
+
     async fn write_current_binary(dir: &Path) -> String {
         let path = dir.join("huginn-worker");
         tokio::fs::write(&path, b"OLD-BINARY").await.expect("write");
@@ -643,7 +683,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_success_swaps_binary() {
-        let new_bin = b"NEW-BINARY-CONTENT".to_vec();
+        let new_bin = elf_bytes(b"NEW-BINARY-CONTENT");
         let server = release_server(&new_bin, &sha256_hex(&new_bin)).await;
 
         let dir = temp_dir("update-success");
@@ -669,9 +709,38 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
+    /// A non-ELF payload (a shell script that would happily answer the
+    /// health check) is refused even when its checksum matches: the
+    /// worker binary must be an executable image, not a script.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_apply_refuses_a_non_elf_payload() {
+        let script = b"#!/bin/sh\necho 'huginn-worker dev ok'\n".to_vec();
+        let server = release_server(&script, &sha256_hex(&script)).await;
+
+        let dir = temp_dir("update-script");
+        let path = write_current_binary(&dir).await;
+        let updater = Updater::with_http(
+            test_http_client(),
+            vec!["127.0.0.1".to_string()],
+            None,
+            ok_health(),
+        );
+
+        let err = updater
+            .apply(spec_for(&server, &path, ""))
+            .await
+            .expect_err("a script must not be installed as the worker");
+        assert!(err.to_string().contains("not an ELF"), "err: {err}");
+
+        let got = tokio::fs::read(&path).await.expect("read binary");
+        assert_eq!(got, b"OLD-BINARY", "old binary must be untouched");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
     #[tokio::test]
     async fn test_apply_checksum_mismatch_keeps_old_binary() {
-        let new_bin = b"NEW-BINARY-CONTENT".to_vec();
+        let new_bin = elf_bytes(b"NEW-BINARY-CONTENT");
         // Bad checksum on purpose.
         let server = release_server(&new_bin, &sha256_hex(b"WRONG")).await;
 
@@ -700,7 +769,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_rolls_back_on_health_failure() {
-        let new_bin = b"NEW-BINARY-CONTENT".to_vec();
+        let new_bin = elf_bytes(b"NEW-BINARY-CONTENT");
         let server = release_server(&new_bin, &sha256_hex(&new_bin)).await;
 
         let dir = temp_dir("update-rollback");
@@ -766,7 +835,7 @@ mod tests {
     async fn test_apply_rejects_disallowed_redirect_hop() {
         // Extra parity coverage (contract: allowlist is enforced on EVERY
         // redirect hop): /redir redirects to a non-allowlisted host.
-        let new_bin = b"NEW-BINARY-CONTENT".to_vec();
+        let new_bin = elf_bytes(b"NEW-BINARY-CONTENT");
         let mut routes = HashMap::new();
         routes.insert("/bin".to_string(), http_ok(&new_bin));
         let checksums = format!("{}  {ASSET_NAME}\n", sha256_hex(&new_bin));

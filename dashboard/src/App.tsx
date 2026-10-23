@@ -16,6 +16,11 @@ import { BackupsPage } from "./pages/BackupsPage";
 import { HomePage } from "./pages/HomePage";
 import { AccountPage } from "./pages/AccountPage";
 
+// Role ranking, mirroring the hub's UserRole (admin > operator > readonly).
+const ROLE_RANK: Record<string, number> = { readonly: 0, operator: 1, admin: 2 };
+
+export type MinRole = "operator" | "admin";
+
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -27,6 +32,27 @@ function Protected({ children }: { children: React.ReactNode }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
+/**
+ * Client-side role gate for the admin/operator pages.
+ *
+ * This is *not* a security boundary — the hub authorizes every request
+ * server-side (a non-admin calling an admin route gets a 403). The gate only
+ * keeps the UI honest: an admin-only page is not rendered (and does not fire
+ * admin API calls that would only bounce) for a user who cannot use it.
+ */
+function RequireRole({ min, children }: { min: MinRole; children: React.ReactNode }) {
+  const { user } = useAuth();
+  const rank = ROLE_RANK[user?.role ?? "readonly"] ?? 0;
+  if (rank < ROLE_RANK[min]) {
+    return (
+      <div className="panel" style={{ padding: 32, textAlign: "center", color: "var(--dim)" }}>
+        This page requires the {min} role. You are signed in as {user?.role ?? "unknown"}.
+      </div>
+    );
+  }
   return <>{children}</>;
 }
 
@@ -44,13 +70,56 @@ export function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/fleet" element={<FleetPage />} />
         <Route path="/vm/:id" element={<VMDetailPage />} />
-        <Route path="/audit" element={<AuditPage />} />
+        {/* Operator+ (the hub requires an operator to read the audit log). */}
+        <Route
+          path="/audit"
+          element={
+            <RequireRole min="operator">
+              <AuditPage />
+            </RequireRole>
+          }
+        />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/users" element={<UsersPage />} />
-        <Route path="/tags" element={<TagsPage />} />
-        <Route path="/commands" element={<CustomActionsPage />} />
-        <Route path="/schedules" element={<SchedulesPage />} />
-        <Route path="/backups" element={<BackupsPage />} />
+        <Route
+          path="/users"
+          element={
+            <RequireRole min="admin">
+              <UsersPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/tags"
+          element={
+            <RequireRole min="admin">
+              <TagsPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/commands"
+          element={
+            <RequireRole min="admin">
+              <CustomActionsPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/schedules"
+          element={
+            <RequireRole min="admin">
+              <SchedulesPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/backups"
+          element={
+            <RequireRole min="admin">
+              <BackupsPage />
+            </RequireRole>
+          }
+        />
         <Route path="/access-tokens" element={<AccessTokensPage />} />
         <Route path="/account" element={<AccountPage />} />
       </Route>

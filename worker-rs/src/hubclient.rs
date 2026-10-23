@@ -165,7 +165,12 @@ impl Client {
 
     /// SubmitResult posts the outcome of a task.
     pub async fn submit_result(&self, task_id: &str, res: TaskResult) -> Result<(), Error> {
-        let path = format!("/api/worker/tasks/{task_id}/result");
+        // The task id is a path segment: it is percent-encoded so a crafted
+        // id can never reshape the request path (`../`, `?`, `#`).
+        let path = format!(
+            "/api/worker/tasks/{}/result",
+            percent_encode_path_segment(task_id)
+        );
         let body = encode(&res)?;
         self.request(reqwest::Method::POST, &path, Some(body), true)
             .await?;
@@ -227,6 +232,23 @@ async fn read_capped(resp: &mut reqwest::Response, cap: usize) -> Result<Vec<u8>
 
 fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, Error> {
     serde_json::to_vec(value).map_err(|e| Error::Encode(e.to_string()))
+}
+
+/// Percent-encode one URL path segment (RFC 3986 unreserved characters are
+/// kept, everything else becomes `%XX`). A task id is a path segment, not a
+/// path: without this, an id carrying `..`, `/`, `?` or `#` would reshape
+/// the request the worker sends to the hub.
+fn percent_encode_path_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// Decodes a JSON body, falling back to the zero value for blank bodies (the
@@ -432,6 +454,40 @@ mod tests {
         let task = task.expect("expected a task");
         assert_eq!(task.id, "t1");
         assert_eq!(task.task_type, "action");
+    }
+
+    /// A crafted task id must never reshape the request path: it is a path
+    /// SEGMENT, so `/`, `?`, `#` and `..` are percent-encoded.
+    #[tokio::test]
+    async fn test_submit_result_encodes_the_task_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/worker/tasks/..%2F..%2Fadmin/result"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        client
+            .submit_result("../../admin", TaskResult::default())
+            .await
+            .expect("submit");
+    }
+
+    #[test]
+    fn test_path_segment_encoding() {
+        assert_eq!(
+            percent_encode_path_segment("abc-123_x.y~z"),
+            "abc-123_x.y~z"
+        );
+        assert_eq!(
+            percent_encode_path_segment("../../admin"),
+            "..%2F..%2Fadmin"
+        );
+        assert_eq!(percent_encode_path_segment("a?b#c"), "a%3Fb%23c");
+        assert_eq!(percent_encode_path_segment("a b"), "a%20b");
+        assert_eq!(percent_encode_path_segment("%"), "%25");
     }
 
     #[tokio::test]

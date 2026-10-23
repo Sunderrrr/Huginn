@@ -16,8 +16,9 @@ use crate::models::enums::ActorType;
 use crate::services::webauthn::{self, AuthenticationOptions, RegistrationOptions};
 
 use super::{
-    client_ip, db_err, enrolling_actor, get_principal, map_json_rejection, peer_addr, record_audit,
-    token_response, validate_len, validate_optional_len, AuthState, TokenResponse,
+    client_ip, db_err, enrolling_actor, get_principal, map_json_rejection, peer_addr,
+    purge_expired_webauthn_challenges, record_audit, token_response, validate_len,
+    validate_optional_len, AuthState, TokenResponse,
 };
 
 /// `WebAuthnRegisterFinishRequest`.
@@ -115,6 +116,8 @@ pub(super) async fn webauthn_register_begin(
 ) -> Result<Json<RegistrationOptions>, ApiError> {
     let (user, _is_setup) = enrolling_actor(&state, &headers, true).await?;
     webauthn_guard(&state, &headers, peer_addr(peer))?;
+    // Opportunistic cleanup of the challenges that can no longer be used.
+    purge_expired_webauthn_challenges(&state).await;
     let options = webauthn::begin_registration(&state.pool, &state.config, &user)
         .await
         .map_err(webauthn_bad_request)?;
@@ -175,6 +178,8 @@ pub(super) async fn webauthn_login_begin(
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
     webauthn_guard(&state, &headers, peer_addr(peer))?;
+    // Opportunistic cleanup of the challenges that can no longer be used.
+    purge_expired_webauthn_challenges(&state).await;
     let options = webauthn::begin_login(&state.pool, &state.config, body.username.as_deref())
         .await
         .map_err(webauthn_bad_request)?;
