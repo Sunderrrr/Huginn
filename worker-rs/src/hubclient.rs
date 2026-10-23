@@ -254,6 +254,8 @@ pub struct EnrollRequest {
     pub os_info: Option<Value>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub worker_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_browser: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
