@@ -14,6 +14,11 @@ pub struct AppState {
     pub validator: Arc<crate::auth::TokenValidator>,
     /// Forwarded-IP headers are honored only behind a stamping edge proxy.
     pub trust_proxy: bool,
+    /// Networks of the proxies allowed to stamp the forwarded-IP headers. An
+    /// empty list means "trust the headers from any peer" (legacy).
+    pub trusted_proxies: Vec<(std::net::IpAddr, u32)>,
+    /// Throttle on repeated authentication failures (per direct peer).
+    pub auth_limiter: Arc<crate::auth::AuthLimiter>,
 }
 
 fn error_obj(id: Value, code: i64, message: &str) -> Value {
@@ -144,6 +149,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 0,
             trust_proxy: false,
+            trusted_proxy_cidrs: vec![],
         };
         AppState {
             hub: Arc::new(HubClient::new(&settings)),
@@ -151,6 +157,8 @@ mod tests {
                 &settings,
             )))),
             trust_proxy: false,
+            trusted_proxies: vec![],
+            auth_limiter: Arc::new(crate::auth::AuthLimiter::new(30)),
         }
     }
 
