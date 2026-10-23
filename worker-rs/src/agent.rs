@@ -883,7 +883,7 @@ mod tests {
         assert!(!is_safe_release_domain("10.0.5.20"), "RFC1918");
         assert!(!is_safe_release_domain("172.16.1.1"), "RFC1918");
         assert!(!is_safe_release_domain("192.168.1.1"), "RFC1918");
-        assert!(!is_safe_release_domain("192.0.2.11"), "CGNAT/VPN");
+        assert!(!is_safe_release_domain("100.64.0.1"), "CGNAT/VPN");
         assert!(!is_safe_release_domain("fe80::1"), "IPv6 link-local");
         assert!(!is_safe_release_domain("fd12::1"), "IPv6 ULA");
         assert!(!is_safe_release_domain("::1"));
