@@ -31,6 +31,13 @@ spec:
               value: "http://huginn-hub"
             - name: HUGINN_MCP_TRANSPORT
               value: "streamable-http"
+            # The ingress stamps X-Real-IP; trust it only from the pod
+            # network (otherwise a client-supplied X-Forwarded-For could
+            # spoof the address an IP-pinned MCP token is checked against).
+            - name: HUGINN_MCP_TRUST_PROXY
+              value: "true"
+            - name: HUGINN_MCP_TRUSTED_PROXY_CIDRS
+              value: "10.244.0.0/16,172.16.0.0/12,127.0.0.0/8"
             - name: HUGINN_MCP_HOST
               value: "0.0.0.0"
             - name: HUGINN_MCP_PORT
