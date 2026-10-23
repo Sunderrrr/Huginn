@@ -35,6 +35,10 @@ pub struct WorkerEnrollRequest {
     pub os_info: serde_json::Value,
     #[serde(default)]
     pub worker_version: Option<String>,
+    /// When true (and the token permits it), the hub auto-queues a
+    /// `browser_install` task after enrollment.
+    #[serde(default)]
+    pub install_browser: Option<bool>,
 }
 
 impl WorkerEnrollRequest {
@@ -132,6 +136,49 @@ pub(super) async fn enroll(
     let vm = outcome.vm;
     let auto_approved = vm.state == VMState::Active;
 
+    // Auto-queue a browser_install task when the token (or the request) asks
+    // for it — only effective for auto-approved VMs, since the worker must
+    // be able to poll. Best-effort: never fail the enrollment.
+    let install_browser = outcome.token.install_browser || body.install_browser == Some(true);
+    if auto_approved && install_browser {
+        let new = crate::models::task::BrowserInstallTaskNew {
+            vm_id: vm.id,
+            version: String::new(), // resolved below
+            sha256: serde_json::Value::Object(Default::default()),
+            created_by: "system:auto-enroll".to_owned(),
+        };
+        // Resolve the pin (fetch latest if unset) before queueing.
+        if let Err(e) = crate::services::browser_engine::check_for_update(&state.pool).await {
+            tracing::warn!("browser install pin resolution failed: {e}");
+        }
+        let settings = crate::models::setting::get_settings_row(&state.pool)
+            .await
+            .ok()
+            .flatten();
+        if let Some(settings) = settings {
+            let task = crate::models::task::create_browser_install_task(
+                &state.pool,
+                crate::models::task::BrowserInstallTaskNew {
+                    vm_id: vm.id,
+                    version: settings.browser_engine_version.clone(),
+                    sha256: serde_json::json!({
+                        "amd64": settings.browser_engine_sha256_amd64,
+                        "arm64": settings.browser_engine_sha256_arm64,
+                    }),
+                    created_by: "system:auto-enroll".to_owned(),
+                },
+            )
+            .await;
+            match task {
+                Ok(t) => {
+                    state.events.notify_queue_on_commit(&vm.id.to_string());
+                    tracing::info!("queued browser_install {} for vm {}", t.id, vm.id);
+                }
+                Err(e) => tracing::warn!("could not queue browser_install for vm {}: {}", vm.id, e),
+            }
+        }
+    }
+
     // L-4: a worker joining the fleet is a security-relevant event — record it
     // on the tamper-evident audit chain like every other writer (this used to
     // be a tracing-only placeholder, so enrollments never showed up in
@@ -204,6 +251,7 @@ mod tests {
             arch: WorkerArch::Amd64,
             os_info: json!({}),
             worker_version: None,
+            install_browser: None,
         };
         assert!(req.validate().is_ok());
 
@@ -356,6 +404,7 @@ mod tests {
                 ttl_seconds: 3600,
                 max_uses: 1,
                 auto_approve: true,
+            install_browser: false,
             },
         )
         .await

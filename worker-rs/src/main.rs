@@ -133,6 +133,7 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(machine_hostname);
     let allow_insecure = std::env::var("HUGINN_ALLOW_INSECURE").as_deref() == Ok("1");
+    let install_browser = std::env::var("WITH_BROWSER").as_deref() == Ok("1");
     // install.sh fetches the hub's self-signed root to a known path and
     // exports HUB_CA_CERT; honour it (and the explicit env) so a hub
     // reached via its IP/localhost enrols without HUGINN_ALLOW_INSECURE.
@@ -163,6 +164,7 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
             arch: goarch().into(),
             os_info: Some(serde_json::json!({"os": os_name(), "arch": goarch()})),
             worker_version: config::VERSION.into(),
+            install_browser: Some(install_browser),
         })
         .await
     {
