@@ -355,6 +355,7 @@ pub(crate) mod testing {
             ldap_dn: None,
             role,
             is_active: true,
+            session_epoch: 0,
             last_login_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

@@ -192,10 +192,16 @@ pub async fn authenticate(
     let user = user::get_by_id(&state.pool, user_id)
         .await
         .map_err(db_err)?;
-    match user {
-        Some(user) if user.is_active => Ok(Principal::from_user(user)),
-        _ => Err(ApiError::unauthorized("user not found or inactive").into()),
+    let user = match user {
+        Some(user) if user.is_active => user,
+        _ => return Err(ApiError::unauthorized("user not found or inactive").into()),
+    };
+    // The session epoch must still match: a logout, a password change or
+    // an MFA reset bumps it and kills the tokens issued before (F-08).
+    if !crate::security::session_is_current(&payload, user.session_epoch) {
+        return Err(ApiError::unauthorized("session revoked").into());
     }
+    Ok(Principal::from_user(user))
 }
 
 /// `deps.require_admin` — human admin only (excludes the automation agent).

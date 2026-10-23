@@ -27,10 +27,12 @@ jobs:
           persist-credentials: false
       - name: Scan for secrets
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        with:
-          config: .gitleaks.toml
-          # Required by the action to scan pull requests.
+        env:
+          # The action reads the token from the environment (it has no
+          # inputs) and needs it to scan pull requests.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # The repository's own .gitleaks.toml (repo root) is picked up
+        # automatically by gitleaks.
 
   npm-audit:
     name: dependency audit (npm, production bundle)

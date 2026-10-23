@@ -12,7 +12,7 @@ use super::enums::UserRole;
 
 const COLUMNS: &str = "id, username, email, password_hash, oidc_subject, ldap_dn, role, \
                       is_active, last_login_at, created_at, updated_at, totp_secret_enc, \
-                      totp_enabled, totp_confirmed_at, totp_last_step";
+                      totp_enabled, totp_confirmed_at, totp_last_step, session_epoch";
 
 /// Dashboard / API user account.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -43,6 +43,11 @@ pub struct User {
     pub totp_confirmed_at: Option<DateTime<Utc>>,
     /// Highest TOTP time-step already accepted (replay guard).
     pub totp_last_step: Option<i64>,
+    /// Server-side session generation (audit finding F-08). The access token
+    /// carries the epoch it was issued with; every request compares it with
+    /// this value, so bumping the counter invalidates every token issued
+    /// before the bump (password change, MFA reset, logout).
+    pub session_epoch: i64,
 }
 
 impl User {
@@ -186,8 +191,11 @@ pub async fn update_password(
     id: Uuid,
     password_hash: Option<&str>,
 ) -> Result<Option<User>, DbError> {
+    // The password change bumps the session epoch in the same statement: the
+    // tokens issued with the old password die with it (audit finding F-08).
     let row = sqlx::query_as::<_, User>(&format!(
-        "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1 RETURNING {COLUMNS}"
+        "UPDATE users SET password_hash = $2, session_epoch = session_epoch + 1, \
+         updated_at = $3 WHERE id = $1 RETURNING {COLUMNS}"
     ))
     .bind(id)
     .bind(password_hash)
@@ -195,6 +203,21 @@ pub async fn update_password(
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+/// Invalidate every session of this user: bump the session epoch, so all
+/// access tokens issued before this call stop being accepted (audit finding
+/// F-08). Returns the new epoch.
+pub async fn bump_session_epoch(pool: &PgPool, id: Uuid) -> Result<i64, DbError> {
+    let row = sqlx::query_as::<_, (i64,)>(
+        "UPDATE users SET session_epoch = session_epoch + 1, \
+         updated_at = $2 WHERE id = $1 RETURNING session_epoch",
+    )
+    .bind(id)
+    .bind(Utc::now())
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(epoch,)| epoch).unwrap_or(0))
 }
 
 /// Link an OIDC subject to this account (SSO adoption of a local user).
@@ -262,9 +285,12 @@ pub async fn set_mfa(
 /// Disable TOTP and clear every TOTP field (backup codes are cleared by
 /// `webauthn::delete_backup_codes`).
 pub async fn disable_mfa(pool: &PgPool, id: Uuid) -> Result<Option<User>, DbError> {
+    // Disabling a factor also ends the sessions that used it: the epoch
+    // bump invalidates every token issued before this call.
     let row = sqlx::query_as::<_, User>(&format!(
         "UPDATE users SET totp_secret_enc = NULL, totp_enabled = false, totp_confirmed_at = NULL, \
-         totp_last_step = NULL, updated_at = $2 WHERE id = $1 RETURNING {COLUMNS}"
+         totp_last_step = NULL, session_epoch = session_epoch + 1, updated_at = $2 \
+         WHERE id = $1 RETURNING {COLUMNS}"
     ))
     .bind(id)
     .bind(Utc::now())
@@ -358,6 +384,7 @@ mod tests {
             ldap_dn: None,
             role: UserRole::Admin,
             is_active: true,
+            session_epoch: 0,
             last_login_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -387,6 +414,7 @@ mod tests {
             ldap_dn: None,
             role: UserRole::Operator,
             is_active: true,
+            session_epoch: 0,
             last_login_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
