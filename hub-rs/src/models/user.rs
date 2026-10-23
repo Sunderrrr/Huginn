@@ -22,6 +22,10 @@ pub struct User {
     /// Null for OIDC/LDAP-only accounts without a local address.
     pub email: Option<String>,
     /// Null for OIDC-only accounts.
+    ///
+    /// `skip_serializing`: the hash never leaves the data layer — a route
+    /// that renders a `User` directly must not leak the credential material.
+    #[serde(skip_serializing)]
     pub password_hash: Option<String>,
     pub oidc_subject: Option<String>,
     /// Distinguished Name for LDAP-provisioned users (dedup key).
@@ -31,7 +35,9 @@ pub struct User {
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// TOTP secret, Fernet-encrypted — never plaintext.
+    /// TOTP secret, Fernet-encrypted — never plaintext, and never
+    /// serialized (`skip_serializing`): the row model is not a wire shape.
+    #[serde(skip_serializing)]
     pub totp_secret_enc: Option<String>,
     pub totp_enabled: bool,
     pub totp_confirmed_at: Option<DateTime<Utc>>,
@@ -364,6 +370,38 @@ mod tests {
         assert_eq!(v["username"], "alice");
         assert_eq!(v["role"], "admin");
         assert_eq!(v["totp_enabled"], false);
-        assert!(v.get("password_hash").is_some());
+        assert!(v.get("password_hash").is_none());
+        assert!(v.get("totp_secret_enc").is_none());
+    }
+
+    /// The credential material of a `User` must never reach a response body,
+    /// even if a route renders the row model directly.
+    #[test]
+    fn credential_material_is_never_serialized() {
+        let u = User {
+            id: Uuid::nil(),
+            username: "alice".into(),
+            email: None,
+            password_hash: Some("$argon2id$v=19$hash".into()),
+            oidc_subject: None,
+            ldap_dn: None,
+            role: UserRole::Operator,
+            is_active: true,
+            last_login_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            totp_secret_enc: Some("gAAAA-encrypted-totp-secret".into()),
+            totp_enabled: true,
+            totp_confirmed_at: None,
+            totp_last_step: None,
+        };
+        let serialized = serde_json::to_string(&u).unwrap();
+        assert!(!serialized.contains("argon2"), "{serialized}");
+        assert!(!serialized.contains("gAAAA"), "{serialized}");
+        // The row still deserializes (the fields are only skipped on the way
+        // out, never on the way in).
+        let back: User = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(back.password_hash, None);
+        assert_eq!(back.totp_secret_enc, None);
     }
 }

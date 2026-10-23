@@ -277,7 +277,9 @@ pub async fn create_browser_install_task(
     if settings.browser_engine_version.is_empty() {
         crate::services::browser_engine::check_for_update(&state.pool)
             .await
-            .map_err(|e| ExecError::Input(format!("could not resolve the browser engine version: {e}")))?;
+            .map_err(|e| {
+                ExecError::Input(format!("could not resolve the browser engine version: {e}"))
+            })?;
     }
     let settings = crate::models::setting::get_settings_row(&state.pool)
         .await?
