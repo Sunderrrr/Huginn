@@ -387,6 +387,15 @@ async fn logout(
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
 ) -> Result<StatusCode, ApiError> {
     let principal = get_principal(&state, &headers, peer_addr(peer)).await?;
+    // Logging out ends the session for real: the user's session epoch is
+    // bumped, so every access token issued before this call stops being
+    // accepted (audit finding F-08). The trade-off is explicit: all the
+    // devices of that account are signed out.
+    if let Some(user) = principal.user.as_ref() {
+        if let Err(e) = crate::models::user::bump_session_epoch(&state.pool, user.id).await {
+            tracing::warn!("logout: could not bump the session epoch: {e}");
+        }
+    }
     record_audit(
         &state,
         AuditNew::new(principal.actor_type, principal.actor_id, "logout"),
@@ -760,7 +769,7 @@ mod tests {
         let expired = state
             .security
             .jwt()
-            .create_access_token_at(&sub, "admin", -5, 1_700_000_000)
+            .create_access_token_at(&sub, "admin", -5, 1_700_000_000, 0)
             .unwrap();
         let response = crate::routes::authapi::router(state)
             .oneshot(
