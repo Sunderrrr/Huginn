@@ -319,13 +319,19 @@ pub fn decode_mfa_challenge_token_at(
 }
 
 /// Claim validation, matching PyJWT's default `verify_exp`/`verify_iat`.
+///
+/// `exp` is **mandatory** here (PyJWT would accept a token without one): a
+/// token that carries no expiry is a credential that never expires, so the
+/// verifier fails closed instead of silently treating the claim as
+/// "valid forever". Every token this hub mints carries `exp`.
 fn validate_claims(payload: &Value, now_unix: i64) -> Result<(), TokenError> {
-    if let Some(exp) = payload.get("exp") {
-        let exp = exp.as_i64().ok_or(TokenError::InvalidPayload)?;
-        // PyJWT: expired when `exp + leeway < now` (leeway 0).
-        if exp < now_unix {
-            return Err(TokenError::Expired);
-        }
+    let exp = payload
+        .get("exp")
+        .and_then(Value::as_i64)
+        .ok_or(TokenError::InvalidPayload)?;
+    // PyJWT: expired when `exp + leeway < now` (leeway 0).
+    if exp < now_unix {
+        return Err(TokenError::Expired);
     }
     if let Some(iat) = payload.get("iat") {
         let iat = iat.as_i64().ok_or(TokenError::InvalidPayload)?;
@@ -499,6 +505,48 @@ mod tests {
         assert!(matches!(
             decode_access_token_at(secret, "", 0),
             Err(TokenError::Malformed)
+        ));
+    }
+
+    /// A token without an expiry would be a credential that never expires.
+    /// The verifier fails closed on it instead of accepting it.
+    #[test]
+    fn rejects_tokens_without_an_expiry() {
+        let j = jwt_vectors();
+        let secret = j["secret"].as_str().unwrap();
+        let now = j["access_payload"]["iat"].as_i64().unwrap();
+
+        // Signed with the real key, but the payload carries no `exp`.
+        let no_exp = encode_hs256(
+            secret,
+            r#"{"sub":"11111111-1111-1111-1111-111111111111","role":"admin","iat":1700000000}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            decode_access_token_at(secret, &no_exp, now),
+            Err(TokenError::InvalidPayload)
+        ));
+
+        // Same for a challenge token: no `exp` → refused before the scope check.
+        let no_exp_challenge = encode_hs256(
+            secret,
+            r#"{"sub":"11111111-1111-1111-1111-111111111111","scope":"mfa","iat":1700000000}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            decode_mfa_challenge_token_at(secret, &no_exp_challenge, MFA_SCOPE, now),
+            Err(TokenError::InvalidPayload)
+        ));
+
+        // A non-numeric expiry is refused too.
+        let bad_exp = encode_hs256(
+            secret,
+            r#"{"sub":"11111111-1111-1111-1111-111111111111","role":"admin","iat":1700000000,"exp":"soon"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            decode_access_token_at(secret, &bad_exp, now),
+            Err(TokenError::InvalidPayload)
         ));
     }
 

@@ -42,7 +42,8 @@ use self::webauthn::{
 use super::{
     backup_code_hash, challenge_user, client_ip, db_err, decrypt_totp_secret, encrypt_totp_secret,
     enrolling_actor, generate_backup_codes, get_principal, map_json_rejection, peer_addr,
-    record_audit, set_pending_totp_secret, token_response, AuthState, TokenResponse,
+    purge_expired_webauthn_challenges, record_audit, set_pending_totp_secret, token_response,
+    AuthState, TokenResponse,
 };
 
 // ---------------------------------------------------------------------------
