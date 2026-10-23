@@ -17,7 +17,8 @@ use super::enums::{VMState, WorkerArch};
 use super::vm::{VmNew, VM};
 
 const TOKEN_COLUMNS: &str = "id, token_hash, label, created_by, max_uses, uses_count, \
-                             expires_at, revoked_at, created_at, updated_at, auto_approve";
+                             expires_at, revoked_at, created_at, updated_at, auto_approve, \
+                             install_browser";
 
 /// A limited-use, revocable credential to join the fleet.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -38,6 +39,10 @@ pub struct EnrollmentToken {
     /// When true, enrolled VMs come up ACTIVE instead of PENDING (no manual
     /// approval).
     pub auto_approve: bool,
+    /// When true, the hub auto-queues a `browser_install` task for the
+    /// newly enrolled VM (only effective for auto-approved tokens).
+    #[serde(default)]
+    pub install_browser: bool,
 }
 
 impl EnrollmentToken {
@@ -60,6 +65,9 @@ pub struct EnrollmentTokenNew {
     pub ttl_seconds: i64,
     pub max_uses: i32,
     pub auto_approve: bool,
+    /// When true, the hub auto-queues a `browser_install` task for the
+    /// newly enrolled VM (only effective for auto-approved tokens).
+    pub install_browser: bool,
 }
 
 /// Worker registration facts for `create_vm_on_enroll`.
@@ -98,8 +106,8 @@ pub async fn create_token(
     };
     let row = sqlx::query_as::<_, EnrollmentToken>(&format!(
         "INSERT INTO enrollment_tokens (id, token_hash, label, created_by, max_uses, uses_count, \
-         expires_at, revoked_at, created_at, updated_at, auto_approve) \
-         VALUES ($1, $2, $3, $4, $5, 0, $6, NULL, $7, $7, $8) \
+         expires_at, revoked_at, created_at, updated_at, auto_approve, install_browser) \
+         VALUES ($1, $2, $3, $4, $5, 0, $6, NULL, $7, $7, $8, $9) \
          RETURNING {TOKEN_COLUMNS}"
     ))
     .bind(Uuid::new_v4())
@@ -110,6 +118,7 @@ pub async fn create_token(
     .bind(expires_at)
     .bind(now)
     .bind(new.auto_approve)
+    .bind(new.install_browser)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -260,6 +269,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             auto_approve: false,
+            install_browser: false,
         }
     }
 

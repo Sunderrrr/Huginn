@@ -149,6 +149,7 @@ export interface EnrollmentToken {
   max_uses: number; // 0 = unlimited (reusable join key)
   uses_count: number;
   auto_approve: boolean;
+  install_browser: boolean;
   expires_at: string;
   revoked_at: string | null;
   created_at: string;
