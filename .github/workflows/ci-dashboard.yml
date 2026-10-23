@@ -1,5 +1,8 @@
 name: ci-dashboard
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -14,12 +17,16 @@ jobs:
       run:
         working-directory: dashboard
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # No token left in .git/config — a build script must not be able
+          # to exfiltrate the job's GITHUB_TOKEN.
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
       - name: Install
-        run: npm install
+        run: npm ci
       - name: Lint
         run: npm run lint
       - name: Test

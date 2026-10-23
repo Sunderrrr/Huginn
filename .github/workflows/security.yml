@@ -1,0 +1,77 @@
+name: security
+
+# Supply-chain and secret-scanning gate. Runs on every push to main and on
+# every pull request: it must never be skippable by editing the workflow
+# (the workflow file itself is part of the path filter).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+  pull_request:
+    paths:
+      - "**"
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Full history: a secret committed and later removed is still a leak.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        with:
+          config: .gitleaks.toml
+
+  deps:
+    name: dependency audit (npm + cargo)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+      - name: npm audit (production dependencies)
+        run: npm audit --omit=dev --audit-level=high
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: cargo audit (worker, mcp, hub)
+        run: |
+          for c in worker-rs mcp-rs hub-rs; do
+            echo "::group::$c"
+            (cd "$c" && cargo audit --file Cargo.lock) || exit 1
+            echo "::endgroup::"
+          done
+
+  image:
+    name: container image scan (trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          trivy-version: v0.76.1
+      - name: Build the hub image
+        run: docker build -t huginn-hub:ci hub-rs
+      - name: Scan the image (HIGH + CRITICAL)
+        run: |
+          trivy image --exit-code 1 --severity HIGH,CRITICAL \
+            --ignore-unfixed huginn-hub:ci
+      - name: IaC / config scan
+        run: |
+          trivy config --exit-code 1 --severity HIGH,CRITICAL deploy/
