@@ -18,6 +18,9 @@ const PORT_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const KILL_GRACE: Duration = Duration::from_secs(5);
 /// Poll interval for the port-readiness loop.
 const READY_POLL: Duration = Duration::from_millis(100);
+/// Timeout for the `serve --help` capability probe — a hanging engine must
+/// not block the worker.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default per-worker memory cap (MB) passed to Obscura
 /// (`--worker-max-rss`). The flag only takes effect with `--workers > 1`,
@@ -82,6 +85,10 @@ pub struct ObscuraProcess {
     pub(crate) child: Child,
     pub(crate) port: u16,
     pub(crate) token: String,
+    /// Set once the child has been REAPED. A reaped child's pid can be
+    /// reused by an unrelated process, and the process-group id with it —
+    /// so the group kill must never run after that point.
+    pub(crate) reaped: bool,
 }
 
 impl fmt::Debug for ObscuraProcess {
@@ -98,6 +105,16 @@ impl Drop for ObscuraProcess {
     fn drop(&mut self) {
         // Panic safety: Drop cannot await, so reap synchronously. The whole
         // group gets SIGKILL; kill_on_drop covers the direct child too.
+        //
+        // The group kill is skipped once the child has been reaped: a freed
+        // pid may already belong to an unrelated process, and killing ITS
+        // process group would take down a stranger's processes (the classic
+        // pid-reuse race). While the child is unreaped it is a zombie and
+        // its pid — and therefore the group id — is still reserved, so the
+        // kill is safe.
+        if self.reaped {
+            return;
+        }
         if let Some(pid) = self.child.id() {
             // Negative pid addresses the process group (process_group(0)).
             unsafe {
@@ -122,31 +139,167 @@ impl ObscuraProcess {
     /// Graceful shutdown: SIGTERM the whole process group, wait up to
     /// [`KILL_GRACE`], then SIGKILL the group. Consumes `self` so the task
     /// handler cannot forget it; the `Drop` impl is the backstop.
+    ///
+    /// The child's exit is detected WITHOUT reaping it (`waitid` +
+    /// `WNOWAIT`): a reaped pid can be handed to another process, and the
+    /// process-group id with it — the final group kill would then hit an
+    /// unrelated process group. The child is reaped only after the group
+    /// has been killed.
     pub async fn kill(mut self) {
-        if let Some(pid) = self.child.id() {
+        let pid = self.child.id();
+        if let Some(pid) = pid {
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGTERM);
             }
         }
         let deadline = tokio::time::Instant::now() + KILL_GRACE;
         loop {
-            match self.child.try_wait() {
-                Ok(Some(_)) => return, // reaped by the kill signal
-                Ok(None) => {}
-                Err(_) => break,
+            match pid {
+                Some(pid) if exited_without_reaping(pid) => break, // the child is gone
+                Some(_) => {}
+                None => break,
             }
             if tokio::time::Instant::now() >= deadline {
                 break;
             }
             tokio::time::sleep(READY_POLL).await;
         }
-        if let Some(pid) = self.child.id() {
+        if let Some(pid) = pid {
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
         let _ = self.child.wait().await;
+        self.reaped = true;
     }
+}
+
+/// Whether `pid` has exited, WITHOUT reaping it: the pid (and therefore the
+/// process-group id) stays reserved while the child is a zombie, so a group
+/// kill aimed at it cannot land on an unrelated process.
+///
+/// The check is thread-agnostic: `waitid()` only sees the children of the
+/// CALLING thread (the engine is spawned and killed from different tokio
+/// tasks), so the exit is read from `/proc/<pid>/stat` instead — a child
+/// that exited but was not reaped is a zombie, and its state says so.
+fn exited_without_reaping(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => {
+            let state = stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .unwrap_or_default();
+            // Z = zombie (exited, not reaped), X = dead.
+            matches!(state, "Z" | "X" | "x")
+        }
+        // No /proc entry: the child is gone (reaped) — treat it as exited.
+        Err(_) => exited_without_reaping_waitid(pid),
+    }
+}
+
+/// Fallback for systems without /proc: `waitid` + `WNOWAIT` reports the
+/// exit without reaping the child.
+fn exited_without_reaping_waitid(pid: u32) -> bool {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    if rc == 0 {
+        return true;
+    }
+    // ECHILD: the child was already reaped (nothing of ours is left to
+    // kill) — treat it as exited.
+    let err = std::io::Error::last_os_error();
+    err.raw_os_error() == Some(libc::ECHILD)
+}
+
+// --- CDP port ownership ----------------------------------------------------
+//
+// The CDP port is picked by binding an ephemeral socket and closing it, so
+// there is a window in which a local attacker can take (or share, with
+// SO_REUSEPORT) the port. The worker would then drive a stranger's CDP
+// server and report its answers as the task result. These helpers answer
+// "who listens on this loopback port?" straight from /proc.
+
+/// The process groups of every process listening on `127.0.0.1:port`.
+///
+/// Returns None when the answer cannot be determined (no /proc, no
+/// permission) — the caller then skips the check rather than failing a
+/// healthy browser task.
+pub(crate) fn cdp_port_owners(port: u16) -> Option<Vec<u32>> {
+    let inodes = listening_socket_inodes(port)?;
+    let mut owners = Vec::new();
+    for inode in inodes {
+        let Some(pid) = pid_of_socket_inode(inode) else {
+            continue;
+        };
+        if let Some(pgid) = process_group_of(pid) {
+            owners.push(pgid);
+        }
+    }
+    Some(owners)
+}
+
+/// The inodes of every LISTEN socket bound to 127.0.0.1:port (from
+/// /proc/net/tcp).
+pub(crate) fn listening_socket_inodes(port: u16) -> Option<Vec<u64>> {
+    let table = std::fs::read_to_string("/proc/net/tcp").ok()?;
+    let wanted = format!("0100007F:{port:04X}");
+    let mut inodes = Vec::new();
+    for line in table.lines().skip(1) {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 10 {
+            continue;
+        }
+        // f[1] = local address, f[3] = state (0A = LISTEN), f[9] = inode.
+        if f[1] != wanted || f[3] != "0A" {
+            continue;
+        }
+        if let Ok(inode) = f[9].parse::<u64>() {
+            inodes.push(inode);
+        }
+    }
+    Some(inodes)
+}
+
+/// The pid holding a socket with that inode (scan /proc/<pid>/fd).
+pub(crate) fn pid_of_socket_inode(inode: u64) -> Option<u32> {
+    let wanted = format!("socket:[{inode}]");
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            if let Ok(link) = std::fs::read_link(fd.path()) {
+                if link.to_string_lossy() == wanted {
+                    return Some(pid);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The process group of a pid (from /proc/<pid>/stat). The `comm` field may
+/// contain spaces and parentheses, so the fields are taken after the LAST
+/// ')': state, ppid, pgrp, …
+pub(crate) fn process_group_of(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = stat.rsplit_once(')')?.1;
+    let mut fields = after_comm.split_whitespace();
+    let _state = fields.next()?;
+    let _ppid = fields.next()?;
+    fields.next()?.parse().ok()
 }
 
 /// Pick a free ephemeral port by binding to 127.0.0.1:0 and closing the
@@ -177,22 +330,27 @@ async fn supports_worker_max_rss(bin: &std::path::Path) -> bool {
     if let Some(known) = cache.lock().unwrap().get(bin) {
         return *known;
     }
-    let supported = Command::new(bin)
-        .args(["serve", "--help"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map(|out| {
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            out.status.success() && text.contains("--worker-max-rss")
-        })
-        .unwrap_or(false);
+    let supported = tokio::time::timeout(
+        PROBE_TIMEOUT,
+        Command::new(bin)
+            .args(["serve", "--help"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    .ok()
+    .and_then(|out| out.ok())
+    .map(|out| {
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out.status.success() && text.contains("--worker-max-rss")
+    })
+    .unwrap_or(false);
     cache.lock().unwrap().insert(bin.to_path_buf(), supported);
     supported
 }
@@ -246,12 +404,33 @@ pub async fn spawn_obscura(opts: ObscuraSpawn, state_dir: &str) -> Result<Obscur
     let child = cmd
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", bin.display()))?;
-    let mut proc = ObscuraProcess { child, port, token };
+    let mut proc = ObscuraProcess {
+        child,
+        port,
+        token,
+        reaped: false,
+    };
 
     // Wait for the port to accept TCP connections.
     let deadline = tokio::time::Instant::now() + PORT_READY_TIMEOUT;
     loop {
         if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+            // The CDP port was picked by binding an ephemeral socket and
+            // closing it: a LOCAL attacker can win that race and hold the
+            // port (or share it with SO_REUSEPORT), and the worker would
+            // then talk to a stranger's server and report attacker-chosen
+            // page content. The listening socket(s) must belong to our own
+            // process group — the child was spawned as a group leader, so
+            // its descendants inherit the group.
+            if let Some(owners) = cdp_port_owners(port) {
+                let ours = proc.child.id().unwrap_or(0);
+                if let Some(foreign) = owners.iter().find(|pgid| **pgid != ours) {
+                    return Err(format!(
+                        "the CDP port {port} is held by a foreign process (pgid {foreign}) — \
+                         refusing to talk to it"
+                    ));
+                }
+            }
             return Ok(proc);
         }
         match proc.child.try_wait() {

@@ -13,7 +13,8 @@
 //! smoke-tests `obscura --version`, and only then renames the staging
 //! directory into place. Any failure leaves nothing behind.
 
-use std::io::Cursor;
+use std::io::{Cursor, Write as _};
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -40,6 +41,8 @@ const DOWNLOAD_CAP: usize = 256 * 1024 * 1024;
 const MIN_GLIBC: (u64, u64) = (2, 35);
 /// `obscura --version` smoke-test timeout.
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Timeout for the libc-detection helpers (`getconf`, `ldd`).
+const HELPER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The Apache-2.0 license text, redistributed with the installed engine
 /// (the license's own requirement; the repo root LICENSE is that text).
@@ -115,10 +118,16 @@ async fn install_engine(
     // ---- SHA-256 against the hub-pinned value ------------------------------
     let digest = sha2::Sha256::digest(&bytes);
     let actual = hex::encode(digest);
-    if !actual.eq_ignore_ascii_case(pinned) {
+    // Constant-time comparison (the same primitive the updater uses): a
+    // timing side channel on a hash comparison is a leak, not a defence.
+    if !crate::update::constant_time_eq(
+        actual.to_ascii_lowercase().as_bytes(),
+        pinned.to_ascii_lowercase().as_bytes(),
+    ) {
         return Err(format!(
-            "sha256 mismatch for {asset}: hub pinned {pinned}, download hashed {actual}; \
-             refusing to install"
+            "sha256 mismatch for {asset}: hub pinned {}, download hashed {actual}; \
+             refusing to install",
+            truncate_chars(pinned, 16)
         ));
     }
     line(log, "sha256 verified".to_owned());
@@ -301,15 +310,21 @@ async fn detect_libc() -> Result<String, String> {
 }
 
 /// Run a helper and capture (stdout, stderr) — pure argv, never a shell.
+/// The helper is bounded by [`HELPER_TIMEOUT`]: a hung `getconf`/`ldd` must
+/// not block the worker forever.
 async fn run_capture(program: &str, args: &[&str]) -> Result<(String, String), String> {
-    let out = Command::new(program)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("run {program}: {e}"))?;
+    let out = tokio::time::timeout(
+        HELPER_TIMEOUT,
+        Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output(),
+    )
+    .await
+    .map_err(|_| format!("{program} timed out after {}s", HELPER_TIMEOUT.as_secs()))?
+    .map_err(|e| format!("run {program}: {e}"))?;
     Ok((
         String::from_utf8_lossy(&out.stdout).to_string(),
         String::from_utf8_lossy(&out.stderr).to_string(),
@@ -326,7 +341,26 @@ async fn run_capture(program: &str, args: &[&str]) -> Result<(String, String), S
 /// skipped, every other member type (symlink, hardlink, fifo…) and any path
 /// with more than one component is refused. The tarball is fully in memory
 /// (≤ [`DOWNLOAD_CAP`]) so a hostile member cannot stream forever.
+///
+/// The member is written by US, not by the tar crate: the destination is
+/// opened `O_NOFOLLOW` (a pre-placed symlink is refused, never written
+/// through) with mode 0700 and only made 0755 once the content is complete.
+/// The uncompressed size of a member is capped ([`MAX_ENGINE_BYTES`]) so a
+/// decompression bomb cannot fill the disk.
 pub(crate) fn extract_strict(bytes: &[u8], dest: &Path) -> Result<Vec<String>, String> {
+    extract_strict_with_limit(bytes, dest, MAX_ENGINE_BYTES)
+}
+
+/// Per-binary cap on the uncompressed size of an extracted member. The
+/// release binaries are ~75 MB (the aarch64 asset unpacks to ~78 MB); the
+/// cap is generous but finite, so a decompression bomb cannot fill the disk.
+pub(crate) const MAX_ENGINE_BYTES: u64 = 256 * 1024 * 1024;
+
+pub(crate) fn extract_strict_with_limit(
+    bytes: &[u8],
+    dest: &Path,
+    max_bytes: u64,
+) -> Result<Vec<String>, String> {
     let gz = GzDecoder::new(Cursor::new(bytes));
     let mut archive = Archive::new(gz);
     let mut installed = Vec::new();
@@ -363,10 +397,17 @@ pub(crate) fn extract_strict(bytes: &[u8], dest: &Path) -> Result<Vec<String>, S
         if name != "obscura" && name != "obscura-worker" {
             continue; // future extra assets are ignored, never executed
         }
+        // The declared size is checked BEFORE anything is written: a
+        // decompression bomb (a member that expands to gigabytes) is refused
+        // here, not after it filled the disk.
+        let declared = entry.header().size().unwrap_or(0);
+        if declared > max_bytes {
+            return Err(format!(
+                "refusing tar member {name:?}: declared size {declared} bytes exceeds the {max_bytes} byte cap"
+            ));
+        }
         let out_path = dest.join(&name);
-        entry
-            .unpack(&out_path)
-            .map_err(|e| format!("extract {name}: {e}"))?;
+        write_member(&mut entry, &out_path, max_bytes)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -380,6 +421,48 @@ pub(crate) fn extract_strict(bytes: &[u8], dest: &Path) -> Result<Vec<String>, S
     }
     installed.sort();
     Ok(installed)
+}
+
+/// Write one tar member to `out_path` ourselves: the destination is opened
+/// `O_NOFOLLOW` (a pre-placed symlink is refused, never written through)
+/// with mode 0700 — never group/other-writable, not even for the microsecond
+/// the content is being written. At most `max_bytes` are copied: a member
+/// that lies about its size (or a zip-bomb style stream) is cut off and
+/// refused.
+fn write_member<R: std::io::Read>(
+    entry: &mut R,
+    out_path: &Path,
+    max_bytes: u64,
+) -> Result<(), String> {
+    use std::io::Read as _;
+
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o700)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(out_path)
+        .map_err(|e| format!("open {}: {e}", out_path.display()))?;
+    let written = {
+        let mut limited = (&mut *entry).take(max_bytes.saturating_add(1));
+        std::io::copy(&mut limited, &mut out)
+            .map_err(|e| format!("extract {}: {e}", out_path.display()))?
+    };
+    if written > max_bytes {
+        let _ = std::fs::remove_file(out_path);
+        return Err(format!(
+            "refusing tar member {}: more than {max_bytes} bytes",
+            out_path.display()
+        ));
+    }
+    out.flush()
+        .map_err(|e| format!("write {}: {e}", out_path.display()))?;
+    // Flush to disk before the staging directory is published: a power loss
+    // must not leave a half-written engine behind a "successful" install.
+    out.sync_all()
+        .map_err(|e| format!("sync {}: {e}", out_path.display()))?;
+    Ok(())
 }
 
 /// The install root for the engine: `$HUGINN_OBSCURA_DIR` when set, else the
