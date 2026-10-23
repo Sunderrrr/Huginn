@@ -155,8 +155,9 @@ async fn run_browser(
     let Path(vm_id) = path.map_err(map_path_rejection)?;
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
-    let vm = load_vm(&state, vm_id).await?;
+    // Authorization before existence (no VM-existence oracle).
     require_vm_access(&state, &principal, vm_id).await?;
+    let vm = load_vm(&state, vm_id).await?;
 
     let (task, step_count) = tasks::create_browser_task(
         &state,

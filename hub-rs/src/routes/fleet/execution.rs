@@ -179,9 +179,10 @@ pub fn router(state: FleetState) -> Router {
 
 /// M-1: the execution endpoints' IDOR guard — the same rule as `get_task`
 /// (`deps.principal_can_access_vm`), answered as 403 "access to this VM
-/// denied". Runs right after `load_vm`, so a caller without access cannot
-/// tell an inaccessible VM from a missing one and no task is ever queued for
-/// a VM outside the caller's grant. Shared with the browser route.
+/// denied". It runs BEFORE the row is loaded, so a caller without access
+/// cannot tell an inaccessible VM from a missing one (no VM-existence
+/// oracle) and no task is ever queued for a VM outside the caller's grant.
+/// Shared with the browser route.
 pub(super) async fn require_vm_access(
     state: &FleetState,
     principal: &Principal,
@@ -209,8 +210,10 @@ async fn run_action(
     let Path(vm_id) = path.map_err(map_path_rejection)?;
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
-    let vm = load_vm(&state, vm_id).await?;
+    // Authorization before existence: an operator without the grant gets the
+    // same 403 whether the VM exists or not.
     require_vm_access(&state, &principal, vm_id).await?;
+    let vm = load_vm(&state, vm_id).await?;
 
     let task = tasks::create_action_task(
         &state,
@@ -247,8 +250,9 @@ async fn run_command(
     let Path(vm_id) = path.map_err(map_path_rejection)?;
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
-    let vm = load_vm(&state, vm_id).await?;
+    // Authorization before existence (no VM-existence oracle).
     require_vm_access(&state, &principal, vm_id).await?;
+    let vm = load_vm(&state, vm_id).await?;
 
     let task = tasks::create_command_task(
         &state,
@@ -280,10 +284,14 @@ async fn trigger_update(
     path: Result<Path<Uuid>, axum::extract::rejection::PathRejection>,
 ) -> Result<impl IntoResponse, RouteError> {
     let ip = client_ip(&headers, &state.config, peer_addr(peer));
-    let principal = super::require_operator(&state, &headers, ip.as_deref()).await?;
+    // Same guard chain as the other execution endpoints: operator RBAC plus
+    // the shared per-principal execution throttle (an update task makes the
+    // worker download the release binary, so it must not be free to flood).
+    let principal = rate_limit_exec(&state, &headers, ip.as_deref()).await?;
     let Path(vm_id) = path.map_err(map_path_rejection)?;
-    let vm = load_vm(&state, vm_id).await?;
+    // Authorization before existence (no VM-existence oracle).
     require_vm_access(&state, &principal, vm_id).await?;
+    let vm = load_vm(&state, vm_id).await?;
 
     let row = crate::models::setting::get_settings_row(&state.pool)
         .await
@@ -568,6 +576,26 @@ mod tests {
             .unwrap();
         assert_eq!(queued, 0, "the 403s must not queue anything");
 
+        // A VM that does not exist is refused the same way (403, not 404):
+        // the access check runs BEFORE the row is loaded, so the response is
+        // no VM-existence oracle.
+        let missing = Uuid::new_v4();
+        let response = tower::ServiceExt::oneshot(
+            app.clone(),
+            post(
+                format!("/api/vms/{missing}/actions"),
+                json!({"action": "status"}),
+                &token(&ungranted),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "missing VM");
+        assert_eq!(
+            body_json(response).await,
+            json!({"detail": "access to this VM denied"})
+        );
+
         // Control: the granted operator passes the guard (the request proceeds
         // to the normal action handling and is queued).
         let response = tower::ServiceExt::oneshot(
@@ -581,6 +609,38 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        // The update endpoint rides the shared execution throttle: an update
+        // task makes the worker download the release binary, so a flood of
+        // them must be refused like the other execution endpoints.
+        let throttled = crate::routes::fleet::router(crate::routes::fleet::FleetState::new(
+            pool.clone(),
+            crate::config::Config {
+                rate_limit_exec_per_minute: 1,
+                ..crate::config::Config::default()
+            },
+        ));
+        let update_uri = format!("/api/vms/{}/update", vm.id);
+        let first = tower::ServiceExt::oneshot(
+            throttled.clone(),
+            post(update_uri.clone(), json!(null), &token(&granted)),
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            first.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "the first update must not be throttled"
+        );
+        let second =
+            tower::ServiceExt::oneshot(throttled, post(update_uri, json!(null), &token(&granted)))
+                .await
+                .unwrap();
+        assert_eq!(
+            second.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "the update endpoint must be rate limited"
+        );
 
         drop(guard);
     }

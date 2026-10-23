@@ -477,7 +477,7 @@ mod live_tests {
                 ttl_seconds: 0,
                 max_uses: 1,
                 auto_approve: true,
-            install_browser: false,
+                install_browser: false,
             },
         )
         .await
