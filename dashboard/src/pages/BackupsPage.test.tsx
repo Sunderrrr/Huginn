@@ -107,7 +107,10 @@ describe("BackupsPage", () => {
     stubApi();
     renderPage();
     await screen.findByText("huginn-20261015-030000.sql.gz");
-    expect(screen.getByDisplayValue("huginn-backups")).toBeInTheDocument();
+    // The form is filled from /api/settings — a second fetch, independent of
+    // the backups list. Await the value instead of assuming it landed with
+    // the list (the assertion used to race the settings response).
+    expect(await screen.findByDisplayValue("huginn-backups")).toBeInTheDocument();
     expect(screen.getByDisplayValue("eu-west-1")).toBeInTheDocument();
     expect(screen.getByDisplayValue("db/")).toBeInTheDocument();
     expect(screen.getByDisplayValue("AKIAEXAMPLE")).toBeInTheDocument();

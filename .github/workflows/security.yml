@@ -29,9 +29,11 @@ jobs:
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         with:
           config: .gitleaks.toml
+          # Required by the action to scan pull requests.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  deps:
-    name: dependency audit (npm + cargo)
+  npm-audit:
+    name: dependency audit (npm, production bundle)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -43,18 +45,30 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
-      - name: npm audit (production dependencies)
+      - name: Install (lockfile-exact)
+        run: npm ci
+      - name: Audit the production bundle
         run: npm audit --omit=dev --audit-level=high
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+
+  cargo-audit:
+    name: dependency audit (cargo, ${{ matrix.component }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [worker-rs, mcp-rs, hub-rs]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          python-version: "3.12"
-      - name: cargo audit (worker, mcp, hub)
-        run: |
-          for c in worker-rs mcp-rs hub-rs; do
-            echo "::group::$c"
-            (cd "$c" && cargo audit --file Cargo.lock) || exit 1
-            echo "::endgroup::"
-          done
+          persist-credentials: false
+      - name: Audit the lockfile
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: ${{ matrix.component }}
+          # RUSTSEC-2023-0071 (unpatched) — rationale in audit.toml at the
+          # repo root: `rsa` only enters hub-rs's lockfile through sqlx's
+          # unused mysql feature.
+          ignore: RUSTSEC-2023-0071
 
   image:
     name: container image scan (trivy)
