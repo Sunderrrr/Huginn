@@ -46,6 +46,16 @@ use axum::Router;
 use crate::config::Config;
 use crate::security::SecurityConfig;
 
+use std::time::Duration;
+
+/// How many failed password attempts a single account may accumulate inside
+/// [`LOGIN_ACCOUNT_WINDOW`] before the login endpoint throttles it. The
+/// per-IP window (5/minute) stays the fast path; this is the backstop against
+/// a distributed guess run.
+pub(crate) const LOGIN_ACCOUNT_MAX_FAILURES: u32 = 20;
+/// The window of the per-account login guard.
+pub(crate) const LOGIN_ACCOUNT_WINDOW: Duration = Duration::from_secs(5 * 60);
+
 // ---------------------------------------------------------------------------
 // State + router
 // ---------------------------------------------------------------------------
@@ -58,10 +68,22 @@ pub struct AuthState {
     pub security: SecurityConfig,
     /// Per-IP brute-force guard on login (5 attempts/minute — `auth._login_limiter`).
     pub login_limiter: RateLimiter,
+    /// Per-ACCOUNT brute-force guard on login (20 failures / 5 minutes).
+    ///
+    /// The per-IP window alone does not bound password guessing against a
+    /// single account: an attacker with many source addresses (a botnet, an
+    /// IPv6 range) gets a fresh budget per address. This second window is
+    /// keyed by the *username* and counts the same failures, so the guess
+    /// rate against one account stays bounded no matter where the requests
+    /// come from. It counts failures for unknown accounts too, so it never
+    /// becomes a user-enumeration oracle.
+    pub login_account_limiter: RateLimiter,
     /// Per-IP/per-user guard on MFA verification (10/minute — `mfa._verify_limiter`).
     pub verify_limiter: RateLimiter,
     /// Per-IP guard on the WebAuthn endpoints (20/minute — `mfa._webauthn_limiter`).
     pub webauthn_limiter: RateLimiter,
+    /// Per-IP guard on the OIDC start/callback endpoints (10/minute — `auth._oidc_limiter`).
+    pub oidc_limiter: RateLimiter,
     /// Per-principal guard on execution endpoints (`deps._exec_limiter`).
     pub exec_limiter: RateLimiter,
 }
@@ -75,8 +97,13 @@ impl AuthState {
         );
         Self {
             login_limiter: RateLimiter::new(5),
+            login_account_limiter: RateLimiter::new_with_window(
+                LOGIN_ACCOUNT_MAX_FAILURES,
+                LOGIN_ACCOUNT_WINDOW,
+            ),
             verify_limiter: RateLimiter::new(10),
             webauthn_limiter: RateLimiter::new(20),
+            oidc_limiter: RateLimiter::new(10),
             exec_limiter: RateLimiter::new(config.rate_limit_exec_per_minute),
             pool,
             config,
@@ -111,8 +138,8 @@ pub use principal::{get_principal, require_admin};
 pub use schemas::{TokenResponse, UserOut};
 pub(crate) use service::{
     authenticate, backup_code_hash, db_err, decrypt_totp_secret, encrypt_totp_secret,
-    generate_backup_codes, record_audit, set_pending_totp_secret, set_user_email, token_response,
-    user_out, user_out_vms_only,
+    generate_backup_codes, purge_expired_webauthn_challenges, record_audit,
+    set_pending_totp_secret, set_user_email, token_response, user_out, user_out_vms_only,
 };
 
 // ---------------------------------------------------------------------------
@@ -216,12 +243,27 @@ mod live_tests {
         body: serde_json::Value,
         token: Option<&str>,
     ) -> axum::http::Request<Body> {
+        request_from(method, uri, body, token, None)
+    }
+
+    /// Same as [`request`] but with an explicit `X-Forwarded-For` (the
+    /// deployment behind the bundled proxy stamps the real client IP there).
+    fn request_from(
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+        token: Option<&str>,
+        forwarded_for: Option<&str>,
+    ) -> axum::http::Request<Body> {
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if !body.is_null() {
             builder = builder.header("content-type", "application/json");
         }
         if let Some(token) = token {
             builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        if let Some(ip) = forwarded_for {
+            builder = builder.header("x-forwarded-for", ip);
         }
         builder
             .body(Body::from(if body.is_null() {
@@ -490,6 +532,62 @@ mod live_tests {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(resp, json!({"detail": "invalid code"}));
+    }
+
+    /// A password-guess run spread over many source addresses must not get an
+    /// unbounded budget against a single account: the per-account window
+    /// throttles it even though every individual address stays under the
+    /// per-IP budget.
+    #[tokio::test]
+    async fn login_is_throttled_per_account_across_source_addresses() {
+        let Some((mut state, _guard)) = fresh_state().await else {
+            return;
+        };
+        state.config.trust_forwarded_for = true;
+        make_user(
+            &state,
+            "victim",
+            "correct horse battery",
+            UserRole::Readonly,
+        )
+        .await;
+
+        let attempt = |ip: &str| {
+            request_from(
+                "POST",
+                "/api/auth/login",
+                json!({"username": "victim", "password": "wrong"}),
+                None,
+                Some(ip),
+            )
+        };
+        // One failure per distinct source address.
+        for i in 0..crate::routes::authapi::LOGIN_ACCOUNT_MAX_FAILURES {
+            let (status, _) = send(&state, attempt(&format!("203.0.113.{i}"))).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "attempt {i}");
+        }
+        // The next attempt — from yet another address — is throttled.
+        let (status, resp) = send(&state, attempt("198.51.100.7")).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp,
+            json!({"detail": "too many failed login attempts; slow down"})
+        );
+        // The account is locked for the rest of the window — the guard runs
+        // BEFORE the password check, so a spent window also caps the Argon2
+        // work an attacker can force on the hub.
+        let (status, _) = send(
+            &state,
+            request_from(
+                "POST",
+                "/api/auth/login",
+                json!({"username": "victim", "password": "correct horse battery"}),
+                None,
+                Some("198.51.100.8"),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

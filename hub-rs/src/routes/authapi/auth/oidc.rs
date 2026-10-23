@@ -14,7 +14,6 @@ use crate::services::oidc::{self, OidcClient, OidcConfig};
 
 use std::net::SocketAddr;
 
-use super::super::RateLimiter;
 use super::{client_ip, db_err, peer_addr, record_audit, token_response, AuthState};
 
 // ---------------------------------------------------------------------------
@@ -37,13 +36,6 @@ pub(super) struct OidcCallbackQuery {
 
 const OIDC_STATE_COOKIE: &str = "huginn_oidc_state";
 const OIDC_NONCE_COOKIE: &str = "huginn_oidc_nonce";
-
-/// Per-IP guard on the OIDC start/callback endpoints (10/minute — `auth._oidc_limiter`).
-fn oidc_limiter() -> &'static RateLimiter {
-    use std::sync::OnceLock;
-    static LIMITER: OnceLock<RateLimiter> = OnceLock::new();
-    LIMITER.get_or_init(|| RateLimiter::new(10))
-}
 
 /// Prefer the admin-configured DB settings row; fall back to env config
 /// (`auth._oidc_source`). Both sources expose the same OIDC attribute names, so
@@ -96,7 +88,7 @@ pub(super) async fn oidc_login(
 ) -> Result<Response, ApiError> {
     let ip =
         client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
-    if !oidc_limiter().allow(&format!("oidc:{ip}")) {
+    if !state.oidc_limiter.allow(&format!("oidc:{ip}")) {
         return Err(ApiError::too_many_requests(
             "too many OIDC attempts; slow down",
         ));
@@ -142,7 +134,7 @@ pub(super) async fn oidc_callback(
 ) -> Result<Response, ApiError> {
     let ip =
         client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
-    if !oidc_limiter().allow(&format!("oidc:{ip}")) {
+    if !state.oidc_limiter.allow(&format!("oidc:{ip}")) {
         return Err(ApiError::too_many_requests(
             "too many OIDC attempts; slow down",
         ));
@@ -154,12 +146,18 @@ pub(super) async fn oidc_callback(
     if !state_ok {
         return Err(ApiError::bad_request("invalid OIDC state"));
     }
-    let nonce = cookie_value(&headers, OIDC_NONCE_COOKIE);
+    // Nonce (ID-token replay protection): the cookie we set at /oidc/login must
+    // be present. It is *not* optional — the server always hands one out, so a
+    // missing cookie means the attempt was tampered with. Accepting the
+    // callback without it would silently drop the ID-token replay check.
+    let Some(nonce) = cookie_value(&headers, OIDC_NONCE_COOKIE) else {
+        return Err(ApiError::bad_request("invalid OIDC nonce"));
+    };
 
     let config = oidc_source(&state).await?;
     let client = OidcClient::new(config);
     let claims = client
-        .exchange_code(&query.code, nonce.as_deref())
+        .exchange_code(&query.code, Some(&nonce))
         .await
         .map_err(|e| {
             tracing::warn!("OIDC callback failed: {e}");
@@ -250,5 +248,24 @@ mod tests {
                 json!({"detail": "invalid OIDC state"})
             );
         }
+    }
+
+    /// The nonce (ID-token replay protection) is NOT optional: the server
+    /// always hands one out at `/oidc/login`, so a callback without the
+    /// nonce cookie must be refused instead of silently skipping the check.
+    #[tokio::test]
+    async fn oidc_callback_rejects_a_missing_nonce_cookie() {
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/api/auth/oidc/callback?code=abc&state=expected")
+            .header("cookie", "huginn_oidc_state=expected")
+            .body(Body::empty())
+            .unwrap();
+        let response = router_with_state().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(response).await,
+            json!({"detail": "invalid OIDC nonce"})
+        );
     }
 }
