@@ -1,0 +1,16 @@
+# Keep the build context minimal: the compiled artifacts and any local
+# secret must never enter an image layer.
+target
+**/*.rs.bk
+
+# Local secrets — never bake them into an image layer.
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor / OS noise
+.DS_Store
+.idea
+.vscode
+*.log
