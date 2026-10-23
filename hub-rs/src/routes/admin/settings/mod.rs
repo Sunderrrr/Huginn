@@ -509,7 +509,7 @@ mod tests {
             };
         // Empty = dashboard origin; absolute http(s):// is allowed.
         assert!(with(Some(""), None, None).validate().is_ok());
-        assert!(with(Some("https://192.0.2.10"), None, None)
+        assert!(with(Some("https://192.0.2.1"), None, None)
             .validate()
             .is_ok());
         assert!(with(Some("http://example.com"), None, None)
@@ -548,7 +548,7 @@ mod tests {
             "PUT",
             "/api/settings",
             json!({
-                "enrollment_base_url": "https://192.0.2.10",
+                "enrollment_base_url": "https://192.0.2.1",
                 "browser_engine_version": "v0.2.5",
                 "browser_engine_sha256_amd64": "a".repeat(64),
             }),
@@ -560,7 +560,7 @@ mod tests {
         let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let out = body_json(response).await;
-        assert_eq!(out["enrollment_base_url"], "https://192.0.2.10");
+        assert_eq!(out["enrollment_base_url"], "https://192.0.2.1");
         assert_eq!(out["browser_engine_version"], "v0.2.5");
         assert_eq!(out["browser_engine_sha256_amd64"], "a".repeat(64));
         // Persisted through SettingValues → save_settings (setting_row keeps
@@ -568,7 +568,7 @@ mod tests {
         // in models::setting).
         let db = store.db.lock().unwrap();
         let row = db.settings.as_ref().expect("saved settings");
-        assert_eq!(row.enrollment_base_url, "https://192.0.2.10");
+        assert_eq!(row.enrollment_base_url, "https://192.0.2.1");
         assert_eq!(row.browser_engine_version, "v0.2.5");
         assert_eq!(row.browser_engine_sha256_amd64, "a".repeat(64));
     }

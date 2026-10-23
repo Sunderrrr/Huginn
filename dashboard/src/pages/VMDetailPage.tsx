@@ -196,7 +196,7 @@ export function VMDetailPage() {
                 wordBreak: "break-all",
               }}
             >
-              curl -fsSL https://huginn.example.com/uninstall.sh | bash
+              {`curl -fsSL ${window.location.origin}/uninstall.sh | bash`}
             </code>
             <div className="muted tiny" style={{ marginTop: 4 }}>
               Stops and removes the worker service, binary, state, hub CA and the

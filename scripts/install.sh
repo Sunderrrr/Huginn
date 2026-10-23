@@ -15,7 +15,7 @@
 # binary download and the worker's own TLS connections are verified.
 #
 # Environment:
-#   HUB_URL          (required) base URL of the hub, e.g. https://192.0.2.13
+#   HUB_URL          (required) base URL of the hub, e.g. https://192.0.2.1
 #   TOKEN            (required) enrollment token from the dashboard
 #   NAME             (optional) friendly VM name (defaults to hostname)
 #   BINARY_BASE_URL  (optional) where to fetch the binary + checksums.txt

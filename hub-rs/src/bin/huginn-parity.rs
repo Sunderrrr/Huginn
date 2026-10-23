@@ -500,7 +500,7 @@ mod tests {
             "<UUID>"
         );
         assert_eq!(normalize_str("parity-1791996849"), "parity-<N>");
-        assert_eq!(normalize_str("10.89.0.1"), "<IP>");
+        assert_eq!(normalize_str("192.0.2.1"), "<IP>");
         assert_eq!(normalize_str("2026-10-14T23:57:24.610044Z"), "<TS>");
         assert_eq!(normalize_str("a".repeat(43).as_str()), "<TOKEN>");
         assert_eq!(
