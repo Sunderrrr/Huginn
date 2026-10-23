@@ -1,0 +1,22 @@
+# Keep the build context minimal and free of local state.
+#
+# `COPY . .` in the Dockerfile would otherwise pull node_modules (146 MB of
+# native binaries from another platform) and any local .env / .env.local
+# (secrets) into the image layers.
+node_modules
+dist
+coverage
+.vite
+
+# Local secrets — never bake them into an image layer.
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor / OS noise
+.DS_Store
+.idea
+.vscode
+*.log
+npm-debug.log*
