@@ -239,6 +239,11 @@ async fn principal_of(
     let Some(user) = user.filter(|u| u.is_active) else {
         return Err(RouteError::unauthorized("user not found or inactive"));
     };
+    // The session epoch must still match: a logout, a password change or
+    // an MFA reset bumps it and kills the tokens issued before (F-08).
+    if !crate::security::session_is_current(&payload, user.session_epoch) {
+        return Err(RouteError::unauthorized("session revoked"));
+    }
     Ok(Principal::from_user(&user))
 }
 

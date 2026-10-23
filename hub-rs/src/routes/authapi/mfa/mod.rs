@@ -324,7 +324,7 @@ mod tests {
         let access = state
             .security
             .jwt()
-            .create_access_token(&sub, "admin", 5)
+            .create_access_token(&sub, "admin", 5, 0)
             .unwrap();
         let mut request = post("/api/auth/mfa/verify", json!({"code": "123456"}));
         request

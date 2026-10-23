@@ -131,6 +131,9 @@ mod principal;
 mod schemas;
 mod service;
 
+#[cfg(test)]
+mod session_live_tests;
+
 pub(crate) use middleware::map_json_rejection;
 pub use middleware::{client_ip, peer_addr, RateLimiter};
 pub(crate) use principal::{challenge_user, enrolling_actor};
@@ -165,6 +168,7 @@ pub(crate) mod support {
             ldap_dn: None,
             role,
             is_active: true,
+            session_epoch: 0,
             last_login_at: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
@@ -763,8 +767,21 @@ mod live_tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(resp, json!({"status": "ok"}));
-        let (status, _) = send(&state, login("eve", "new-new-new-new")).await;
+        // The password change revoked the session that made it (the session
+        // epoch was bumped): the old token is dead, a new login works.
+        let (status, _) = send(
+            &state,
+            request("GET", "/api/auth/me", json!(null), Some(&eve_token)),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "the old token must be revoked"
+        );
+        let (status, resp) = send(&state, login("eve", "new-new-new-new")).await;
         assert_eq!(status, StatusCode::OK);
+        let eve_token = resp["access_token"].as_str().unwrap().to_owned();
 
         // A non-admin may not reset someone else's password.
         let (_, resp) = send(
