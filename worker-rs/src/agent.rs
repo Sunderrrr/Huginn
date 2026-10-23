@@ -11,6 +11,7 @@ use crate::update::{Hook, Spec, Updater};
 use crate::whitelist;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{watch, Mutex};
@@ -595,25 +596,103 @@ fn is_safe_release_domain(raw: &str) -> bool {
 /// windows-service crate instead of shelling out).
 #[cfg(unix)]
 fn run_raw(name: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
-    std::process::Command::new(name).args(args).output()
+    // PATH is pinned: `systemctl` is looked up in the CHILD's PATH and the
+    // worker runs as root.
+    std::process::Command::new(name)
+        .args(args)
+        .env("PATH", crate::exec::SAFE_PATH)
+        .output()
 }
 
 fn run_healthcheck_sync(binary: &str, args: &[&str], timeout: Duration) -> Result<(), String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let bin = binary.to_string();
-    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    const HEALTHCHECK_OUTPUT_CAP: u64 = 64 * 1024;
+    /// How long we wait for the output readers once the child is gone.
+    const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+    let mut command = std::process::Command::new(binary);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    // Own process group: a timed-out health check must take its whole
+    // descendant tree down with it (a grandchild holding the pipe open
+    // would otherwise keep the readers blocked).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+
+    // Drain both pipes on their own threads (a full pipe would block the
+    // child), each capped so a chatty binary cannot exhaust memory.
+    let (tx, rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
+    let tx_stdout = tx.clone();
+    let tx_stderr = tx;
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
     std::thread::spawn(move || {
-        let out = std::process::Command::new(&bin).args(&args).output();
-        let _ = tx.send(out);
+        let mut buf = Vec::new();
+        if let Some(s) = stdout_pipe.as_mut() {
+            let _ = std::io::Read::take(s, HEALTHCHECK_OUTPUT_CAP).read_to_end(&mut buf);
+        }
+        let _ = tx_stdout.send((true, buf));
     });
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(out)) if out.status.success() => Ok(()),
-        Ok(Ok(out)) => Err(format!(
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(s) = stderr_pipe.as_mut() {
+            let _ = std::io::Read::take(s, HEALTHCHECK_OUTPUT_CAP).read_to_end(&mut buf);
+        }
+        let _ = tx_stderr.send((false, buf));
+    });
+
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        if std::time::Instant::now() >= deadline {
+            // Kill the health check AND its process group — a hung binary
+            // must not survive the task (it would run with the worker's
+            // privileges).
+            #[cfg(unix)]
+            {
+                let pid = child.id();
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("health check timed out after {timeout:?}"));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    // Collect the captured output (bounded wait: a surviving grandchild
+    // must not block the worker). Only stderr is reported — stdout of a
+    // health check is not an error signal.
+    let mut stderr = Vec::new();
+    for _ in 0..2 {
+        match rx.recv_timeout(DRAIN_TIMEOUT) {
+            Ok((is_stdout, bytes)) => {
+                if !is_stdout {
+                    stderr = bytes;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    match status {
+        Some(status) if status.success() => Ok(()),
+        Some(_) => Err(format!(
             "health check failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            String::from_utf8_lossy(&stderr).trim()
         )),
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(_) => Err(format!("health check timed out after {timeout:?}")),
+        None => Err("health check produced no status".to_string()),
     }
 }
 
@@ -723,6 +802,42 @@ mod tests {
             "custom-x",
             serde_json::json!({"commands": cmds}),
         )
+    }
+
+    /// A health check that hangs must be KILLED, not left running as a root
+    /// process, and must fail the update.
+    #[test]
+    fn health_check_kills_a_hanging_child() {
+        let dir = crate::config::testutil::temp_dir("healthcheck-hang");
+        let script = dir.join("hang.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 300\n").expect("write script");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let started = std::time::Instant::now();
+        let err = run_healthcheck_sync(script.to_str().unwrap(), &[], Duration::from_millis(300))
+            .expect_err("a hanging health check must fail");
+        assert!(err.contains("timed out"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the health check must return promptly, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A health check that succeeds is reported as such.
+    #[test]
+    fn health_check_accepts_a_successful_child() {
+        let dir = crate::config::testutil::temp_dir("healthcheck-ok");
+        let script = dir.join("ok.sh");
+        std::fs::write(&script, "#!/bin/sh\necho ok\n").expect("write script");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        run_healthcheck_sync(script.to_str().unwrap(), &[], Duration::from_secs(10))
+            .expect("the health check must succeed");
     }
 
     #[tokio::test]

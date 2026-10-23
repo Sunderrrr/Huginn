@@ -107,7 +107,15 @@ fn apt_upgrade_argv() -> Result<Vec<String>, WhitelistError> {
 
 #[cfg(unix)]
 fn restart_service_argv(service: &str) -> Vec<String> {
-    vec!["systemctl".into(), "restart".into(), service.into()]
+    // `--` ends systemctl's option parsing: the unit name can never be
+    // read as an option (SAFE_NAME already forbids a leading '-', the
+    // separator makes the invariant explicit and independent of the regex).
+    vec![
+        "systemctl".into(),
+        "restart".into(),
+        "--".into(),
+        service.into(),
+    ]
 }
 
 #[cfg(windows)]
@@ -205,6 +213,11 @@ mod tests {
             "a$(calc)b",
             "'quoted'",
             "\"quoted\"",
+            "--force",
+            "-f",
+            "nginx\n",
+            "nginx\r\n",
+            "ng inx",
         ] {
             let res = build_argv_checked("restart_service", &map(&[("service", evil)]));
             assert!(res.is_err(), "expected rejection for service={evil:?}");
@@ -278,7 +291,7 @@ mod unix_tests {
                 .collect(),
         )
         .unwrap();
-        assert_eq!(argv, vec!["systemctl", "restart", "nginx"]);
+        assert_eq!(argv, vec!["systemctl", "restart", "--", "nginx"]);
     }
 }
 
