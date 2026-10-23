@@ -150,7 +150,14 @@ pub async fn authenticate(
 ) -> Result<Principal, RouteError> {
     // MCP façade: timing-safe service-token check, then optional on-behalf-of.
     if let Some(presented) = header_str(headers, "x-mcp-service-token") {
-        if !constant_time_equals(presented, &state.config.mcp_service_token) {
+        // Fail closed on an empty credential: `constant_time_equals("", "")`
+        // is true, so an unset service token would otherwise authenticate an
+        // empty header as the (fleet-wide) automation agent.
+        let configured = state.config.mcp_service_token.as_str();
+        if configured.is_empty() || presented.is_empty() {
+            return Err(ApiError::unauthorized("invalid service token").into());
+        }
+        if !constant_time_equals(presented, configured) {
             return Err(ApiError::unauthorized("invalid service token").into());
         }
         if let Some(obo) = header_str(headers, "x-mcp-on-behalf-of") {
@@ -453,5 +460,55 @@ mod tests {
 
         // Each principal gets its own window.
         assert!(throttle_exec(&state, &Principal::agent(None)).is_ok());
+    }
+
+    /// An unset (empty) service token must never authenticate a request: the
+    /// MCP façade would otherwise hand the fleet-wide operator capability to
+    /// anybody sending an empty `x-mcp-service-token` header.
+    #[tokio::test]
+    async fn an_empty_service_token_never_authenticates() {
+        let pool = crate::db::pool_options(1)
+            .connect_lazy("postgres://huginn@localhost/huginn_test")
+            .unwrap();
+        let state = FleetState::new(
+            pool,
+            Config {
+                mcp_service_token: String::new(),
+                ..Config::default()
+            },
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-mcp-service-token", "".parse().unwrap());
+        let error = authenticate(&state, &headers, None).await.unwrap_err();
+        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(error.detail(), "invalid service token");
+
+        // A wrong token is refused as well.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-mcp-service-token", "nope".parse().unwrap());
+        let error = authenticate(&state, &headers, None).await.unwrap_err();
+        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// An empty presented service token is refused even when the configured
+    /// one is set (an empty header must never reach the comparison).
+    #[tokio::test]
+    async fn an_empty_presented_service_token_is_refused() {
+        let pool = crate::db::pool_options(1)
+            .connect_lazy("postgres://huginn@localhost/huginn_test")
+            .unwrap();
+        let state = FleetState::new(
+            pool,
+            Config {
+                mcp_service_token: "s3rvice-token".into(),
+                ..Config::default()
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-mcp-service-token", "".parse().unwrap());
+        let error = authenticate(&state, &headers, None).await.unwrap_err();
+        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(error.detail(), "invalid service token");
     }
 }

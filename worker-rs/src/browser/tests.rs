@@ -567,6 +567,7 @@ async fn token_never_reaches_debug_output() {
             .expect("spawn true"),
         port: 12345,
         token: token.clone(),
+        reaped: false,
     };
     let debug = format!("{fake:?}");
     assert!(
@@ -576,6 +577,90 @@ async fn token_never_reaches_debug_output() {
     assert!(debug.contains("12345"));
     // The kill path reaps the finished child.
     fake.kill().await;
+}
+
+// ---- CDP port ownership ---------------------------------------------------------
+
+/// The CDP port must belong to OUR process group: the port is picked by
+/// binding an ephemeral socket and closing it, so a local attacker can take
+/// it (or share it with SO_REUSEPORT) and impersonate the CDP server.
+#[tokio::test]
+async fn cdp_port_ownership_is_verifiable() {
+    use super::process::{cdp_port_owners, listening_socket_inodes, process_group_of};
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+
+    // The listening socket shows up in /proc/net/tcp.
+    let inodes = listening_socket_inodes(port).expect("/proc/net/tcp");
+    assert!(
+        !inodes.is_empty(),
+        "the listener must be visible in /proc/net/tcp"
+    );
+
+    // And it resolves to the process group's pgid.
+    let owners = cdp_port_owners(port).expect("owners");
+    let pgid = process_group_of(std::process::id()).expect("pgid");
+    assert!(
+        owners.contains(&pgid),
+        "owners {owners:?} must contain our pgid {pgid}"
+    );
+
+    // A port nobody listens on has no owner.
+    let free = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind");
+    let free_port = free.local_addr().expect("addr").port();
+    drop(free);
+    assert!(
+        listening_socket_inodes(free_port)
+            .expect("/proc/net/tcp")
+            .is_empty(),
+        "a closed port must have no listener"
+    );
+}
+
+/// `kill()` terminates the engine AND its whole process group, and the
+/// child is reaped only AFTER the group was killed (a reaped pid can be
+/// recycled, and the group id with it).
+#[tokio::test]
+async fn kill_terminates_the_process_group() {
+    let child = tokio::process::Command::new("sh")
+        .args(["-c", "sleep 300 & sleep 300"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn sleep");
+    let pid = child.id().expect("pid");
+    assert!(
+        std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        "the child must be running"
+    );
+
+    let proc = ObscuraProcess {
+        child,
+        port: 0,
+        token: "t".into(),
+        reaped: false,
+    };
+    proc.kill().await;
+
+    // The child is gone (reaped by kill()).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::path::Path::new(&format!("/proc/{pid}")).exists()
+        && std::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        "the engine process must be gone after kill()"
+    );
 }
 
 // ---- install gates --------------------------------------------------------------
@@ -689,6 +774,67 @@ fn strict_extraction_accepts_only_the_two_engine_binaries() {
         assert_eq!(mode & 0o777, 0o755, "{name} must be 0755");
     }
     assert!(!dir.join("README.md").exists(), "extra assets are skipped");
+}
+
+/// A member that claims (or streams) more than the cap is refused BEFORE it
+/// can fill the disk: a gzip bomb in the release tarball must not be able to
+/// exhaust the worker's filesystem.
+#[test]
+fn strict_extraction_caps_the_uncompressed_size() {
+    let dir = crate::config::testutil::temp_dir("obscura-extract-cap");
+    let tarball = tar_gz(&[("obscura", EntryType::Regular, b"0123456789abcdef")]);
+    // The cap is far below the member size -> refused.
+    let err = super::install::extract_strict_with_limit(&tarball, &dir, 8).unwrap_err();
+    assert!(err.contains("exceeds the 8 byte cap"), "{err}");
+    assert!(
+        !dir.join("obscura").exists(),
+        "the refused member must not leave a file behind"
+    );
+    // With a cap the member fits, the extraction succeeds.
+    let dir2 = crate::config::testutil::temp_dir("obscura-extract-cap-ok");
+    let installed = super::install::extract_strict_with_limit(&tarball, &dir2, 1024).unwrap();
+    assert_eq!(installed, vec!["obscura"]);
+}
+
+/// The extracted file is created by us (O_NOFOLLOW, mode 0700 first): a
+/// pre-placed symlink at the destination is refused, never written through.
+#[cfg(unix)]
+#[test]
+fn strict_extraction_refuses_to_write_through_a_symlink() {
+    let dir = crate::config::testutil::temp_dir("obscura-extract-symlink");
+    let outside = dir.join("outside");
+    std::fs::write(&outside, b"untouched").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join("obscura")).unwrap();
+
+    let tarball = tar_gz(&[("obscura", EntryType::Regular, b"payload")]);
+    let err = super::install::extract_strict(&tarball, &dir).unwrap_err();
+    assert!(err.contains("open "), "{err}");
+    assert_eq!(
+        std::fs::read(&outside).unwrap(),
+        b"untouched",
+        "the symlink target must not be written through"
+    );
+}
+
+/// The staged file is never group/other-writable, not even for the moment it
+/// takes to write it.
+#[cfg(unix)]
+#[test]
+fn strict_extraction_never_leaves_a_world_writable_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = crate::config::testutil::temp_dir("obscura-extract-mode");
+    let tarball = tar_gz(&[("obscura", EntryType::Regular, b"payload")]);
+    super::install::extract_strict(&tarball, &dir).unwrap();
+    let mode = std::fs::metadata(dir.join("obscura"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755, "the engine binary must be 0755");
+    assert_eq!(
+        mode & 0o022,
+        0,
+        "the engine binary must not be writable by others"
+    );
 }
 
 #[test]

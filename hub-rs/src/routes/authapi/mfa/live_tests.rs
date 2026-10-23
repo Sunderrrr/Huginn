@@ -435,6 +435,44 @@ async fn webauthn_challenges_are_bound_to_their_user() {
     );
 }
 
+/// Expired ceremony challenges must not pile up: every (unauthenticated)
+/// `login/begin` inserts a row, and without a purge the table grows without
+/// bound.
+#[tokio::test]
+async fn expired_webauthn_challenges_are_purged() {
+    let Some((state, _guard)) = fresh_state(wa_config()).await else {
+        return;
+    };
+    for (challenge, expires) in [
+        ("expired-challenge", "now() - interval '1 hour'"),
+        ("expired-challenge-2", "now() - interval '1 minute'"),
+    ] {
+        sqlx::query(&format!(
+            "INSERT INTO webauthn_challenges \
+             (id, challenge, user_id, purpose, expires_at, consumed_at, created_at, updated_at) \
+             VALUES ($1, $2, NULL, 'login', {expires}, NULL, now(), now())"
+        ))
+        .bind(Uuid::new_v4())
+        .bind(challenge)
+        .execute(&state.pool)
+        .await
+        .expect("insert expired challenge");
+    }
+    let before: (i64,) = sqlx::query_as("SELECT count(*) FROM webauthn_challenges")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(before.0, 2);
+
+    purge_expired_webauthn_challenges(&state).await;
+
+    let after: (i64,) = sqlx::query_as("SELECT count(*) FROM webauthn_challenges")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(after.0, 0, "expired challenges are purged");
+}
+
 #[tokio::test]
 async fn webauthn_setup_flow_logs_the_admin_in() {
     let Some((state, _guard)) = fresh_state(wa_config()).await else {

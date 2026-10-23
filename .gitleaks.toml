@@ -1,0 +1,35 @@
+# Gitleaks configuration for Huginn.
+#
+# The repository legitimately contains high-entropy-looking strings: the API
+# parity goldens (captured responses from a local reference hub), the
+# security/signature test vectors, and the dummy secrets the CI parity job
+# boots a throwaway hub with. None of them are real credentials — they are
+# regenerated fixtures. This file whitelists exactly those paths so the scan
+# stays meaningful (a real secret anywhere else still fails the build).
+#
+# Run locally:  gitleaks detect --source . --config .gitleaks.toml
+
+[extend]
+# Use the default rule set plus our own allowlist.
+useDefault = true
+
+[allowlist]
+description = "Known test fixtures — parity goldens, security vectors, CI dummy secrets"
+
+paths = [
+  # Captured API responses from a local reference hub (fake tokens/ids).
+  '''hub-rs/golden/''',
+  # Security + signature test vectors (fake JWTs, AWS example keys).
+  '''hub-rs/security_vectors\.json''',
+  '''hub-rs/src/services/backup/sigv4_vectors\.json''',
+  # The CI parity job boots a throwaway hub with obvious placeholders.
+  '''\.github/workflows/ci-rust\.yml''',
+  '''\.github/workflows/ci-scheduled\.yml''',
+  # Legacy (untracked) Python implementation kept locally for reference.
+  '''hub/tests/''',
+]
+
+# The parity job's placeholder secrets are literally named "parity-…".
+regexes = [
+  '''parity-(jwt-secret|hmac-key|mcp-token|mfa-key)-[0-9a-f]{32}''',
+]

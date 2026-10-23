@@ -35,8 +35,9 @@ pub struct WorkerEnrollRequest {
     pub os_info: serde_json::Value,
     #[serde(default)]
     pub worker_version: Option<String>,
-    /// When true (and the token permits it), the hub auto-queues a
-    /// `browser_install` task after enrollment.
+    /// Advisory opt-in: the hub auto-queues a `browser_install` task after
+    /// enrollment only when the ENROLLMENT TOKEN allows it (the server-side
+    /// policy). This flag never enables the capability on its own.
     #[serde(default)]
     pub install_browser: Option<bool>,
 }
@@ -136,17 +137,23 @@ pub(super) async fn enroll(
     let vm = outcome.vm;
     let auto_approved = vm.state == VMState::Active;
 
-    // Auto-queue a browser_install task when the token (or the request) asks
-    // for it — only effective for auto-approved VMs, since the worker must
-    // be able to poll. Best-effort: never fail the enrollment.
-    let install_browser = outcome.token.install_browser || body.install_browser == Some(true);
+    // Auto-queue a browser_install task when the ENROLLMENT TOKEN permits it
+    // — only effective for auto-approved VMs, since the worker must be able
+    // to poll. Best-effort: never fail the enrollment.
+    //
+    // The token's `install_browser` flag is the server-side policy: the
+    // request body can never enable a capability the admin did not grant on
+    // the token (an OR here would let any enrolling client force the hub to
+    // download and install the ~70 MiB engine). The request flag stays in the
+    // wire schema for compatibility, but it is advisory only.
+    let install_browser = outcome.token.install_browser;
+    if body.install_browser == Some(true) && !install_browser {
+        tracing::warn!(
+            "enrollment asked for the browser engine but the token does not allow it: vm {}",
+            vm.id
+        );
+    }
     if auto_approved && install_browser {
-        let new = crate::models::task::BrowserInstallTaskNew {
-            vm_id: vm.id,
-            version: String::new(), // resolved below
-            sha256: serde_json::Value::Object(Default::default()),
-            created_by: "system:auto-enroll".to_owned(),
-        };
         // Resolve the pin (fetch latest if unset) before queueing.
         if let Err(e) = crate::services::browser_engine::check_for_update(&state.pool).await {
             tracing::warn!("browser install pin resolution failed: {e}");
@@ -404,7 +411,7 @@ mod tests {
                 ttl_seconds: 3600,
                 max_uses: 1,
                 auto_approve: true,
-            install_browser: false,
+                install_browser: false,
             },
         )
         .await
@@ -442,6 +449,90 @@ mod tests {
                 .unwrap(),
             "verify_chain stays true"
         );
+
+        drop(guard);
+    }
+
+    /// The enrollment TOKEN's `install_browser` flag is the server-side
+    /// policy. A request body asking for the browser engine must not enable
+    /// it on a token the admin did not authorize it for — that would let any
+    /// enrolling client force the hub to download and install the ~70 MiB
+    /// engine on the fleet's network.
+    #[tokio::test]
+    async fn a_client_cannot_force_the_browser_install_past_the_token_policy() {
+        let Ok(url) = std::env::var("HUGINN_TEST_DATABASE_URL") else {
+            eprintln!("skipped: HUGINN_TEST_DATABASE_URL not set");
+            return;
+        };
+        let guard = crate::db::LIVE_DB_GUARD.lock().await;
+        let pool = crate::db::connect(&url, 4).await.expect("connect");
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        crate::db::run_migrations(&pool).await.expect("migrations");
+
+        let config = Config {
+            require_tls: false,
+            ..Config::default()
+        };
+        let state = WorkerState::new(pool.clone(), config);
+        let app = router(state.clone());
+
+        // An auto-approving token that does NOT allow the browser engine.
+        let plaintext = "join-me-no-browser";
+        crate::models::enrollment::create_token(
+            &pool,
+            crate::models::enrollment::EnrollmentTokenNew {
+                token_hash: state.security.hash_secret(plaintext),
+                label: "test".into(),
+                created_by: Uuid::new_v4(),
+                ttl_seconds: 3600,
+                max_uses: 1,
+                auto_approve: true,
+                install_browser: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(json_request(
+                "POST",
+                "/api/worker/enroll",
+                json!({
+                    "token": plaintext,
+                    "name": "w1",
+                    "arch": "amd64",
+                    "install_browser": true
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // The enrollment itself succeeded...
+        let (installs,): (i64,) =
+            sqlx::query_as("SELECT count(*) FROM tasks WHERE type = 'browser_install'::task_type")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            installs, 0,
+            "the token policy decides: no browser_install task may be queued"
+        );
+        // ...and the auto-approve refresh tasks are still there (the
+        // enrollment path itself is untouched).
+        let (refreshes,): (i64,) =
+            sqlx::query_as("SELECT count(*) FROM tasks WHERE type = 'action'::task_type")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(refreshes, 2, "status + metrics refresh");
 
         drop(guard);
     }

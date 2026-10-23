@@ -14,25 +14,52 @@ mod hub_client;
 mod protocol;
 mod tools;
 
-use auth::TokenValidator;
+use auth::{AuthLimiter, TokenValidator};
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
 use hub_client::{CallCtx, HubClient};
 use protocol::AppState;
+use std::net::SocketAddr;
 use std::sync::Arc;
+
+/// Failed authentication attempts allowed per minute and per client before
+/// the server starts refusing to even talk to the hub (429). Bounds the
+/// amplification an unauthenticated caller can drive through the MCP.
+const AUTH_FAILURES_PER_MINUTE: u32 = 30;
 
 #[tokio::main]
 async fn main() {
     let settings = Arc::new(config::Settings::from_env());
+    // The service token is the MCP's only credential towards the hub: refuse
+    // to start without a strong one instead of silently sending an empty
+    // header (which a misconfigured hub would accept).
+    if let Err(e) = settings.validate() {
+        eprintln!("huginn-mcp: {e}");
+        std::process::exit(1);
+    }
+    for w in settings.warnings() {
+        eprintln!("huginn-mcp: warning: {w}");
+    }
+    if settings.trust_proxy && settings.trusted_proxy_cidrs.is_empty() {
+        eprintln!(
+            "huginn-mcp: warning: HUGINN_MCP_TRUST_PROXY is on but \
+             HUGINN_MCP_TRUSTED_PROXY_CIDRS is empty — the client-IP headers are trusted from \
+             ANY peer, so a directly reachable MCP port lets a client spoof its IP and bypass \
+             the MCP tokens' IP allow-lists. Set HUGINN_MCP_TRUSTED_PROXY_CIDRS to the proxy \
+             network."
+        );
+    }
     let hub = Arc::new(HubClient::new(&settings));
     let state = Arc::new(AppState {
         hub: hub.clone(),
         validator: Arc::new(TokenValidator::new(hub)),
         trust_proxy: settings.trust_proxy,
+        trusted_proxies: settings.trusted_proxy_networks(),
+        auth_limiter: Arc::new(AuthLimiter::new(AUTH_FAILURES_PER_MINUTE)),
     });
 
     if settings.transport == "streamable-http" {
@@ -95,7 +122,14 @@ async fn run_http(state: Arc<AppState>, settings: &config::Settings) {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("bind HTTP listener");
-    axum::serve(listener, app).await.expect("HTTP server");
+    // ConnectInfo gives the handler the direct peer address: the only client
+    // IP that cannot be forged by the caller, and the key of the auth limiter.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("HTTP server");
 }
 
 fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -112,32 +146,53 @@ async fn mcp_get() -> Response {
         .into_response()
 }
 
-async fn mcp_post(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body) -> Response {
-    // Client IP: behind a stamping edge proxy (trust_proxy on), the forwarded
-    // headers; otherwise only the direct peer — never client-supplied headers. The direct peer is not
-    // extracted here (axum 0.8: ConnectInfo is not an optional part
-    // extractor); behind the bundled Caddy the stamped header is authoritative.
-    let ip = if state.trust_proxy {
-        auth::client_ip(
-            header_value(&headers, "x-real-ip"),
-            header_value(&headers, "x-forwarded-for"),
-            None,
-        )
-    } else {
-        None
-    };
+async fn mcp_post(
+    State(state): State<Arc<AppState>>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    // Client IP: behind a stamping edge proxy (trust_proxy on, and the peer
+    // inside the configured proxy networks) the forwarded headers are used;
+    // otherwise only the direct peer — never client-supplied headers. The
+    // direct peer comes from ConnectInfo (installed by the serve layer).
+    let peer_ip = peer
+        .as_ref()
+        .map(|Extension(ConnectInfo(addr))| addr.ip().to_string());
+    let ip = auth::resolve_client_ip(
+        state.trust_proxy,
+        &state.trusted_proxies,
+        header_value(&headers, "x-real-ip"),
+        header_value(&headers, "x-forwarded-for"),
+        peer_ip.as_deref(),
+    );
+    // The limiter is keyed by the *peer* (unforgeable), not by the forwarded
+    // IP, so a forged header cannot buy extra attempts.
+    let limit_key = peer_ip.as_deref().or(ip.as_deref()).unwrap_or("unknown");
+    if state.auth_limiter.blocked(limit_key).await {
+        return Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header("content-type", "application/json")
+            .header("retry-after", "60")
+            .body(Body::from(
+                r#"{"error":"too many authentication failures"}"#,
+            ))
+            .unwrap();
+    }
     let auth_header = header_value(&headers, "authorization").unwrap_or("");
     let presented = auth_header
         .strip_prefix("Bearer ")
         .unwrap_or("")
         .to_string();
     if !state.validator.valid(&presented, ip.as_deref()).await {
+        state.auth_limiter.record_failure(limit_key).await;
         return Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header("content-type", "application/json")
             .body(Body::from(r#"{"error":"unauthorized"}"#))
             .unwrap();
     }
+    state.auth_limiter.reset(limit_key).await;
 
     let bytes = match axum::body::to_bytes(body, 4 << 20).await {
         Ok(b) => b,
@@ -181,6 +236,7 @@ mod e2e_tests {
             host: "127.0.0.1".into(),
             port: 0,
             trust_proxy: false,
+            trusted_proxy_cidrs: vec![],
         };
         let hub = Arc::new(HubClient::new(&settings));
         Arc::new(AppState {
@@ -188,6 +244,8 @@ mod e2e_tests {
             validator: Arc::new(TokenValidator::new(hub)),
             // The e2e suite exercises the behind-Caddy flow (stamped headers).
             trust_proxy: true,
+            trusted_proxies: vec![],
+            auth_limiter: Arc::new(AuthLimiter::new(AUTH_FAILURES_PER_MINUTE)),
         })
     }
 
@@ -295,5 +353,63 @@ mod e2e_tests {
         let text = json["result"]["content"][0]["text"].as_str().unwrap();
         let out: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(out["status"], "succeeded");
+    }
+
+    #[tokio::test]
+    async fn a_forged_forwarded_ip_is_dropped_when_the_peer_is_not_a_trusted_proxy() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/mcp/whoami"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let mut state = state_with_hub(server.uri());
+        Arc::get_mut(&mut state).unwrap().trusted_proxies =
+            vec![config::parse_network("172.16.0.0/12").unwrap()];
+        let mut req = rpc(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
+        req.headers_mut()
+            .insert("authorization", "Bearer user-token-1".parse().unwrap());
+        req.headers_mut()
+            .insert("x-real-ip", "1.2.3.4".parse().unwrap());
+        let resp = router(state).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // The forged header never reached the hub.
+        let reqs = server.received_requests().await.unwrap();
+        assert!(
+            reqs.iter().all(|r| {
+                r.headers
+                    .get("x-forwarded-for")
+                    .map(|v| v != "1.2.3.4")
+                    .unwrap_or(true)
+            }),
+            "the forged client IP must not be forwarded to the hub"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_auth_failures_are_throttled() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/mcp/whoami"))
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let mut state = state_with_hub(server.uri());
+        Arc::get_mut(&mut state).unwrap().auth_limiter = Arc::new(AuthLimiter::new(2));
+
+        for _ in 0..2 {
+            let mut req = rpc(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
+            req.headers_mut()
+                .insert("authorization", "Bearer bad-token".parse().unwrap());
+            let resp = router(state.clone()).oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        }
+        // The third attempt is refused without even reaching the hub.
+        let mut req = rpc(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
+        req.headers_mut()
+            .insert("authorization", "Bearer bad-token".parse().unwrap());
+        let resp = router(state).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 }

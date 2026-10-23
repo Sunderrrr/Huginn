@@ -49,6 +49,15 @@ fn safe_slug(v: &str) -> bool {
     !v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_lowercase() || c == '_')
 }
 
+/// Caps for the free-form tool arguments (defense in depth — the hub
+/// re-validates everything, but the MCP must not be the only guard rail and
+/// must not relay an unbounded payload to the hub).
+const MAX_ACTION_NAME: usize = 128;
+const MAX_COMMAND_BYTES: usize = 64 * 1024;
+const MAX_ACTION_PARAMS: usize = 32;
+const MAX_PARAM_VALUE_BYTES: usize = 4 * 1024;
+const MAX_PARAM_KEY_BYTES: usize = 128;
+
 /// Browser automation guards (defense in depth — the hub re-validates every
 /// step; these fail fast before any hub call). Exact step contract — see
 /// docs/browser.md: navigate{url}, click{selector}, type{selector,text},
@@ -374,8 +383,9 @@ async fn resolve_vm(hub: &HubClient, ctx: &CallCtx, vm: &str) -> Result<String, 
     chosen[0]
         .get("id")
         .and_then(Value::as_str)
+        .filter(|id| safe_id(id))
         .map(str::to_string)
-        .ok_or_else(|| tool_error(500, "VM record has no id"))
+        .ok_or_else(|| tool_error(500, "VM record has no usable id"))
 }
 
 /// Shared tail of the browser tools: resolve the VM (id or name), run the
@@ -521,10 +531,39 @@ pub async fn call_tool(
             let Some(action) = args.get("action").and_then(Value::as_str) else {
                 return tool_error(400, "action is required");
             };
+            if action.is_empty() || action.len() > MAX_ACTION_NAME {
+                return tool_error(
+                    400,
+                    format!("action must be 1-{MAX_ACTION_NAME} characters"),
+                );
+            }
             let wait = args.get("wait").and_then(Value::as_bool).unwrap_or(false);
-            let params: HashMap<String, String> = args
-                .get("params")
-                .and_then(Value::as_object)
+            let raw_params = args.get("params").and_then(Value::as_object);
+            if let Some(p) = raw_params {
+                if p.len() > MAX_ACTION_PARAMS {
+                    return tool_error(
+                        400,
+                        format!("too many params: {} (max {MAX_ACTION_PARAMS})", p.len()),
+                    );
+                }
+                for (k, v) in p {
+                    if k.len() > MAX_PARAM_KEY_BYTES {
+                        return tool_error(
+                            400,
+                            format!("param name exceeds {MAX_PARAM_KEY_BYTES} chars"),
+                        );
+                    }
+                    if let Some(s) = v.as_str() {
+                        if s.len() > MAX_PARAM_VALUE_BYTES {
+                            return tool_error(
+                                400,
+                                format!("param {k:?} exceeds {MAX_PARAM_VALUE_BYTES} bytes"),
+                            );
+                        }
+                    }
+                }
+            }
+            let params: HashMap<String, String> = raw_params
                 .map(|m| {
                     m.iter()
                         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
@@ -546,6 +585,15 @@ pub async fn call_tool(
             let Some(command) = args.get("command").and_then(Value::as_str) else {
                 return tool_error(400, "command is required");
             };
+            if command.is_empty() {
+                return tool_error(400, "command must not be empty");
+            }
+            if command.len() > MAX_COMMAND_BYTES {
+                return tool_error(
+                    400,
+                    format!("command exceeds {} KiB", MAX_COMMAND_BYTES / 1024),
+                );
+            }
             let wait = args.get("wait").and_then(Value::as_bool).unwrap_or(false);
             match resolve_vm(&hub, ctx, vm).await {
                 Err(e) => e,
@@ -1012,6 +1060,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 0,
             trust_proxy: false,
+            trusted_proxy_cidrs: vec![],
         };
         let hub = HubClient::new(&settings);
         let ctx = CallCtx::default();
@@ -1061,6 +1110,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 0,
             trust_proxy: false,
+            trusted_proxy_cidrs: vec![],
         };
         let hub2 = HubClient::new(&settings2);
         let err = resolve_vm(&hub2, &ctx, "twin").await.unwrap_err();
@@ -1075,6 +1125,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 0,
             trust_proxy: false,
+            trusted_proxy_cidrs: vec![],
         }
     }
 
@@ -1285,6 +1336,131 @@ mod tests {
             .await["error"]["status"],
             400
         );
+    }
+
+    #[tokio::test]
+    async fn execution_arguments_are_bounded() {
+        // Dead hub + UUID vm_id: resolve_vm never calls the hub, so a 400 can
+        // only come from local validation; a 0 means the (valid) call tried
+        // the hub and hit the dead port.
+        let hub = Arc::new(HubClient::new(&test_settings("http://127.0.0.1:1".into())));
+        let ctx = CallCtx::default();
+        let vm = json!("55555555-5555-5555-5555-555555555555");
+
+        // execute_command: empty / oversized command
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "execute_command",
+                &tool_args(&[("vm_id", vm.clone()), ("command", json!(""))])
+            )
+            .await["error"]["status"],
+            400
+        );
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "execute_command",
+                &tool_args(&[
+                    ("vm_id", vm.clone()),
+                    ("command", json!("x".repeat(MAX_COMMAND_BYTES + 1)))
+                ])
+            )
+            .await["error"]["status"],
+            400
+        );
+        // execute_action: oversized action name
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "execute_action",
+                &tool_args(&[
+                    ("vm_id", vm.clone()),
+                    ("action", json!("a".repeat(MAX_ACTION_NAME + 1)))
+                ])
+            )
+            .await["error"]["status"],
+            400
+        );
+        // execute_action: too many params
+        let many: Vec<(String, Value)> = (0..=MAX_ACTION_PARAMS)
+            .map(|i| (format!("p{i}"), json!("v")))
+            .collect();
+        let mut params = serde_json::Map::new();
+        for (k, v) in many {
+            params.insert(k, v);
+        }
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "execute_action",
+                &tool_args(&[
+                    ("vm_id", vm.clone()),
+                    ("action", json!("status")),
+                    ("params", Value::Object(params))
+                ])
+            )
+            .await["error"]["status"],
+            400
+        );
+        // execute_action: oversized param value
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "execute_action",
+                &tool_args(&[
+                    ("vm_id", vm.clone()),
+                    ("action", json!("restart_service")),
+                    (
+                        "params",
+                        json!({"service": "x".repeat(MAX_PARAM_VALUE_BYTES + 1)})
+                    )
+                ])
+            )
+            .await["error"]["status"],
+            400
+        );
+        // Boundary values pass validation and reach the hub (status 0: dead hub).
+        assert_eq!(
+            call_tool(
+                hub.clone(),
+                &ctx,
+                "execute_command",
+                &tool_args(&[
+                    ("vm_id", vm.clone()),
+                    ("command", json!("x".repeat(MAX_COMMAND_BYTES)))
+                ])
+            )
+            .await["error"]["status"],
+            0,
+            "a command at the cap must reach the hub"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_vm_record_with_an_unusable_id_is_refused() {
+        // The id coming from the hub is interpolated into the hub URL — it must
+        // be a conservative identifier, never a path/query payload.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/vms"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    {"id": "../../api/admin", "name": "web-01", "state": "active"}
+                ])),
+            )
+            .mount(&server)
+            .await;
+        let hub = HubClient::new(&test_settings(server.uri()));
+        let err = resolve_vm(&hub, &CallCtx::default(), "web-01")
+            .await
+            .unwrap_err();
+        assert_eq!(err["error"]["status"], 500);
     }
 
     #[tokio::test]

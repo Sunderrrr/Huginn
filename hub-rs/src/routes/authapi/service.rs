@@ -122,6 +122,37 @@ pub(crate) async fn user_out_vms_only(state: &AuthState, user: &User) -> Result<
     })
 }
 
+/// Drop the WebAuthn ceremony challenges that can no longer be used.
+///
+/// A challenge row is inserted by every (unauthenticated) `login/begin` call
+/// and is only ever *consumed*, never deleted — without a purge the table
+/// grows without bound and an attacker can fill the database with junk
+/// ceremonies. The delete is bounded (at most `CHALLENGE_PURGE_BATCH` rows
+/// per call) so it stays cheap, and it is best-effort: a failure here must
+/// never block the ceremony itself.
+pub(crate) async fn purge_expired_webauthn_challenges(state: &AuthState) {
+    let res = sqlx::query(
+        "DELETE FROM webauthn_challenges WHERE id IN ( \
+           SELECT id FROM webauthn_challenges WHERE expires_at < now() LIMIT $1)",
+    )
+    .bind(CHALLENGE_PURGE_BATCH)
+    .execute(&state.pool)
+    .await;
+    match res {
+        Ok(done) if done.rows_affected() > 0 => {
+            tracing::debug!(
+                rows = done.rows_affected(),
+                "purged expired WebAuthn challenges"
+            );
+        }
+        Ok(_) => {}
+        Err(err) => tracing::warn!(error = %err, "could not purge expired WebAuthn challenges"),
+    }
+}
+
+/// How many expired challenges a single purge call removes.
+const CHALLENGE_PURGE_BATCH: i64 = 500;
+
 /// Set the profile email exactly as `auth.update_me` does (`user.email =
 /// body.email or None`), including clearing it to `NULL`. The
 /// `models::user::update` patch keeps NULL out (`COALESCE`), hence the direct

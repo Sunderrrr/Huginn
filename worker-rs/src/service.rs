@@ -30,12 +30,21 @@ const UNIT_TEMPLATE: &str = "[Unit]
 Description=Huginn fleet worker
 After=network-online.target
 Wants=network-online.target
+# Bound the restart loop: without this, `Restart=always` + `RestartSec=5`
+# restarts a crash-looping worker FOREVER (systemd's default start limit
+# is 5 restarts / 10s, which a 5s backoff never reaches).
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart={bin} run --state-dir {dir}
 Restart=always
 RestartSec=5
+# The worker resolves its helper programs (systemctl, uname, apt-get, sh…)
+# through PATH: pin it to the system directories so a writable directory
+# can never take the place of a system binary.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Hardening
 NoNewPrivileges=true
 ProtectHome=true
@@ -45,11 +54,25 @@ WantedBy=multi-user.target
 ";
 
 /// UnitContent renders the unit file for the given binary path and state dir.
+///
+/// The two interpolated values land in a systemd unit file: a newline (or
+/// any control character) in a path would end the `ExecStart=` line and let
+/// the rest of the string become a new directive — a unit-file injection.
+/// Both paths are therefore rejected unless they are plain, single-line
+/// paths.
 #[cfg(unix)]
-pub fn unit_content(binary_path: &str, state_dir: &str) -> String {
-    UNIT_TEMPLATE
+pub fn unit_content(binary_path: &str, state_dir: &str) -> Result<String, String> {
+    for (what, value) in [("binary path", binary_path), ("state dir", state_dir)] {
+        if value.is_empty() {
+            return Err(format!("{what} must not be empty"));
+        }
+        if value.chars().any(|c| c.is_control()) {
+            return Err(format!("{what} must not contain control characters"));
+        }
+    }
+    Ok(UNIT_TEMPLATE
         .replacen("{bin}", binary_path, 1)
-        .replacen("{dir}", state_dir, 1)
+        .replacen("{dir}", state_dir, 1))
 }
 
 /// Install writes the unit file (0644) and enables the service.
@@ -59,7 +82,8 @@ pub async fn install(
     binary_path: &str,
     state_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let content = unit_content(binary_path, state_dir);
+    let content = unit_content(binary_path, state_dir)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     tokio::fs::write(unit_path, content).await?; // unit files are world-readable
     tokio::fs::set_permissions(unit_path, std::fs::Permissions::from_mode(0o644)).await?;
     systemctl(&["daemon-reload"]).await?;
@@ -85,7 +109,13 @@ pub async fn restart_self() -> io::Result<()> {
 #[cfg(unix)]
 async fn systemctl(args: &[&str]) -> io::Result<()> {
     // Output is inherited, mirroring Go's cmd.Stdout = os.Stdout wiring in run().
-    let status = Command::new("systemctl").args(args).status().await?;
+    // PATH is pinned: `systemctl` is looked up in the CHILD's PATH, and the
+    // worker runs as root.
+    let status = Command::new("systemctl")
+        .args(args)
+        .env("PATH", crate::exec::SAFE_PATH)
+        .status()
+        .await?;
     check_exit(status)
 }
 
@@ -108,19 +138,29 @@ mod tests {
 
     #[test]
     fn test_unit_content_matches_go_template() {
-        let content = unit_content("/usr/local/bin/huginn-worker", "/etc/huginn");
+        let content =
+            unit_content("/usr/local/bin/huginn-worker", "/etc/huginn").expect("unit content");
         assert_eq!(
             content,
             "[Unit]\n\
              Description=Huginn fleet worker\n\
              After=network-online.target\n\
              Wants=network-online.target\n\
+             # Bound the restart loop: without this, `Restart=always` + `RestartSec=5`\n\
+             # restarts a crash-looping worker FOREVER (systemd's default start limit\n\
+             # is 5 restarts / 10s, which a 5s backoff never reaches).\n\
+             StartLimitIntervalSec=300\n\
+             StartLimitBurst=5\n\
              \n\
              [Service]\n\
              Type=simple\n\
              ExecStart=/usr/local/bin/huginn-worker run --state-dir /etc/huginn\n\
              Restart=always\n\
              RestartSec=5\n\
+             # The worker resolves its helper programs (systemctl, uname, apt-get, sh…)\n\
+             # through PATH: pin it to the system directories so a writable directory\n\
+             # can never take the place of a system binary.\n\
+             Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
              # Hardening\n\
              NoNewPrivileges=true\n\
              ProtectHome=true\n\
@@ -128,6 +168,33 @@ mod tests {
              [Install]\n\
              WantedBy=multi-user.target\n"
         );
+    }
+
+    /// A crash-looping worker must not restart forever: the unit declares a
+    /// start limit so systemd finally gives up.
+    #[test]
+    fn test_unit_bounds_the_restart_loop() {
+        let content =
+            unit_content("/usr/local/bin/huginn-worker", "/etc/huginn").expect("unit content");
+        assert!(content.contains("StartLimitIntervalSec=300"), "{content}");
+        assert!(content.contains("StartLimitBurst=5"), "{content}");
+    }
+
+    /// The unit file is a directive file: a path carrying a newline could
+    /// append a directive of its own (unit-file injection).
+    #[test]
+    fn test_unit_content_rejects_control_characters() {
+        let err = unit_content(
+            "/usr/local/bin/huginn-worker\nExecStartPre=/bin/sh -c evil",
+            "/etc/huginn",
+        )
+        .expect_err("newline in the binary path must be refused");
+        assert!(err.contains("control characters"), "{err}");
+        let err = unit_content("/usr/local/bin/huginn-worker", "/etc/huginn\r\nX=1")
+            .expect_err("CRLF in the state dir must be refused");
+        assert!(err.contains("control characters"), "{err}");
+        let err = unit_content("", "/etc/huginn").expect_err("empty path must be refused");
+        assert!(err.contains("must not be empty"), "{err}");
     }
 }
 

@@ -18,6 +18,22 @@ use tokio::process::Command;
 /// DefaultMaxOutputBytes caps captured stdout/stderr to bound memory use.
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 1 << 20; // 1 MiB
 
+/// The PATH every child process runs with.
+///
+/// The worker runs as root, so the lookup of `argv[0]` ("uname", "apt-get",
+/// "systemctl", "sh"…) must never depend on an inherited PATH: a
+/// world-writable directory in PATH (a dev shell with `.` in it, a
+/// user-controlled systemd drop-in, a `$HOME/bin` exported by an admin
+/// profile) would let a local unprivileged user substitute the program the
+/// root worker executes. `std::process::Command` resolves a bare program
+/// name against the CHILD's PATH when PATH is set through `env()` — so
+/// pinning it here pins the lookup too (verified: with `env("PATH", …)` the
+/// parent PATH is no longer consulted).
+///
+/// This is systemd's own default service PATH, so nothing that used to work
+/// stops working.
+pub const SAFE_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// Result is the outcome of running a command.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExecResult {
@@ -258,6 +274,11 @@ pub async fn run_command(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Pin the child's PATH: it decides where argv[0] is looked up (a bare
+    // name is resolved against the CHILD's PATH), so the root worker can
+    // never be tricked into running a program from an attacker-writable
+    // directory.
+    command.env("PATH", SAFE_PATH);
     // Never leak the child if the surrounding future is dropped (timeout or
     // shutdown) — mirrors CommandContext killing on context cancellation.
     command.kill_on_drop(true);
@@ -464,6 +485,22 @@ mod tests {
             res.stdout.len() <= 1024,
             "stdout length = {}, want <= 1024",
             res.stdout.len()
+        );
+    }
+
+    /// The child's PATH is pinned to [`SAFE_PATH`]: the root worker resolves
+    /// argv[0] against it, so an inherited PATH containing a writable
+    /// directory can no longer hijack `systemctl`/`uname`/`sh`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_child_path_is_pinned() {
+        let res = run(&["sh", "-c", "echo $PATH"], Duration::from_secs(5), 0)
+            .await
+            .expect("no error");
+        assert_eq!(
+            res.stdout.trim(),
+            SAFE_PATH,
+            "the child must run with the pinned PATH"
         );
     }
 
