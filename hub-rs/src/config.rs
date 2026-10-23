@@ -283,15 +283,6 @@ impl Config {
         csv(&self.allowed_release_domains_csv)
     }
 
-    pub fn cors_origins(&self) -> Vec<String> {
-        csv(&self.cors_origins_csv)
-    }
-
-    /// Password login is on unless OIDC is active and it isn't re-enabled.
-    pub fn password_login_enabled(&self) -> bool {
-        (!self.oidc_enabled) || self.allow_password_login
-    }
-
     /// True when a secret still carries a shipped placeholder. The check is
     /// case-insensitive and covers the `CHANGE_ME_…` spelling used by
     /// `deploy/.env.prod.example` (the lowercase `change-me…` of
@@ -438,16 +429,5 @@ mod tests {
     fn csv_parsing_matches_python() {
         assert_eq!(csv(" a, b ,,c "), vec!["a", "b", "c"]);
         assert!(csv("").is_empty());
-    }
-
-    #[test]
-    fn password_login_enabled_rules() {
-        let mut c = Config::default();
-        // OIDC off → password always on
-        assert!(c.password_login_enabled());
-        c.oidc_enabled = true;
-        assert!(!c.password_login_enabled());
-        c.allow_password_login = true;
-        assert!(c.password_login_enabled());
     }
 }
