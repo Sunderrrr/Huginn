@@ -63,13 +63,15 @@ impl Jwt {
     }
 
     /// Access token for `user_id` with the given role, valid `ttl_min` minutes.
+    /// `epoch` is the user's session generation (see [`session_is_current`]).
     pub fn create_access_token(
         &self,
         user_id: &str,
         role: &str,
         ttl_min: i64,
+        epoch: i64,
     ) -> Result<String, TokenError> {
-        create_access_token(&self.secret, user_id, role, ttl_min)
+        create_access_token(&self.secret, user_id, role, ttl_min, epoch)
     }
 
     /// [`Jwt::create_access_token`] with a fixed issuance time (testability).
@@ -78,9 +80,10 @@ impl Jwt {
         user_id: &str,
         role: &str,
         ttl_min: i64,
+        epoch: i64,
         now_unix: i64,
     ) -> Result<String, TokenError> {
-        create_access_token_at(&self.secret, user_id, role, ttl_min, now_unix)
+        create_access_token_at(&self.secret, user_id, role, ttl_min, epoch, now_unix)
     }
 
     /// Decode and verify an access token (signature + `exp`/`iat`).
@@ -193,12 +196,32 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> Vec<u8> {
 }
 
 /// Access-token payload, compact, in PyJWT's claim order.
-fn access_payload(user_id: &str, role: &str, iat: i64, exp: i64) -> String {
+///
+/// The `epoch` claim carries the user's session generation (audit finding
+/// F-08): the hub compares it with `users.session_epoch` on every request,
+/// so bumping that counter invalidates every token issued before it. It is
+/// appended last, so the first four claims keep the reference layout.
+fn access_payload(user_id: &str, role: &str, epoch: i64, iat: i64, exp: i64) -> String {
     format!(
-        r#"{{"sub":{},"role":{},"iat":{iat},"exp":{exp}}}"#,
+        r#"{{"sub":{},"role":{},"iat":{iat},"exp":{exp},"epoch":{epoch}}}"#,
         py_json_string(user_id),
         py_json_string(role)
     )
+}
+
+/// The session epoch carried by a decoded token. A token issued before the
+/// epoch existed carries none: it is treated as epoch 0, exactly like the
+/// user's initial value.
+pub fn session_epoch_of(payload: &serde_json::Value) -> i64 {
+    payload
+        .get("epoch")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0)
+}
+
+/// Whether a decoded token still matches the user's session epoch.
+pub fn session_is_current(payload: &serde_json::Value, user_epoch: i64) -> bool {
+    session_epoch_of(payload) == user_epoch
 }
 
 /// MFA-challenge payload, compact, in PyJWT's claim order.
@@ -210,14 +233,16 @@ fn challenge_payload(user_id: &str, scope: &str, iat: i64, exp: i64) -> String {
     )
 }
 
-/// Create an access token, valid `ttl_min` minutes from now.
+/// Create an access token, valid `ttl_min` minutes from now. `epoch` is the
+/// user's session generation (see [`session_is_current`]).
 pub fn create_access_token(
     secret: &str,
     user_id: &str,
     role: &str,
     ttl_min: i64,
+    epoch: i64,
 ) -> Result<String, TokenError> {
-    create_access_token_at(secret, user_id, role, ttl_min, now_unix())
+    create_access_token_at(secret, user_id, role, ttl_min, epoch, now_unix())
 }
 
 /// Create an access token issued at `now_unix`.
@@ -226,10 +251,11 @@ pub fn create_access_token_at(
     user_id: &str,
     role: &str,
     ttl_min: i64,
+    epoch: i64,
     now_unix: i64,
 ) -> Result<String, TokenError> {
     let exp = now_unix + ttl_min * 60;
-    encode_hs256(secret, &access_payload(user_id, role, now_unix, exp))
+    encode_hs256(secret, &access_payload(user_id, role, epoch, now_unix, exp))
 }
 
 /// Create a short-lived MFA challenge token (`scope` must be [`MFA_SCOPE`] or
@@ -376,6 +402,25 @@ mod tests {
         assert_eq!(challenge, j["challenge_payload"]);
     }
 
+    /// The session epoch travels with the token and is what the hub compares
+    /// with `users.session_epoch` to revoke a session (F-08). A token issued
+    /// before the epoch existed carries none: it counts as epoch 0.
+    #[test]
+    fn session_epoch_round_trips_and_defaults_to_zero() {
+        let secret = "epoch-secret";
+        let token = create_access_token_at(secret, "u", "admin", 5, 7, 1_700_000_000).unwrap();
+        let payload = decode_access_token_at(secret, &token, 1_700_000_000).unwrap();
+        assert_eq!(session_epoch_of(&payload), 7);
+        assert!(session_is_current(&payload, 7));
+        assert!(!session_is_current(&payload, 8));
+
+        // A legacy payload without the claim is epoch 0.
+        let legacy = serde_json::json!({"sub": "u", "role": "admin", "iat": 1, "exp": 9});
+        assert_eq!(session_epoch_of(&legacy), 0);
+        assert!(session_is_current(&legacy, 0));
+        assert!(!session_is_current(&legacy, 1));
+    }
+
     #[test]
     fn mfa_scope_is_enforced() {
         let j = jwt_vectors();
@@ -391,8 +436,14 @@ mod tests {
         ));
     }
 
-    /// Tokens we create decode back to the same claims — and are byte-identical
-    /// to PyJWT's output for the same fixed claims.
+    /// The signature scheme stays byte-compatible with PyJWT: encoding the
+    /// reference claim set produces exactly PyJWT's token.
+    ///
+    /// The claim SET itself now carries one extra claim — `epoch`, the
+    /// user's session generation (audit finding F-08) — so the minted token
+    /// is not byte-identical to the frozen reference any more. This is a
+    /// deliberate divergence from the retired Python hub (the endpoint-level
+    /// parity gate still passes: the harness normalizes JWTs to `<JWT>`).
     #[test]
     fn creates_python_identical_tokens() {
         let j = jwt_vectors();
@@ -401,12 +452,23 @@ mod tests {
         let now = j["access_payload"]["iat"].as_i64().unwrap();
         let ttl = (j["access_payload"]["exp"].as_i64().unwrap() - now) / 60;
 
-        let access = create_access_token_at(secret, sub, "admin", ttl, now).unwrap();
-        assert_eq!(access, j["access_token"].as_str().unwrap());
-        assert_eq!(
-            decode_access_token_at(secret, &access, now).unwrap(),
-            j["access_payload"]
+        // The encoder is unchanged: the reference claim set, in PyJWT's
+        // order, still yields PyJWT's exact token.
+        let reference_payload = format!(
+            r#"{{"sub":"{sub}","role":"admin","iat":{now},"exp":{}}}"#,
+            now + ttl * 60
         );
+        assert_eq!(
+            encode_hs256(secret, &reference_payload).unwrap(),
+            j["access_token"].as_str().unwrap()
+        );
+
+        // The minted token additionally carries the session epoch.
+        let access = create_access_token_at(secret, sub, "admin", ttl, 0, now).unwrap();
+        let decoded = decode_access_token_at(secret, &access, now).unwrap();
+        assert_eq!(decoded["sub"], sub);
+        assert_eq!(decoded["role"], "admin");
+        assert_eq!(decoded["epoch"], 0);
 
         let challenge =
             create_mfa_challenge_token_at(secret, sub, MFA_SETUP_SCOPE, ttl, now).unwrap();
@@ -419,7 +481,8 @@ mod tests {
         // The struct-based API produces the same bytes.
         let jwt = Jwt::new(secret);
         assert_eq!(
-            jwt.create_access_token_at(sub, "admin", ttl, now).unwrap(),
+            jwt.create_access_token_at(sub, "admin", ttl, 0, now)
+                .unwrap(),
             access
         );
     }

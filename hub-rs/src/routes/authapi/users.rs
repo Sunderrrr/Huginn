@@ -756,7 +756,7 @@ mod tests {
         let token = state
             .security
             .jwt()
-            .create_access_token(&solo.id.to_string(), "admin", 60)
+            .create_access_token(&solo.id.to_string(), "admin", 60, solo.session_epoch)
             .unwrap();
         let request = |method: &str, user_id: uuid::Uuid, body: serde_json::Value| {
             axum::http::Request::builder()

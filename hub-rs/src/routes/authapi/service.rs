@@ -66,6 +66,9 @@ pub(crate) fn issue_token(state: &AuthState, user: &User) -> Result<String, ApiE
             &user.id.to_string(),
             user.role.as_str(),
             state.config.access_token_ttl_minutes,
+            // The session epoch travels with the token: bumping the user's
+            // epoch invalidates it (audit finding F-08).
+            user.session_epoch,
         )
         .map_err(|e| ApiError::internal(e.to_string()))
 }

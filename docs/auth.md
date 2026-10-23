@@ -91,6 +91,20 @@ available — you can never be locked out by this flag. The SPA reads
 - Challenges are server-generated, single-use, and expiring. The signature
   counter is persisted to detect cloned authenticators.
 
+## Session revocation
+
+Access tokens are JWTs (HS256) with a 60-minute lifetime. Because they are
+stateless, the hub re-reads the account on **every** request and compares:
+
+- `is_active` — a deactivated account is locked out immediately;
+- the **session epoch** — a per-user counter carried in the token
+  (`users.session_epoch`). A logout, a password change or an MFA reset bumps
+  it, which invalidates every token issued before that moment (immediately,
+  no denylist to store or purge).
+
+The trade-off is explicit: signing out of one device ends that account's
+sessions everywhere.
+
 ## Security properties
 
 - **TOTP secrets are encrypted at rest** with Fernet, keyed by a dedicated

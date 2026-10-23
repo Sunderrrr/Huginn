@@ -24,6 +24,12 @@ but need a specific misconfiguration or a second factor to exploit — plus
 **~30 medium/low hardening items**. All high and medium findings are
 **fixed in this branch with regression tests**.
 
+The two findings that were left open at first pass have been closed:
+**F-07** (the OIDC path bypassing the local second factor) is a deliberate
+design decision now (parity with the reference hub, SSO delegates MFA to the
+IdP), and **F-08** (no access-token revocation) is fixed with a per-user
+session epoch.
+
 The most consequential findings:
 
 | # | Sev | Component | Issue |
@@ -88,6 +94,7 @@ The most consequential findings:
 | — | hub fleet | empty MCP service token refused (fail-closed on both sides) |
 | — | hub enrollment | the token is the authority for the browser-engine install (a client can no longer force it) |
 | — | hub models | `password_hash` / `totp_secret_enc` are `skip_serializing` (the row model can no longer leak credentials into a response) |
+| F-08 | hub (auth) | **No access-token revocation**: a password change / MFA reset / logout left the already-issued JWTs valid for up to their 60-minute TTL | A per-user `session_epoch` counter (`users.session_epoch`) travels in the token; every request compares it with the stored value, so a logout, a password change or an MFA reset kills the tokens issued before — no denylist to store or purge. Bumped in the same statement as the password change / MFA disable; a legacy token without the claim counts as epoch 0 |
 | — | CI | Actions pinned to commit SHAs, `permissions: contents: read`, `persist-credentials: false`, `npm ci`, pinned zig version |
 | — | Docker | `.dockerignore` added (`COPY . .` was pulling `node_modules` + local `.env` into the image) |
 | — | prod config | placeholder secret detection made **case-insensitive** (`CHANGE_ME_…` slipped through) and the **database password** is now checked too |
@@ -104,7 +111,7 @@ Challenge-token bypass (scope rejected by all 3 principal implementations) · ro
 
 | Suite | Result |
 |---|---|
-| `hub-rs` cargo test | **407 passed**, 0 failed |
+| `hub-rs` cargo test | **410 passed**, 0 failed (3 new live session-revocation tests) |
 | `worker-rs` cargo test | **106 passed**, 0 failed (12 new regression tests) |
 | `mcp-rs` cargo test | **35 passed**, 0 failed |
 | `dashboard` vitest | **44 passed**, 0 failed |
@@ -119,15 +126,22 @@ Challenge-token bypass (scope rejected by all 3 principal implementations) · ro
 ## 7. Unfixed — with reasons
 
 1. **OIDC path bypasses local MFA** (F-07): the callback issues an access token without the second-factor decision. Fixing it requires a **coordinated hub + dashboard change** (the SPA does a full-page redirect on OIDC, which loses the React challenge state) and breaks the byte-parity contract with the reference hub. **Needs a maintainer decision.**
-2. **No access-token revocation** (F-08): a password change / MFA reset / logout does not invalidate issued JWTs (TTL 60 min). The fix needs a **SQL migration** (`users.session_epoch`) and a new JWT claim, which breaks the byte-compatible PyJWT payload contract. **Needs a maintainer decision**; mitigated by the short TTL.
-3. **npm dev-only advisories** (vitest 5, vite 8, typescript-eslint 8): breaking majors, not in the production bundle. Scheduled for a maintenance window.
-4. **F-10 (TOTP replay on disable/regenerate)**: no extra attacker capability; fixing it would change the parity behaviour. Documented.
+2. **npm dev-only advisories** (vitest 5, vite 8, typescript-eslint 8): breaking majors, not in the production bundle. Scheduled for a maintenance window.
+3. **F-10 (TOTP replay on disable/regenerate)**: no extra attacker capability; fixing it would change the parity behaviour. Documented.
 
 ## 8. Limitations
 
 - No DAST (OWASP ZAP) — no dedicated staging environment was available; the audit used live-PostgreSQL integration tests instead.
 - No fuzzing of the URL/step validators.
 - The OIDC/LDAP flows were validated by code review + unit tests against the pure logic (no live IdP or directory available).
+- The access-token payload now carries one extra claim (`epoch`, the session
+  generation). The **endpoint** parity gate is unaffected (the harness
+  normalizes JWTs to `<JWT>` — 29/29 verified), but the frozen
+  `creates_python_identical_tokens` vector no longer describes the minted
+  token byte-for-byte: the test now proves the *encoder* is still identical
+  to PyJWT for the reference claim set, and that the epoch claim is the
+  only difference. This is a deliberate divergence from the retired Python
+  hub.
 - The parity reference was reconstructed from git history (`git show 7766d50^:hub/…`) — reliable for the audited routes; `services/webauthn.py` and `core/audit.py` were not diffed line by line.
 
 ## 9. Residual risks (by design, documented)
