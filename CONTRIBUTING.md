@@ -88,6 +88,16 @@ A diff must be intentional and explained in the PR. See `hub-rs/PARITY_HUB.md`.
 5. Add tests, and update the parity goldens if the endpoint is part of the
    reference surface.
 
+### A database migration (hub-rs)
+
+1. Add a **new** numbered file under `hub-rs/migrations/` — never edit one that
+   has already been applied. sqlx stores a checksum of every applied migration
+   and **refuses to start** the hub when a file changed afterwards
+   (`migration N was previously applied but has been modified`). A comment-only
+   edit is still a checksum change.
+2. Keep the SQL idempotent where it can be (`IF NOT EXISTS`), so a repaired
+   environment can re-apply it.
+
 ### A worker action (worker-rs)
 
 1. Add the action to `worker-rs/src/whitelist.rs` as a **fixed argv vector** —
