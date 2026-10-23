@@ -130,6 +130,20 @@ impl Default for Config {
 }
 
 #[allow(dead_code)] // API surface: consumed by the router assembly/CORS layer
+/// Extract the password from a PostgreSQL connection URL
+/// (`postgresql://user:pass@host/db`), if any.
+fn database_password(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest.split('/').next()?;
+    let creds = authority.rsplit_once('@')?.0;
+    let (_, password) = creds.split_once(':')?;
+    if password.is_empty() {
+        None
+    } else {
+        Some(password.to_owned())
+    }
+}
+
 impl Config {
     /// Load from the process environment (`HUGINN_*`), starting from defaults.
     /// Boolean and numeric parsing mirrors pydantic's coercion loosely but
@@ -278,6 +292,23 @@ impl Config {
         (!self.oidc_enabled) || self.allow_password_login
     }
 
+    /// True when a secret still carries a shipped placeholder. The check is
+    /// case-insensitive and covers the `CHANGE_ME_…` spelling used by
+    /// `deploy/.env.prod.example` (the lowercase `change-me…` of
+    /// `.env.example` was the only marker recognised before, so a prod
+    /// deployment that copied the prod example verbatim slipped through the
+    /// placeholder check).
+    fn is_placeholder_secret(value: &str) -> bool {
+        let v = value.trim().to_lowercase();
+        v.starts_with("change-me")
+            || v.starts_with("change_me")
+            || v.starts_with("changeme")
+            || v.starts_with("replace-me")
+            || v.starts_with("replace_me")
+            || v.starts_with("your-")
+            || v.starts_with("your_")
+    }
+
     /// Fail closed if deployed to prod with placeholder/weak secrets.
     /// Mirrors Settings.validate_for_prod (raises RuntimeError in Python).
     pub fn validate_for_prod(&self) -> Result<(), String> {
@@ -290,11 +321,19 @@ impl Config {
             ("HUGINN_MCP_SERVICE_TOKEN", &self.mcp_service_token),
             ("HUGINN_MFA_ENCRYPTION_KEY", &self.mfa_encryption_key),
         ];
-        let weak: Vec<&str> = checks
+        let mut weak: Vec<&str> = checks
             .iter()
-            .filter(|(_, v)| v.starts_with("change-me") || v.len() < 32)
+            .filter(|(_, v)| Self::is_placeholder_secret(v) || v.len() < 32)
             .map(|(name, _)| *name)
             .collect();
+        // The database password lives inside the connection URL and is just as
+        // sensitive: refuse the shipped placeholders there too (no length
+        // rule — a short password can be legitimate for an internal DB).
+        if let Some(pw) = database_password(&self.database_url) {
+            if Self::is_placeholder_secret(&pw) {
+                weak.push("HUGINN_DATABASE_URL (password)");
+            }
+        }
         if !weak.is_empty() {
             let mut names: Vec<&str> = weak.clone();
             names.sort_unstable();
@@ -328,6 +367,50 @@ fn csv(value: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placeholder_detection_is_case_insensitive() {
+        assert!(Config::is_placeholder_secret(
+            "CHANGE_ME_openssl_rand_hex_32"
+        ));
+        assert!(Config::is_placeholder_secret("change-me-please"));
+        assert!(Config::is_placeholder_secret("ChangeMe"));
+        assert!(Config::is_placeholder_secret("replace_me_x"));
+        assert!(!Config::is_placeholder_secret(
+            "b09d3355e656680956f1ce0eb145eccb280b50e1a55d7b40c5a4f4d841314324"
+        ));
+    }
+
+    #[test]
+    fn database_password_is_read_from_the_connection_url() {
+        assert_eq!(
+            database_password("postgresql://huginn:s3cret@db:5432/huginn").as_deref(),
+            Some("s3cret")
+        );
+        assert_eq!(
+            database_password("postgres://u:p%40ss@db/h").as_deref(),
+            Some("p%40ss")
+        );
+        assert_eq!(database_password("postgresql://db:5432/huginn"), None);
+    }
+
+    #[test]
+    fn validate_for_prod_rejects_a_placeholder_database_password() {
+        let mut c = Config {
+            env: "prod".into(),
+            jwt_secret: "a".repeat(40),
+            secret_hash_key: "b".repeat(40),
+            mcp_service_token: "c".repeat(40),
+            mfa_encryption_key: "d".repeat(40),
+            database_url: "postgresql://huginn:CHANGE_ME_strong_db_password@db/huginn".into(),
+            ..Default::default()
+        };
+        let err = c.validate_for_prod().expect_err("must refuse");
+        assert!(err.contains("DATABASE_URL"), "{err}");
+        // A real (even short) password is fine.
+        c.database_url = "postgresql://huginn:x@db/huginn".into();
+        assert!(c.validate_for_prod().is_ok());
+    }
 
     #[test]
     fn validate_for_prod_rejects_placeholders_and_short_secrets() {
