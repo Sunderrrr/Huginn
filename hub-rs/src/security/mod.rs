@@ -38,8 +38,8 @@ pub use fernet::{
 pub use jwt::{
     create_access_token, create_access_token_at, create_mfa_challenge_token,
     create_mfa_challenge_token_at, decode_access_token, decode_access_token_at,
-    decode_mfa_challenge_token, decode_mfa_challenge_token_at, Jwt, TokenError, MFA_SCOPE,
-    MFA_SCOPES, MFA_SETUP_SCOPE,
+    decode_mfa_challenge_token, decode_mfa_challenge_token_at, session_epoch_of,
+    session_is_current, Jwt, TokenError, MFA_SCOPE, MFA_SCOPES, MFA_SETUP_SCOPE,
 };
 pub use password::{
     hash_password, hash_password_with, needs_rehash, verify_password, PasswordError,
