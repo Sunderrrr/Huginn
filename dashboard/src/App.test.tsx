@@ -86,4 +86,71 @@ describe("App routing", () => {
     expect(await screen.findByRole("button", { name: /authenticate/i })).toBeInTheDocument();
     expect(screen.queryByText(/continue with/i)).not.toBeInTheDocument();
   });
+
+  it("refuses the admin pages to a non-admin user", async () => {
+    setToken("tok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/auth/me")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: "u1",
+                username: "bob",
+                email: null,
+                role: "readonly",
+                is_active: true,
+                vm_ids: [],
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(new Response("", { status: 401 }));
+      }),
+    );
+    renderAt("/users");
+    expect(await screen.findByText(/requires the admin role/i)).toBeInTheDocument();
+    // The admin user list must not be requested at all.
+    expect(
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some((c) =>
+        String(c[0]).includes("/api/users"),
+      ),
+    ).toBe(false);
+  });
+
+  it("shows the admin pages to an admin user", async () => {
+    setToken("tok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/auth/me")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: "u1",
+                username: "root",
+                email: null,
+                role: "admin",
+                is_active: true,
+                vm_ids: [],
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if (url.includes("/api/users")) {
+          return Promise.resolve(
+            new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+        return Promise.resolve(new Response("", { status: 401 }));
+      }),
+    );
+    renderAt("/users");
+    expect(await screen.findByRole("heading", { name: /users/i })).toBeInTheDocument();
+  });
 });

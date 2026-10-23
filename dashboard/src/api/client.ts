@@ -12,7 +12,34 @@ const HUB_URL: string =
 
 const TOKEN_KEY = "huginn.token";
 
-let token: string | null = localStorage.getItem(TOKEN_KEY);
+// The bearer token lives in module state and is mirrored in `sessionStorage`:
+// tab-scoped and dropped when the tab closes, so a reload keeps the session
+// without leaving a long-lived credential on the machine.
+//
+// `localStorage` is deliberately NOT used: it is shared by every tab of the
+// origin and survives the browser session, so any script injected in the
+// origin (or a later local attacker) could reuse the token long after the
+// user closed the browser. The remaining exposure — script access to the
+// token — can only be removed by the hub issuing an httpOnly, SameSite
+// cookie session instead of a bearer token.
+function readStoredToken(): string | null {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null; // storage disabled (private mode, blocked cookies)
+  }
+}
+
+function writeStoredToken(value: string | null): void {
+  try {
+    if (value) sessionStorage.setItem(TOKEN_KEY, value);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore — the in-memory token still works for this tab */
+  }
+}
+
+let token: string | null = readStoredToken();
 
 // Complete an OIDC login: the hub redirects back with #access_token=… in the
 // fragment. Capture it, persist it, and strip it from the URL.
@@ -22,15 +49,14 @@ let token: string | null = localStorage.getItem(TOKEN_KEY);
   const fromHash = params.get("access_token");
   if (fromHash) {
     token = fromHash;
-    localStorage.setItem(TOKEN_KEY, fromHash);
+    writeStoredToken(fromHash);
     history.replaceState(null, "", window.location.pathname + window.location.search);
   }
 })();
 
 export function setToken(value: string | null): void {
   token = value;
-  if (value) localStorage.setItem(TOKEN_KEY, value);
-  else localStorage.removeItem(TOKEN_KEY);
+  writeStoredToken(value);
 }
 
 export function getToken(): string | null {

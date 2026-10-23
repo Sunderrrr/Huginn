@@ -52,19 +52,23 @@ function Telemetry() {
   );
 }
 
-const NAV = [
+// Minimum role per entry, mirroring the hub's authorization (the hub is the
+// enforcement point — this only keeps the menu consistent with it).
+const NAV: { to: string; label: string; min?: "operator" | "admin" }[] = [
   { to: "/", label: "Home" },
   { to: "/fleet", label: "Fleet" },
   { to: "/access-tokens", label: "MCP Tokens" },
-  { to: "/schedules", label: "Schedules", admin: true },
-  { to: "/tags", label: "Tags", admin: true },
-  { to: "/commands", label: "Commands", admin: true },
-  { to: "/audit", label: "Logs" },
-  { to: "/users", label: "Users", admin: true },
-  { to: "/backups", label: "Backups", admin: true },
+  { to: "/schedules", label: "Schedules", min: "admin" },
+  { to: "/tags", label: "Tags", min: "admin" },
+  { to: "/commands", label: "Commands", min: "admin" },
+  { to: "/audit", label: "Logs", min: "operator" },
+  { to: "/users", label: "Users", min: "admin" },
+  { to: "/backups", label: "Backups", min: "admin" },
   { to: "/account", label: "Account" },
   { to: "/settings", label: "Settings" },
 ];
+
+const ROLE_RANK: Record<string, number> = { readonly: 0, operator: 1, admin: 2 };
 
 function roleColor(role: string | undefined): string {
   switch (role) {
@@ -221,7 +225,7 @@ function ThemeToggle() {
 
 export function Layout() {
   const { user, logout } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const rank = ROLE_RANK[user?.role ?? "readonly"] ?? 0;
   useLiveEvents(); // refresh caches live from the hub's SSE stream
 
   return (
@@ -260,7 +264,7 @@ export function Layout() {
 
         <nav style={{ maxWidth: 1280, margin: "0 auto", padding: "0 24px" }}>
           <div className="row" style={{ gap: 4 }}>
-            {NAV.filter((n) => !n.admin || isAdmin).map((n) => (
+            {NAV.filter((n) => !n.min || rank >= ROLE_RANK[n.min]).map((n) => (
               <NavLink
                 key={n.to}
                 to={n.to}
