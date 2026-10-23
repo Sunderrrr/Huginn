@@ -125,6 +125,23 @@ pub(crate) fn decide_second_factor(
     LoginOutcome::IssueToken
 }
 
+/// Whether the configured LDAP transport is encrypted.
+///
+/// The bind-search-bind flow sends the service-account bind password **and**
+/// the end user's password to the directory. Over a plain `ldap://` socket
+/// both travel in clear text, so the LDAP fallback is refused in that case:
+/// use `ldaps://` (or enable StartTLS) instead.
+fn ldap_transport_is_encrypted(config: &LdapConfig) -> bool {
+    if config.use_ldaps || config.start_tls {
+        return true;
+    }
+    config
+        .server_url
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("ldaps://")
+}
+
 /// `POST /login` answers with either shape (Python returns `TokenResponse |
 /// LoginChallengeResponse`).
 #[derive(Debug, Clone, Serialize)]
@@ -146,9 +163,15 @@ async fn login(
 
     let ip =
         client_ip(&headers, &state.config, peer_addr(peer)).unwrap_or_else(|| "unknown".into());
-    // Block only when too many *failed* attempts have accumulated for this IP,
-    // so legitimate logins are never throttled but brute force is.
-    if !state.login_limiter.check(&format!("login:{ip}")) {
+    // Two independent windows guard the password check:
+    //  * per IP — the fast path against a single noisy source;
+    //  * per account — the backstop against a distributed guess run (many
+    //    source addresses, one account). Both only count *failed* attempts,
+    //    so a legitimate login is never throttled, and the account window
+    //    counts unknown accounts too (no user-enumeration oracle).
+    let ip_key = format!("login:{ip}");
+    let account_key = format!("login-account:{}", body.username);
+    if !state.login_limiter.check(&ip_key) || !state.login_account_limiter.check(&account_key) {
         return Err(ApiError::too_many_requests(
             "too many failed login attempts; slow down",
         ));
@@ -172,9 +195,20 @@ async fn login(
     let mut user = authenticate(&state, &body.username, &body.password).await?;
     let ldap_enabled = row.is_some_and(|r| r.ldap_enabled);
     if ldap::ldap_fallback_needed(user.is_some(), ldap_enabled) {
-        let client = LdapClient::new(LdapConfig::from_setting(
-            row.expect("ldap_enabled implies a row"),
-        ));
+        let ldap_config = LdapConfig::from_setting(row.expect("ldap_enabled implies a row"));
+        // A plain `ldap://` connection would put the service-account bind
+        // password AND the user's password on the wire in clear text. Refuse
+        // the fallback instead of authenticating over an unencrypted channel.
+        if !ldap_transport_is_encrypted(&ldap_config) {
+            tracing::error!(
+                "LDAP fallback refused: the configured transport is not encrypted \
+                 (use ldaps:// or enable StartTLS)"
+            );
+            return Err(ApiError::internal(
+                "LDAP transport is not encrypted; refusing to authenticate",
+            ));
+        }
+        let client = LdapClient::new(ldap_config);
         let (username, password) = (body.username.clone(), body.password.clone());
         // ldap3 is blocking — run it on a blocking thread (Python's
         // `run_in_threadpool(client.authenticate, ...)`).
@@ -202,8 +236,9 @@ async fn login(
         }
     }
     let Some(user) = user else {
-        // Count this failed attempt.
-        state.login_limiter.allow(&format!("login:{ip}"));
+        // Count this failed attempt (per IP and per account).
+        state.login_limiter.allow(&ip_key);
+        state.login_account_limiter.allow(&account_key);
         record_audit(
             &state,
             AuditNew::new(ActorType::System, body.username.clone(), "login_failed"),
@@ -580,6 +615,91 @@ mod tests {
             body_json(response).await,
             json!({"detail": "too many failed login attempts; slow down"})
         );
+    }
+
+    /// The per-ACCOUNT window: a password-guess run spread over many source
+    /// addresses is throttled as soon as one account accumulates too many
+    /// failures, even though every individual address stays under the
+    /// per-IP budget.
+    #[tokio::test]
+    async fn login_throttles_per_account_across_source_addresses() {
+        let mut state = test_state();
+        state.config.trust_forwarded_for = true;
+        // The account window is already spent for "victim" — but no address
+        // has spent the per-IP budget.
+        for _ in 0..crate::routes::authapi::LOGIN_ACCOUNT_MAX_FAILURES {
+            assert!(state.login_account_limiter.allow("login-account:victim"));
+        }
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "203.0.113.99")
+            .body(Body::from(
+                json!({"username": "victim", "password": "b"}).to_string(),
+            ))
+            .unwrap();
+        let response = crate::routes::authapi::router(state)
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            body_json(response).await,
+            json!({"detail": "too many failed login attempts; slow down"})
+        );
+    }
+
+    /// The LDAP fallback must never authenticate over a cleartext channel:
+    /// the bind password and the user's password would both travel in the
+    /// clear.
+    #[test]
+    fn ldap_fallback_requires_an_encrypted_transport() {
+        let plain = LdapConfig {
+            enabled: true,
+            server_url: "ldap://dir.example.com:389".into(),
+            ..ldap_config_stub()
+        };
+        assert!(!ldap_transport_is_encrypted(&plain));
+
+        // LDAPS (either via the flag or the scheme) is encrypted.
+        let ldaps = LdapConfig {
+            use_ldaps: true,
+            ..plain.clone()
+        };
+        assert!(ldap_transport_is_encrypted(&ldaps));
+        let ldaps_scheme = LdapConfig {
+            server_url: "ldaps://dir.example.com:636".into(),
+            ..plain.clone()
+        };
+        assert!(ldap_transport_is_encrypted(&ldaps_scheme));
+
+        // StartTLS upgrades a plain connection — encrypted.
+        let starttls = LdapConfig {
+            start_tls: true,
+            ..plain.clone()
+        };
+        assert!(ldap_transport_is_encrypted(&starttls));
+
+        // A scheme-less URL is refused too (fail closed).
+        let schemeless = LdapConfig {
+            server_url: "dir.example.com:389".into(),
+            ..plain
+        };
+        assert!(!ldap_transport_is_encrypted(&schemeless));
+    }
+
+    fn ldap_config_stub() -> LdapConfig {
+        LdapConfig {
+            enabled: false,
+            server_url: String::new(),
+            bind_dn: String::new(),
+            bind_password: String::new(),
+            user_search_base: String::new(),
+            user_search_filter: String::new(),
+            start_tls: false,
+            use_ldaps: false,
+        }
     }
 
     #[tokio::test]
