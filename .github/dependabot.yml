@@ -1,0 +1,48 @@
+# Dependabot configuration.
+#
+# The default (no file) behaviour groups *every* npm dependency of a
+# directory into one PR, which produced a PR bumping vite + vitest to their
+# next majors — a bump that cannot be installed: `@vitejs/plugin-react@4`
+# declares a peer range of `vite ^4 || ^5 || ^6 || ^7`, so `npm ci` fails with
+# a peer conflict and the CI rejects the PR. Those dev-tool majors are a
+# deliberate maintenance-window decision (see SECURITY_AUDIT.md §7), not an
+# oversight, so they are ignored here instead of producing a red PR every
+# week.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+    # Production and development dependencies move separately: a safe runtime
+    # bump (react-query, framer-motion…) must not be held back by the dev
+    # toolchain, and the toolchain must not drag the runtime deps along.
+    groups:
+      production-dependencies:
+        dependency-type: production
+        patterns:
+          - "*"
+      development-dependencies:
+        dependency-type: development
+        patterns:
+          - "*"
+    ignore:
+      # vite 8 requires @vitejs/plugin-react 5, which is not part of our
+      # toolchain yet; vitest follows vite's major. Both are dev-only (not in
+      # the production bundle) and are upgraded together in a maintenance
+      # window. Remove these two entries when the React plugin supports the
+      # new vite.
+      - dependency-name: vite
+        dependency-type: development
+        update-types:
+          - version-update:semver-major
+      - dependency-name: vitest
+        dependency-type: development
+        update-types:
+          - version-update:semver-major
