@@ -66,9 +66,12 @@ pub(super) async fn heartbeat(
 ) -> Result<impl IntoResponse, ApiError> {
     enforce_tls(&headers, &uri, &state.config)?;
     enforce_body_size(&headers, state.config.max_body_bytes)?;
+    // Authenticate BEFORE parsing the payload: an unauthenticated caller
+    // must get 401/403 whatever it sends, never a 400 that tells it the
+    // endpoint is alive and which part of its body was wrong.
+    let vm = current_worker(&state, &headers).await?;
     let body = body.map_err(map_json_rejection)?.0;
     body.validate()?;
-    let vm = current_worker(&state, &headers).await?;
 
     // Recover from OFFLINE on a fresh heartbeat.
     let recovered = vm.state == VMState::Offline;
