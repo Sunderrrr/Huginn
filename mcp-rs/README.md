@@ -40,6 +40,14 @@ mcp-rs/
 docstrings live in `tools.rs::tool_definitions()`. Usage rules ship as connection
 `instructions` so compliant clients surface them to the model.
 
+**Every tool that creates a task waits for it and returns the result** — the
+task's stdout/stderr come back inline, so the agent does not have to poll.
+`wait=false` returns the task handle instead, for the long ones (a ~70 MB
+engine install): then call `wait_for_task(task_id)` once. The wait uses the
+hub's `GET /api/tasks/{id}/wait` endpoint (the hub holds it server-side),
+bounded by the task's own timeout and by a 90 s ceiling that keeps the
+response under the 100 s limit a CDN in front of the MCP imposes.
+
 ## Transports
 
 | Transport | Env | Notes |

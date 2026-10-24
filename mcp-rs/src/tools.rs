@@ -396,11 +396,20 @@ async fn run_browser_steps(
     vm: &str,
     steps: Value,
     timeout: u64,
+    wait: bool,
 ) -> Value {
     match resolve_vm(hub, ctx, vm).await {
         Err(e) => e,
         Ok(id) => match hub.execute_browser(ctx, &id, steps, timeout).await {
-            Ok(v) => v,
+            Ok(v) => {
+                if wait {
+                    // The task's own timeout bounds the wait, and the global
+                    // budget keeps the response under the CDN's ceiling.
+                    finish_task(hub, ctx, v, timeout.min(TASK_WAIT_BUDGET_SECONDS)).await
+                } else {
+                    v
+                }
+            }
             Err(e) => from_hub_error(e),
         },
     }
@@ -412,6 +421,45 @@ fn brief_action(a: &Value) -> Value {
         "description": a.get("description"),
         "commands": a.get("commands"),
     })
+}
+
+/// How long a tool call waits for the task it just created before handing the
+/// handle back. The MCP usually sits behind a CDN that cuts a proxied
+/// request after 100 s, so the automatic wait stays below that: a slower
+/// task returns its handle and the agent polls it with `wait_for_task`.
+const TASK_WAIT_BUDGET_SECONDS: u64 = 90;
+
+/// Whether a task is still running (anything else is terminal).
+fn task_is_pending(task: &Value) -> bool {
+    matches!(
+        task.get("status").and_then(Value::as_str),
+        Some("pending") | Some("queued") | Some("running")
+    )
+}
+
+/// Wait for a task to reach a terminal state and return it — so a tool call
+/// hands the model the RESULT instead of a handle it has to poll. The hub
+/// holds the wait server-side (`GET /api/tasks/{id}/wait`), which is the
+/// same mechanism `wait_for_task` uses; on a transport error (or when the
+/// budget expires) the last known state is returned, and the agent can still
+/// call `wait_for_task`.
+async fn finish_task(hub: &HubClient, ctx: &CallCtx, task: Value, budget: u64) -> Value {
+    let Some(id) = task.get("id").and_then(Value::as_str) else {
+        return task; // not a task (an error object) — nothing to wait for
+    };
+    if !task_is_pending(&task) {
+        return task; // already terminal
+    }
+    match hub.wait_task(ctx, id, budget).await {
+        Ok(finished) => finished,
+        Err(_) => task,
+    }
+}
+
+/// Whether the caller asked to wait for the result (`wait` defaults to true:
+/// a tool that creates a task should hand back the result when it can).
+fn wants_wait(args: &HashMap<String, Value>) -> bool {
+    args.get("wait").and_then(Value::as_bool).unwrap_or(true)
 }
 
 /// Dispatches one tool call and returns its JSON result value.
@@ -537,7 +585,7 @@ pub async fn call_tool(
                     format!("action must be 1-{MAX_ACTION_NAME} characters"),
                 );
             }
-            let wait = args.get("wait").and_then(Value::as_bool).unwrap_or(false);
+            let wait = wants_wait(args);
             let raw_params = args.get("params").and_then(Value::as_object);
             if let Some(p) = raw_params {
                 if p.len() > MAX_ACTION_PARAMS {
@@ -572,8 +620,14 @@ pub async fn call_tool(
                 .unwrap_or_default();
             match resolve_vm(&hub, ctx, vm).await {
                 Err(e) => e,
-                Ok(id) => match hub.execute_action(ctx, &id, action, &params, wait).await {
-                    Ok(v) => v,
+                Ok(id) => match hub.execute_action(ctx, &id, action, &params).await {
+                    Ok(v) => {
+                        if wait {
+                            finish_task(&hub, ctx, v, TASK_WAIT_BUDGET_SECONDS).await
+                        } else {
+                            v
+                        }
+                    }
                     Err(e) => from_hub_error(e),
                 },
             }
@@ -594,11 +648,17 @@ pub async fn call_tool(
                     format!("command exceeds {} KiB", MAX_COMMAND_BYTES / 1024),
                 );
             }
-            let wait = args.get("wait").and_then(Value::as_bool).unwrap_or(false);
+            let wait = wants_wait(args);
             match resolve_vm(&hub, ctx, vm).await {
                 Err(e) => e,
-                Ok(id) => match hub.execute_command(ctx, &id, command, wait).await {
-                    Ok(v) => v,
+                Ok(id) => match hub.execute_command(ctx, &id, command).await {
+                    Ok(v) => {
+                        if wait {
+                            finish_task(&hub, ctx, v, TASK_WAIT_BUDGET_SECONDS).await
+                        } else {
+                            v
+                        }
+                    }
                     Err(e) => from_hub_error(e),
                 },
             }
@@ -621,7 +681,16 @@ pub async fn call_tool(
             match resolve_vm(&hub, ctx, vm).await {
                 Err(e) => e,
                 Ok(id) => match hub.install_browser_engine(ctx, &id).await {
-                    Ok(v) => v,
+                    Ok(v) => {
+                        // The install downloads ~70 MB: it usually finishes
+                        // inside the wait budget, and when it does not the
+                        // handle is returned and the agent polls.
+                        if wants_wait(args) {
+                            finish_task(&hub, ctx, v, TASK_WAIT_BUDGET_SECONDS).await
+                        } else {
+                            v
+                        }
+                    }
                     Err(e) => from_hub_error(e),
                 },
             }
@@ -640,7 +709,7 @@ pub async fn call_tool(
                 Ok(t) => t,
                 Err(e) => return e,
             };
-            run_browser_steps(&hub, ctx, vm, steps.clone(), timeout).await
+            run_browser_steps(&hub, ctx, vm, steps.clone(), timeout, wants_wait(args)).await
         }
         "browser_navigate" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
@@ -661,7 +730,7 @@ pub async fn call_tool(
             };
             // Shortcut: one navigate step, then read the page text.
             let steps = json!([{"action": "navigate", "url": url}, {"action": "get_text"}]);
-            run_browser_steps(&hub, ctx, vm, steps, timeout).await
+            run_browser_steps(&hub, ctx, vm, steps, timeout, wants_wait(args)).await
         }
         "browser_screenshot" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
@@ -692,7 +761,7 @@ pub async fn call_tool(
                 {"action": "navigate", "url": url},
                 {"action": "screenshot", "format": "jpeg", "quality": quality},
             ]);
-            run_browser_steps(&hub, ctx, vm, steps, timeout).await
+            run_browser_steps(&hub, ctx, vm, steps, timeout, wants_wait(args)).await
         }
         "browser_eval" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
@@ -722,7 +791,7 @@ pub async fn call_tool(
             };
             // Shortcut: navigate, then evaluate the JavaScript.
             let steps = json!([{"action": "navigate", "url": url}, {"action": "eval", "js": js}]);
-            run_browser_steps(&hub, ctx, vm, steps, timeout).await
+            run_browser_steps(&hub, ctx, vm, steps, timeout, wants_wait(args)).await
         }
         "browser_pdf" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
@@ -748,7 +817,7 @@ pub async fn call_tool(
                 {"action": "navigate", "url": url},
                 {"action": "pdf", "landscape": false, "print_background": true}
             ]);
-            run_browser_steps(&hub, ctx, vm, steps, timeout).await
+            run_browser_steps(&hub, ctx, vm, steps, timeout, wants_wait(args)).await
         }
         "trigger_update" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
@@ -851,27 +920,27 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "execute_action",
-            "description": "Run an action on a VM (``vm_id`` may be a VM id or its name).\n\nBuilt-in actions: status, metrics, restart_service (param: service),\nlist_upgradable_packages, apt_upgrade, update_worker. Admin-defined custom\ncommands (see ``list_actions``) run the same way by name. With ``wait=true``\nthe call blocks briefly and returns the result inline (prefer this for short\nactions). Otherwise it returns a task — then call wait_for_task(task_id) once;\ndo NOT poll get_task in a loop.",
+            "description": "Run an action on a VM (``vm_id`` may be a VM id or its name).\n\nBuilt-in actions: status, metrics, restart_service (param: service),\nlist_upgradable_packages, apt_upgrade, update_worker. Admin-defined custom\ncommands (see ``list_actions``) run the same way by name. The call waits for\nthe action to finish and returns the result inline (default). With\n``wait=false`` it returns the task handle — then call wait_for_task(task_id)\nonce; do NOT poll get_task in a loop.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "vm_id": {"type": "string"},
                     "action": {"type": "string"},
                     "params": {"type": "object", "additionalProperties": {"type": "string"}},
-                    "wait": {"type": "boolean"}
+                    "wait": {"type": "boolean", "default": true, "description": "wait for the result (default) or return the task handle"}
                 },
                 "required": ["vm_id", "action"]
             }
         },
         {
             "name": "execute_command",
-            "description": "Run a free-form shell command on a VM (``vm_id`` may be a VM id or its name).\n\nOnly permitted when the VM is in 'unrestricted' mode (enabled by an admin in\nthe dashboard). Subject to the same auth, rate-limit, and audit rules as the\ndashboard. With ``wait=true`` the result is returned inline; otherwise call\nwait_for_task(task_id) once — do NOT poll get_task in a loop.",
+            "description": "Run a free-form shell command on a VM (``vm_id`` may be a VM id or its name).\n\nOnly permitted when the VM is in 'unrestricted' mode (enabled by an admin in\nthe dashboard). Subject to the same auth, rate-limit, and audit rules as the\ndashboard. The call waits for the command to finish and returns the\nresult inline (default); with ``wait=false`` it returns the task handle —\nthen call wait_for_task(task_id) once — do NOT poll get_task in a loop.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "vm_id": {"type": "string"},
                     "command": {"type": "string"},
-                    "wait": {"type": "boolean"}
+                    "wait": {"type": "boolean", "default": true, "description": "wait for the result (default) or return the task handle"}
                 },
                 "required": ["vm_id", "command"]
             }
@@ -920,11 +989,12 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "browser_install",
-            "description": "Install the pinned Obscura headless-browser engine on a VM's worker\n(admin only; Linux VMs only). Downloads the hub-pinned release\n(~70 MB) from GitHub, verifies its SHA-256, installs it under the\nHuginn-managed directory with its Apache-2.0 license, and smoke-tests\n``obscura --version``. Run this once before browser_start and friends —\nand make sure the VM's browser capability is enabled by an admin\n(dashboard), else browser tasks answer 403 \"browser automation is\ndisabled\".\n\nReturns the created task; poll it with get_task for the install result.",
+            "description": "Install the pinned Obscura headless-browser engine on a VM's worker\n(admin only; Linux VMs only). Downloads the hub-pinned release\n(~70 MB) from GitHub, verifies its SHA-256, installs it under the\nHuginn-managed directory with its Apache-2.0 license, and smoke-tests\n``obscura --version``. Run this once before browser_start and friends —\nand make sure the VM's browser capability is enabled by an admin\n(dashboard), else browser tasks answer 403 \"browser automation is\ndisabled\".\n\nThe call waits for the install to finish (default) and returns the result;\nwith ``wait=false`` it returns the task handle right away (poll it with\nwait_for_task).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "vm_id": {"type": "string", "description": "VM id or name"}
+                    "vm_id": {"type": "string", "description": "VM id or name"},
+                    "wait": {"type": "boolean", "default": true, "description": "wait for the install to finish (default)"}
                 },
                 "required": ["vm_id"]
             }
@@ -939,7 +1009,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "browser_start",
-            "description": "Open a headless browser on a VM and execute a sequence of steps in one tab\n(``vm_id`` may be a VM id or its name; Linux VMs only — the browser capability\nmust be enabled on the VM by an admin, and the engine installed with\nbrowser_install).\n\nSteps run in order: navigate{url}, click{selector}, type{selector,text},\npress_key{key}, hover{selector}, scroll{selector|to}, eval{js},\nset_viewport{width,height}, screenshot{format,quality,full_page},\npdf{landscape,print_background,paper_width,paper_height}, get_text, get_html,\ntitle, wait_for{selector,timeout_ms}, wait_for_text{text,timeout_ms},\nget_cookies, set_cookies{cookies:[{name,value,url}]}. Example:\n\n    steps=[{\"action\":\"navigate\",\"url\":\"https://example.com\"},\n           {\"action\":\"type\",\"selector\":\"#q\",\"text\":\"rust\"},\n           {\"action\":\"click\",\"selector\":\"#go\"},\n           {\"action\":\"get_text\"}]\n\nReturns the task with the step results inline — page text/HTML, eval results,\nand captures (screenshots, PDF) as base64 data: tags in stdout.\nNote: set_cookies fills Obscura's request cookie jar (carried by subsequent\nnavigations), not the page's document.cookie.",
+            "description": "Open a headless browser on a VM and execute a sequence of steps in one tab\n(``vm_id`` may be a VM id or its name; Linux VMs only — the browser capability\nmust be enabled on the VM by an admin, and the engine installed with\nbrowser_install).\n\nSteps run in order: navigate{url}, click{selector}, type{selector,text},\npress_key{key}, hover{selector}, scroll{selector|to}, eval{js},\nset_viewport{width,height}, screenshot{format,quality,full_page},\npdf{landscape,print_background,paper_width,paper_height}, get_text, get_html,\ntitle, wait_for{selector,timeout_ms}, wait_for_text{text,timeout_ms},\nget_cookies, set_cookies{cookies:[{name,value,url}]}. Example:\n\n    steps=[{\"action\":\"navigate\",\"url\":\"https://example.com\"},\n           {\"action\":\"type\",\"selector\":\"#q\",\"text\":\"rust\"},\n           {\"action\":\"click\",\"selector\":\"#go\"},\n           {\"action\":\"get_text\"}]\n\nReturns the task with the step results inline — page text/HTML, eval results,\nand captures (screenshots, PDF) as base64 data: tags in stdout.\nNote: set_cookies fills Obscura's request cookie jar (carried by subsequent\nnavigations), not the page's document.cookie.\n\nThe call WAITS for the steps to finish (default) and returns the finished\nresult. With ``wait=false`` it returns the task handle immediately — use it\nfor a long sequence, then call wait_for_task(task_id) once.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -949,7 +1019,8 @@ pub fn tool_definitions() -> Value {
                         "items": {"type": "object"},
                         "description": "1-50 steps, e.g. {\"action\":\"navigate\",\"url\":\"https://example.com\"}"
                     },
-                    "timeout": {"type": "integer", "default": 120, "description": "seconds (1-300)"}
+                    "timeout": {"type": "integer", "default": 120, "description": "seconds (1-300)"},
+                    "wait": {"type": "boolean", "default": true, "description": "wait for the result (default) or return the task handle"}
                 },
                 "required": ["vm_id", "steps"]
             }
@@ -1738,20 +1809,159 @@ mod tests {
 
         let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
         let ctx = CallCtx::default();
+        // wait=false: the handle is returned straight away.
         let out = call_tool(
             hub,
             &ctx,
             "browser_install",
-            &tool_args(&[("vm_id", json!("web-01"))]),
+            &tool_args(&[("vm_id", json!("web-01")), ("wait", json!(false))]),
         )
         .await;
         assert_eq!(out["type"], "browser_install");
         assert_eq!(out["status"], "pending");
+        // The wait endpoint was NOT called.
+        let requests = server.received_requests().await.unwrap_or_default();
+        assert!(
+            !requests.iter().any(|r| r.url.path().contains("/wait")),
+            "wait=false must not wait"
+        );
 
         // No vm_id → 400 before any hub call.
         let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
         let out = call_tool(hub, &ctx, "browser_install", &HashMap::new()).await;
         assert_eq!(out["error"]["status"], 400);
+    }
+
+    /// The point of the change: a tool that creates a task waits for it and
+    /// hands back the RESULT, instead of a handle the agent has to poll.
+    #[tokio::test]
+    async fn a_tool_waits_for_its_task_and_returns_the_result() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/vms"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([vm(
+                    "11111111-1111-1111-1111-111111111111",
+                    "web-01",
+                    "active"
+                )])),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/11111111-1111-1111-1111-111111111111/browser",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "id": "t42",
+                    "type": "browser",
+                    "status": "pending"
+                })),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/tasks/t42/wait"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "t42",
+                    "type": "browser",
+                    "status": "succeeded",
+                    "exit_code": 0,
+                    "stdout": "step 1 (navigate): https://example.com"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_start",
+            &tool_args(&[
+                ("vm_id", json!("web-01")),
+                (
+                    "steps",
+                    json!([{"action": "navigate", "url": "https://example.com"}]),
+                ),
+            ]),
+        )
+        .await;
+        assert_eq!(out["status"], "succeeded", "the finished task is returned");
+        assert!(String::from(out["stdout"].as_str().unwrap()).contains("navigate"));
+    }
+
+    /// Same, for the action/command family (the wait flag now defaults to
+    /// true there too).
+    #[tokio::test]
+    async fn execute_action_waits_by_default_and_returns_the_result() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/vms"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([vm(
+                    "11111111-1111-1111-1111-111111111111",
+                    "web-01",
+                    "active"
+                )])),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/api/vms/11111111-1111-1111-1111-111111111111/actions",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "id": "t7",
+                    "type": "action",
+                    "status": "pending"
+                })),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/tasks/t7/wait"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "t7",
+                    "type": "action",
+                    "status": "succeeded",
+                    "exit_code": 0,
+                    "stdout": "worker v1.7.2"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        let out = call_tool(
+            hub,
+            &ctx,
+            "execute_action",
+            &tool_args(&[("vm_id", json!("web-01")), ("action", json!("status"))]),
+        )
+        .await;
+        assert_eq!(out["status"], "succeeded");
+        assert_eq!(out["stdout"], "worker v1.7.2");
+        // The hub-side wait flag is NOT used any more: the MCP creates the
+        // task and waits on it itself (the hub's 30 s window would collide
+        // with the MCP's own request timeout).
+        let requests = server.received_requests().await.unwrap_or_default();
+        let creates: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path().ends_with("/actions"))
+            .collect();
+        assert_eq!(creates.len(), 1);
+        let body = String::from_utf8_lossy(&creates[0].body).to_string();
+        assert!(
+            !body.contains("\"wait\""),
+            "the create call must not ask for the hub-side wait"
+        );
     }
 
     #[tokio::test]

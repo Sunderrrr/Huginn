@@ -85,9 +85,11 @@ impl HubClient {
         vm_id: &str,
         action: &str,
         params: &HashMap<String, String>,
-        wait: bool,
     ) -> Result<Value, HubError> {
-        let body = serde_json::json!({"action": action, "params": params, "wait": wait});
+        // The task is created without the hub-side wait (that would hold this
+        // request for the hub's 30 s window, which is exactly the client's
+        // own timeout); the MCP waits on the task itself — see `wait_task`.
+        let body = serde_json::json!({"action": action, "params": params});
         self.post(ctx, &format!("/api/vms/{vm_id}/actions"), &body)
             .await
     }
@@ -97,19 +99,16 @@ impl HubClient {
         ctx: &CallCtx,
         vm_id: &str,
         command: &str,
-        wait: bool,
     ) -> Result<Value, HubError> {
-        let body = serde_json::json!({"command": command, "wait": wait});
+        let body = serde_json::json!({"command": command});
         self.post(ctx, &format!("/api/vms/{vm_id}/commands"), &body)
             .await
     }
 
     /// `POST /api/vms/{vm_id}/browser` — run a headless-browser step sequence
-    /// (task type `browser`). The hub holds the request until the worker
-    /// finishes the steps — up to `timeout` seconds — and returns the task
-    /// with its results inline (page text/HTML, eval results, screenshot
-    /// base64 in stdout), so the per-request budget must cover the whole run,
-    /// not the default 30s hub timeout.
+    /// (task type `browser`). The task is created and returned right away
+    /// (202); the MCP waits on it separately (see `wait_task`), so this
+    /// request never holds a connection open for the whole run.
     pub async fn execute_browser(
         &self,
         ctx: &CallCtx,
@@ -118,9 +117,7 @@ impl HubClient {
         timeout: u64,
     ) -> Result<Value, HubError> {
         let body = serde_json::json!({"steps": steps, "timeout": timeout});
-        // Like wait_task: cap the window defensively (the tools validate
-        // 1-300) and add slack for worker pickup, obscura startup, and
-        // result submission.
+        // Cap the window defensively (the tools validate 1-300).
         let budget = Duration::from_secs(timeout.min(300) + 30);
         let headers = ctx_headers(ctx);
         self.request_with_timeout(
