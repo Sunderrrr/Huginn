@@ -160,7 +160,7 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
             token,
             name,
             hostname: hostname.clone(),
-            ip_address: String::new(),
+            ip_address: crate::hubclient::outbound_ip(&hub_url).unwrap_or_default(),
             arch: goarch().into(),
             os_info: Some(serde_json::json!({"os": os_name(), "arch": goarch()})),
             worker_version: config::VERSION.into(),
