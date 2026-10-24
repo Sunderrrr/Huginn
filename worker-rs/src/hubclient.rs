@@ -65,7 +65,18 @@ impl fmt::Display for Error {
         match self {
             Error::Policy(msg) => write!(f, "{msg}"),
             Error::Api(err) => write!(f, "{err}"),
-            Error::Http(err) => write!(f, "{err}"),
+            // The reqwest message alone ("error sending request for url")
+            // hides the cause (TLS, timeout, connection refused). The
+            // source chain carries it.
+            Error::Http(err) => {
+                write!(f, "{err}")?;
+                let mut source = std::error::Error::source(err);
+                while let Some(cause) = source {
+                    write!(f, ": {cause}")?;
+                    source = cause.source();
+                }
+                Ok(())
+            }
             Error::Encode(msg) => write!(f, "{msg}"),
             Error::Decode(msg) => write!(f, "{msg}"),
         }
