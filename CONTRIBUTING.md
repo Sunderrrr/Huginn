@@ -53,13 +53,25 @@ cd deploy && docker compose up --build
 
 ## Quality gates
 
-Every PR must be green on these, enforced in CI (`.github/workflows/ci-rust.yml`):
+Every PR must be green on these, enforced in CI:
 
 - `cargo fmt --check` — formatting is not optional.
-- `cargo clippy --release -- -D warnings` — **warnings are errors**.
+- `cargo clippy --release --all-targets -- -D warnings` — **warnings are
+  errors** (the test code is linted too).
 - `cargo test --release` — all tests pass.
 - Dependency audit (`rustsec/audit-check`) — no known vulnerabilities (see
   `audit.toml` for documented exceptions).
+- **Live-database suites** (`hub-rs`): the suites that need a real PostgreSQL
+  (RBAC, enrollment, session revocation, browser endpoints, audit chain) run
+  in CI against a service database — not only locally.
+- **Browser end-to-end** (`worker-rs`): the E2E test downloads the real
+  Obscura release, installs it, drives every step action against a local
+  fixture and checks the teardown. It needs network access to the release
+  CDN.
+- **Security gate** (`.github/workflows/security.yml`): gitleaks (full
+  history), dependency review on PRs, npm/cargo audits, and Trivy image +
+  IaC scans.
+- **Dashboard**: lint, vitest, type-check and build.
 
 ### Parity gate (hub-rs)
 
