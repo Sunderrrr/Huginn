@@ -59,13 +59,16 @@ pub(super) async fn submit_task_result(
     enforce_tls(&headers, &uri, &state.config)?;
     // The result body legitimately carries up to max_output_bytes per field;
     // only the global body cap (router layer) applies here.
-    let body = body.map_err(map_json_rejection)?.0;
-    body.validate()?;
-    // Path shape validation before auth (FastAPI validates params first).
+    // Authenticate BEFORE parsing the payload (same rule as the heartbeat):
+    // an unauthenticated caller always gets 401/403, never a 400 about its
+    // own body. The task-id shape stays before auth — it is a path parameter,
+    // validated like FastAPI validates path params first.
     let task_id: Uuid = task_id
         .parse()
         .map_err(|_| ApiError::unprocessable_entity("task id must be a valid UUID"))?;
     let vm = current_worker(&state, &headers).await?;
+    let body = body.map_err(map_json_rejection)?.0;
+    body.validate()?;
 
     let res = SubmitResult {
         task_id,

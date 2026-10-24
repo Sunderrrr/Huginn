@@ -107,6 +107,55 @@ pub const MAX_BROWSER_STEPS: usize = 50;
 pub const MAX_BROWSER_PAYLOAD_BYTES: usize = 64 * 1024;
 /// `navigate` URLs are capped and must be http(s)://.
 pub const MAX_BROWSER_URL_CHARS: usize = 2048;
+/// CSS selectors are capped.
+pub const MAX_BROWSER_SELECTOR_CHARS: usize = 512;
+/// The text typed by a `type` step is capped.
+pub const MAX_BROWSER_TEXT_BYTES: usize = 10 * 1024;
+/// The JavaScript of an `eval` step is capped.
+pub const MAX_BROWSER_JS_BYTES: usize = 64 * 1024;
+/// The text awaited by a `wait_for_text` step is capped.
+pub const MAX_BROWSER_WAIT_TEXT_CHARS: usize = 512;
+
+/// The step actions the hub accepts — the same 17 the worker can execute.
+/// A step naming anything else is refused at the API boundary (400) instead
+/// of being queued and failing on the worker.
+pub const BROWSER_ACTIONS: &[&str] = &[
+    "navigate",
+    "click",
+    "type",
+    "press_key",
+    "hover",
+    "scroll",
+    "eval",
+    "set_viewport",
+    "screenshot",
+    "pdf",
+    "get_text",
+    "get_html",
+    "title",
+    "wait_for",
+    "wait_for_text",
+    "get_cookies",
+    "set_cookies",
+];
+
+/// The named keys a `press_key` step accepts (a single ASCII graphic
+/// character is accepted too).
+pub const BROWSER_NAMED_KEYS: &[&str] = &[
+    "enter",
+    "tab",
+    "escape",
+    "backspace",
+    "delete",
+    "home",
+    "end",
+    "pageup",
+    "pagedown",
+    "arrowup",
+    "arrowdown",
+    "arrowleft",
+    "arrowright",
+];
 
 /// `http://` or `https://` followed by at least one printable-ASCII
 /// character, none of them whitespace/control — the scheme gate for
@@ -127,10 +176,16 @@ fn navigate_url_allowed(url: &str) -> bool {
 }
 
 /// Validate a browser `steps` array, returning the step count. Rules:
-/// non-empty array, ≤ [`MAX_BROWSER_STEPS`] steps, every step an object with a
-/// non-empty string `action`, and every `navigate` step an http(s) URL of at
-/// most [`MAX_BROWSER_URL_CHARS`] characters. Returns a human-readable
-/// reason on failure (rendered as the 400 detail by the route).
+/// non-empty array, ≤ [`MAX_BROWSER_STEPS`] steps, every step an object whose
+/// `action` is one of [`BROWSER_ACTIONS`], and every action's own required
+/// fields present and within their caps (a `navigate` step needs an http(s)
+/// URL of at most [`MAX_BROWSER_URL_CHARS`] characters, a `click`/`hover`/
+/// `wait_for` step a selector, a `type` step a selector and a text, an `eval`
+/// step some JavaScript, and so on). Returns a human-readable reason on
+/// failure (rendered as the 400 detail by the route).
+///
+/// This is the hub's canonical gate: a step the worker could not execute is
+/// refused here (400) instead of being queued and failing on the worker.
 pub fn validate_browser_steps(steps: &serde_json::Value) -> Result<usize, String> {
     let Some(items) = steps.as_array() else {
         return Err("steps must be a JSON array".into());
@@ -142,26 +197,164 @@ pub fn validate_browser_steps(steps: &serde_json::Value) -> Result<usize, String
         return Err(format!("steps must have at most {MAX_BROWSER_STEPS} items"));
     }
     for (i, step) in items.iter().enumerate() {
+        let n = i + 1;
         let Some(obj) = step.as_object() else {
-            return Err(format!("step {} must be a JSON object", i + 1));
+            return Err(format!("step {n} must be a JSON object"));
         };
         let action = obj
             .get("action")
             .and_then(serde_json::Value::as_str)
             .filter(|a| !a.is_empty());
-        if action.is_none() {
-            return Err(format!("step {} has no action", i + 1));
+        let Some(action) = action else {
+            return Err(format!("step {n} has no action"));
+        };
+        if !BROWSER_ACTIONS.contains(&action) {
+            return Err(format!(
+                "step {n}: unknown action \"{action}\" (expected one of: {})",
+                BROWSER_ACTIONS.join(", ")
+            ));
         }
-        if action == Some("navigate") {
-            let url = obj
-                .get("url")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            if !navigate_url_allowed(url) {
-                return Err(format!(
-                    "step {} navigate url must be http(s):// and at most {MAX_BROWSER_URL_CHARS} characters",
-                    i + 1
-                ));
+        let field = |name: &str| obj.get(name).and_then(serde_json::Value::as_str);
+        match action {
+            "navigate" => {
+                let url = field("url").unwrap_or("");
+                if !navigate_url_allowed(url) {
+                    return Err(format!(
+                        "step {n} navigate url must be http(s):// and at most {MAX_BROWSER_URL_CHARS} characters"
+                    ));
+                }
+            }
+            "click" | "hover" | "wait_for" => {
+                let Some(sel) = field("selector") else {
+                    return Err(format!("step {n}: {action} requires selector"));
+                };
+                if sel.chars().count() > MAX_BROWSER_SELECTOR_CHARS {
+                    return Err(format!(
+                        "step {n}: selector exceeds {MAX_BROWSER_SELECTOR_CHARS} chars"
+                    ));
+                }
+            }
+            "type" => {
+                let Some(sel) = field("selector") else {
+                    return Err(format!("step {n}: type requires selector"));
+                };
+                if sel.chars().count() > MAX_BROWSER_SELECTOR_CHARS {
+                    return Err(format!(
+                        "step {n}: selector exceeds {MAX_BROWSER_SELECTOR_CHARS} chars"
+                    ));
+                }
+                let Some(text) = field("text") else {
+                    return Err(format!("step {n}: type requires text"));
+                };
+                if text.len() > MAX_BROWSER_TEXT_BYTES {
+                    return Err(format!(
+                        "step {n}: text exceeds {} KiB",
+                        MAX_BROWSER_TEXT_BYTES / 1024
+                    ));
+                }
+            }
+            "eval" => {
+                let Some(js) = field("js") else {
+                    return Err(format!("step {n}: eval requires js"));
+                };
+                if js.len() > MAX_BROWSER_JS_BYTES {
+                    return Err(format!(
+                        "step {n}: js exceeds {} KiB",
+                        MAX_BROWSER_JS_BYTES / 1024
+                    ));
+                }
+            }
+            "press_key" => {
+                let Some(key) = field("key") else {
+                    return Err(format!("step {n}: press_key requires key"));
+                };
+                let named = BROWSER_NAMED_KEYS.contains(&key.to_lowercase().as_str());
+                let single = key.len() == 1 && key.as_bytes()[0].is_ascii_graphic();
+                if !(named || single) {
+                    return Err(format!(
+                        "step {n}: press_key key must be a named key or a single ASCII char"
+                    ));
+                }
+            }
+            "scroll" => {
+                let sel = field("selector");
+                let to = field("to");
+                let ok = match (sel, to) {
+                    (Some(s), None) => s.chars().count() <= MAX_BROWSER_SELECTOR_CHARS,
+                    (None, Some(t)) => t == "top" || t == "bottom",
+                    _ => false,
+                };
+                if !ok {
+                    return Err(format!(
+                        "step {n}: scroll takes either selector or to (top|bottom)"
+                    ));
+                }
+            }
+            "set_viewport" => {
+                let w = obj.get("width").and_then(serde_json::Value::as_u64);
+                let h = obj.get("height").and_then(serde_json::Value::as_u64);
+                let ok = matches!((w, h), (Some(w), Some(h)) if (200..=5000).contains(&w) && (200..=5000).contains(&h));
+                if !ok {
+                    return Err(format!(
+                        "step {n}: set_viewport requires width and height (200-5000)"
+                    ));
+                }
+            }
+            "wait_for_text" => {
+                let Some(text) = field("text") else {
+                    return Err(format!("step {n}: wait_for_text requires text"));
+                };
+                if text.chars().count() > MAX_BROWSER_WAIT_TEXT_CHARS {
+                    return Err(format!(
+                        "step {n}: text exceeds {MAX_BROWSER_WAIT_TEXT_CHARS} chars"
+                    ));
+                }
+            }
+            "set_cookies" => {
+                let Some(cookies) = obj.get("cookies").and_then(serde_json::Value::as_array) else {
+                    return Err(format!("step {n}: set_cookies requires a cookies array"));
+                };
+                if cookies.is_empty() || cookies.len() > 20 {
+                    return Err(format!("step {n}: set_cookies takes 1-20 cookies"));
+                }
+                for (ci, spec) in cookies.iter().enumerate() {
+                    let Some(c) = spec.as_object() else {
+                        return Err(format!("step {n}: cookie {} must be an object", ci + 1));
+                    };
+                    let name = c
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let value = c
+                        .get("value")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let url = c
+                        .get("url")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    if name.is_empty() || name.chars().count() > 256 {
+                        return Err(format!(
+                            "step {n}: cookie {} name must be 1-256 chars",
+                            ci + 1
+                        ));
+                    }
+                    if value.len() > 4 * 1024 {
+                        return Err(format!("step {n}: cookie {} value exceeds 4 KiB", ci + 1));
+                    }
+                    if !navigate_url_allowed(url) {
+                        return Err(format!(
+                            "step {n}: cookie {} url must be http(s)://",
+                            ci + 1
+                        ));
+                    }
+                }
+            }
+            // Parameterless reads/captures; their own parameters (format,
+            // quality, full_page, pdf paper) are validated worker-side.
+            "screenshot" | "pdf" | "get_text" | "get_html" | "title" | "get_cookies" => {}
+            other => {
+                return Err(format!("step {n}: unknown action \"{other}\""));
             }
         }
     }
@@ -766,6 +959,159 @@ mod tests {
     }
 
     #[test]
+    fn browser_steps_reject_an_unknown_action() {
+        // A step the worker cannot execute is refused at the API boundary
+        // (400) instead of being queued and failing on the worker.
+        let err =
+            validate_browser_steps(&serde_json::json!([{ "action": "naviguer" }])).unwrap_err();
+        assert!(
+            err.starts_with("step 1: unknown action \"naviguer\""),
+            "{err}"
+        );
+        let err = validate_browser_steps(&serde_json::json!([{ "action": "exec" }])).unwrap_err();
+        assert!(err.starts_with("step 1: unknown action \"exec\""), "{err}");
+        // The error names the accepted actions.
+        assert!(
+            err.contains("navigate") && err.contains("set_cookies"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn browser_steps_accept_every_known_action() {
+        let all = serde_json::json!([
+            { "action": "navigate", "url": "https://example.com" },
+            { "action": "click", "selector": "#b" },
+            { "action": "type", "selector": "#i", "text": "hello" },
+            { "action": "press_key", "key": "enter" },
+            { "action": "hover", "selector": "p" },
+            { "action": "scroll", "to": "bottom" },
+            { "action": "eval", "js": "1+1" },
+            { "action": "set_viewport", "width": 1280, "height": 800 },
+            { "action": "screenshot", "format": "jpeg" },
+            { "action": "pdf" },
+            { "action": "get_text" },
+            { "action": "get_html" },
+            { "action": "title" },
+            { "action": "wait_for", "selector": "#r" },
+            { "action": "wait_for_text", "text": "done" },
+            { "action": "get_cookies" },
+            { "action": "set_cookies", "cookies": [
+                { "name": "a", "value": "1", "url": "https://example.com" }
+            ]},
+        ]);
+        assert_eq!(validate_browser_steps(&all).unwrap(), 17);
+        assert_eq!(BROWSER_ACTIONS.len(), 17);
+    }
+
+    #[test]
+    fn browser_steps_require_each_action_s_own_fields() {
+        let cases = [
+            (
+                serde_json::json!([{ "action": "navigate" }]),
+                "navigate url must be http(s)://",
+            ),
+            (
+                serde_json::json!([{ "action": "click" }]),
+                "click requires selector",
+            ),
+            (
+                serde_json::json!([{ "action": "hover" }]),
+                "hover requires selector",
+            ),
+            (
+                serde_json::json!([{ "action": "wait_for" }]),
+                "wait_for requires selector",
+            ),
+            (
+                serde_json::json!([{ "action": "type", "selector": "#i" }]),
+                "type requires text",
+            ),
+            (
+                serde_json::json!([{ "action": "type", "text": "x" }]),
+                "type requires selector",
+            ),
+            (
+                serde_json::json!([{ "action": "eval" }]),
+                "eval requires js",
+            ),
+            (
+                serde_json::json!([{ "action": "press_key" }]),
+                "press_key requires key",
+            ),
+            (
+                serde_json::json!([{ "action": "wait_for_text" }]),
+                "wait_for_text requires text",
+            ),
+            (
+                serde_json::json!([{ "action": "set_cookies" }]),
+                "set_cookies requires a cookies array",
+            ),
+            (
+                serde_json::json!([{ "action": "scroll" }]),
+                "scroll takes either selector or to",
+            ),
+            (
+                serde_json::json!([{ "action": "scroll", "selector": "p", "to": "bottom" }]),
+                "scroll takes either selector or to",
+            ),
+            (
+                serde_json::json!([{ "action": "scroll", "to": "middle" }]),
+                "scroll takes either selector or to",
+            ),
+            (
+                serde_json::json!([{ "action": "set_viewport", "width": 10, "height": 800 }]),
+                "set_viewport requires width and height",
+            ),
+        ];
+        for (payload, expected) in cases {
+            let err = validate_browser_steps(&payload).unwrap_err();
+            assert!(err.contains(expected), "expected {expected:?} in {err:?}");
+        }
+    }
+
+    #[test]
+    fn browser_steps_cap_their_parameters() {
+        let long_selector = "a".repeat(MAX_BROWSER_SELECTOR_CHARS + 1);
+        let err = validate_browser_steps(
+            &serde_json::json!([{ "action": "click", "selector": long_selector }]),
+        )
+        .unwrap_err();
+        assert!(err.contains("selector exceeds"), "{err}");
+
+        let long_text = "a".repeat(MAX_BROWSER_TEXT_BYTES + 1);
+        let err = validate_browser_steps(
+            &serde_json::json!([{ "action": "type", "selector": "#i", "text": long_text }]),
+        )
+        .unwrap_err();
+        assert!(err.contains("text exceeds"), "{err}");
+
+        let long_js = "a".repeat(MAX_BROWSER_JS_BYTES + 1);
+        let err = validate_browser_steps(&serde_json::json!([{ "action": "eval", "js": long_js }]))
+            .unwrap_err();
+        assert!(err.contains("js exceeds"), "{err}");
+
+        let long_wait = "a".repeat(MAX_BROWSER_WAIT_TEXT_CHARS + 1);
+        let err = validate_browser_steps(
+            &serde_json::json!([{ "action": "wait_for_text", "text": long_wait }]),
+        )
+        .unwrap_err();
+        assert!(err.contains("text exceeds"), "{err}");
+
+        let err = validate_browser_steps(&serde_json::json!([
+            { "action": "press_key", "key": "not-a-key" }
+        ]))
+        .unwrap_err();
+        assert!(err.contains("press_key key must be"), "{err}");
+
+        let err = validate_browser_steps(&serde_json::json!([
+            { "action": "set_cookies", "cookies": [{ "name": "a", "value": "1", "url": "file:///etc/passwd" }] }
+        ]))
+        .unwrap_err();
+        assert!(err.contains("url must be http(s)://"), "{err}");
+    }
+
+    #[test]
     fn browser_navigate_urls_must_be_http() {
         for url in [
             "https://example.com",
@@ -804,17 +1150,33 @@ mod tests {
 
     #[test]
     fn browser_payload_is_capped_at_64_kib() {
-        // 51 steps would trip the count check first; build a legal-but-huge
-        // step instead: one eval step with a 64 KiB+ script.
-        let big = "x".repeat(70_000);
-        let payload = steps(serde_json::json!([{ "action": "eval", "js": big }]));
+        // The hub now validates the step fields too (the canonical gate), so
+        // an oversized script is refused by the *validation*; the payload cap
+        // is a second, independent bound. This fixture keeps every step
+        // legal (a 2 KiB text is under the 10 KiB per-step cap) but makes the
+        // serialized payload exceed 64 KiB.
+        let big_text = "x".repeat(2_000);
+        let many: Vec<_> = (0..50)
+            .map(|_| serde_json::json!({ "action": "type", "selector": "#i", "text": big_text }))
+            .collect();
+        let payload = steps(serde_json::json!(many));
         assert!(
             payload.to_string().len() > MAX_BROWSER_PAYLOAD_BYTES,
             "fixture must actually exceed the cap"
         );
-        // The hub only caps the payload size (the per-script size gate is
-        // the worker's); the count/shape validation must still pass.
+        // The steps themselves are legal — the size bound is the payload cap,
+        // enforced by the route's body-size guard.
         assert!(validate_browser_steps(&payload["steps"]).is_ok());
+    }
+
+    #[test]
+    fn browser_steps_cap_an_oversized_script() {
+        // The per-script bound lives in the hub too now (same 64 KiB as the
+        // payload cap), so a runaway script never reaches the queue.
+        let big = "x".repeat(MAX_BROWSER_JS_BYTES + 1);
+        let err = validate_browser_steps(&serde_json::json!([{ "action": "eval", "js": big }]))
+            .unwrap_err();
+        assert!(err.contains("js exceeds 64 KiB"), "{err}");
     }
 
     // ---- browser_install payloads ----------------------------------------
