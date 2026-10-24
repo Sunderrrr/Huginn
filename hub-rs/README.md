@@ -13,8 +13,20 @@ MCP server, dashboard) talks to this API.
 cd hub-rs
 cargo build --release          # binary: target/release/huginn-hub
 cargo test --release           # unit tests (inline #[cfg(test)] modules)
-cargo fmt --check && cargo clippy --release -- -D warnings
+cargo fmt --check && cargo clippy --release --all-targets -- -D warnings
 ```
+
+The suites that need a real database (RBAC, enrollment, session revocation,
+browser endpoints, audit chain) are skipped unless `HUGINN_TEST_DATABASE_URL`
+points at a PostgreSQL instance — they drop and recreate the schema, so give
+them a throwaway database:
+
+```bash
+HUGINN_TEST_DATABASE_URL=postgresql://huginn:x@127.0.0.1:5432/huginn \
+  cargo test --release
+```
+
+CI runs both: the plain suite and the live-database one (`.github/workflows/ci-rust.yml`).
 
 It is an independent Cargo project (its own `Cargo.lock`). The Docker image is
 built from `hub-rs/Dockerfile`; the binary applies embedded migrations on startup.
