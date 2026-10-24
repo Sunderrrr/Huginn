@@ -7,6 +7,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Security
+- **RUSTSEC-2026-0387 (crypto-bigint) — remediated, not ignored**: a new
+  advisory (published 2026-10-23) flags timing variability in operations that
+  were meant to be constant-time in `crypto-bigint` < 0.7.6, which reached the
+  hub through `elliptic-curve 0.13` → `p256`/`p384` 0.13. The fix requires the
+  elliptic-curve stack to move to 0.14, which in turn requires `jsonwebtoken`
+  to stop pinning `p256` 0.13 — it now runs on the `aws_lc_rs` backend
+  (same verification semantics for RS256/ES256, no vulnerable crate in the
+  tree), and the hub's own `p256` dependency moves to 0.14 for the WebAuthn
+  ES256 path. `cargo audit` now reports **0 vulnerabilities** for all three
+  crates, with no new ignore. The build needs `cmake` + `make` for
+  `aws-lc-sys` (build stage only; the runtime image is unchanged).
+  The `RUSTSEC-2023-0071` (`rsa`) ignore is also restated with an accurate
+  rationale: `rsa` *is* compiled into the hub (WebAuthn RS256 attestation
+  verification), but the Marvin attack targets PKCS#1 v1.5 *decryption*, which
+  the hub never performs, and the verification path it does use is
+  constant-time (`subtle::ConstantTimeEq` accumulation, no early exit).
 - **Server-side session revocation** (audit finding F-08): a per-user
   `session_epoch` counter now travels in the access token and is compared
   with the stored value on every request. A logout, a password change or an
@@ -65,6 +81,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     into an image layer.
 
 ### Added
+- **`browser_enable` MCP tool** (17 tools): the browser capability gate was
+  only reachable from the dashboard, so an agent could not arm a VM for
+  browser automation. The new tool calls the existing admin hub route
+  (`PUT /api/vms/{id}/browser-enabled`, audited `toggle_browser`) through the
+  hub client, with the on-behalf-of identity carried like every other fleet
+  call. Covered by a wiremock test asserting the PUT route, the body and the
+  400s on a missing `vm_id` / `enabled`.
 - **Full Obscura step vocabulary** (v1.7.0): `press_key` (Enter/Tab/arrows or
   one ASCII char — forms submit for real), `hover` (trusted mouse move),
   `scroll` (into view / top / bottom), `wait_for_text`, `title`,
