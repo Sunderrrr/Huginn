@@ -8,9 +8,14 @@ permissions:
   contents: write
   packages: write
 
+# A release is never cancelled: a half-published tag is worse than a slow one.
+concurrency:
+  group: release-${{ github.ref }}
+
 jobs:
   build-worker-rs:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: worker-rs
@@ -23,6 +28,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: worker-rs
       - uses: taiki-e/install-action@d2bea38207d08b13b798c8a031b0912d13e2a802 # cargo-zigbuild
       - name: Install zig (cross-linker for musl targets)
         run: pip install --no-cache-dir ziglang==0.17.0
@@ -47,7 +55,7 @@ jobs:
           sha256sum huginn-worker-* > checksums.txt
           cat checksums.txt
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/huginn-worker-*
@@ -56,6 +64,7 @@ jobs:
 
   build-mcp-rs:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -63,14 +72,17 @@ jobs:
           # to exfiltrate the job's GITHUB_TOKEN.
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: mcp-rs
       - name: Build + test MCP server
         working-directory: mcp-rs
         run: |
           cargo build --release --locked
-          cargo test --release
-          cargo clippy --release -- -D warnings
+          cargo test --release --locked
+          cargo clippy --release --locked --all-targets -- -D warnings
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -87,6 +99,7 @@ jobs:
 
   build-hub-rs:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -108,14 +121,17 @@ jobs:
           # to exfiltrate the job's GITHUB_TOKEN.
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: hub-rs
       - name: Build + test hub
         working-directory: hub-rs
         run: |
           cargo build --release --locked
-          cargo test --release
-          cargo clippy --release -- -D warnings
+          cargo test --release --locked
+          cargo clippy --release --locked --all-targets -- -D warnings
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
