@@ -104,6 +104,22 @@ secrets.
 
 ## Day-2 operations
 
+### Keeping the stack up (watchdog)
+
+The host's own supervisor (and some maintenance scripts) can stop the
+containers; `restart: unless-stopped` does **not** restart a container that was
+stopped explicitly, so the hub and the TLS edge can stay down for hours.
+
+`scripts/ensure-stack.sh` is an idempotent check that starts whatever is not
+running (and recreates the project only if a container vanished). Install it as
+a systemd timer on the host:
+
+```bash
+systemctl enable --now huginn-ensure-stack.timer   # every 2 minutes
+```
+
+Logs: `/var/log/huginn-ensure-stack.log`.
+
 ```bash
 ./manage.sh ps              # status
 ./manage.sh logs hub        # follow one service
