@@ -695,6 +695,23 @@ pub async fn call_tool(
                 },
             }
         }
+        "browser_enable" => {
+            let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
+                return tool_error(400, "vm_id is required");
+            };
+            let enabled = match args.get("enabled") {
+                Some(Value::Bool(b)) => *b,
+                _ => return tool_error(400, "enabled (boolean) is required"),
+            };
+            // Admin-only hub route (RBAC enforced hub-side, audited).
+            match resolve_vm(&hub, ctx, vm).await {
+                Err(e) => e,
+                Ok(id) => match hub.set_browser_enabled(ctx, &id, enabled).await {
+                    Ok(v) => v,
+                    Err(e) => from_hub_error(e),
+                },
+            }
+        }
         "browser_start" => {
             let Some(vm) = args.get("vm_id").and_then(Value::as_str) else {
                 return tool_error(400, "vm_id is required");
@@ -997,6 +1014,18 @@ pub fn tool_definitions() -> Value {
                     "wait": {"type": "boolean", "default": true, "description": "wait for the install to finish (default)"}
                 },
                 "required": ["vm_id"]
+            }
+        },
+        {
+            "name": "browser_enable",
+            "description": "Enable or disable the browser automation capability on a VM (admin only).\nWhile it is off, the hub refuses every browser task on that VM (403\n\"browser automation is disabled\"); the Obscura engine must also be installed\nwith browser_install. Linux VMs only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm_id": {"type": "string", "description": "VM id or name"},
+                    "enabled": {"type": "boolean", "description": "true to enable, false to disable"}
+                },
+                "required": ["vm_id", "enabled"]
             }
         },
         {
@@ -1962,6 +1991,70 @@ mod tests {
             !body.contains("\"wait\""),
             "the create call must not ask for the hub-side wait"
         );
+    }
+
+    #[tokio::test]
+    async fn browser_enable_puts_the_browser_enabled_route() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/vms"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([vm(
+                    "11111111-1111-1111-1111-111111111111",
+                    "web-01",
+                    "active"
+                )])),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path(
+                "/api/vms/11111111-1111-1111-1111-111111111111/browser-enabled",
+            ))
+            .and(wiremock::matchers::body_json(json!({"enabled": true})))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "name": "web-01",
+                    "state": "active",
+                    "browser_enabled": true
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let ctx = CallCtx::default();
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_enable",
+            &tool_args(&[("vm_id", json!("web-01")), ("enabled", json!(true))]),
+        )
+        .await;
+        assert_eq!(out["browser_enabled"], true);
+
+        // Missing `enabled` → 400 before any hub call.
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_enable",
+            &tool_args(&[("vm_id", json!("web-01"))]),
+        )
+        .await;
+        assert_eq!(out["error"]["status"], 400);
+
+        // Missing `vm_id` → 400 before any hub call.
+        let hub = Arc::new(HubClient::new(&test_settings(server.uri())));
+        let out = call_tool(
+            hub,
+            &ctx,
+            "browser_enable",
+            &tool_args(&[("enabled", json!(true))]),
+        )
+        .await;
+        assert_eq!(out["error"]["status"], 400);
     }
 
     #[tokio::test]

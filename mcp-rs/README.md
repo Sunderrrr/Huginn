@@ -30,13 +30,16 @@ mcp-rs/
     ├── auth.rs          # per-user token validation, cache, client-IP extraction
     ├── hub_client.rs    # REST client to the hub (service token + on-behalf-of)
     ├── protocol.rs      # MCP handshake: initialize, tools/list
-    └── tools.rs         # tool definitions + call_tool dispatch (16 tools)
+    └── tools.rs         # tool definitions + call_tool dispatch (17 tools)
 ```
 
 ## Tools
 
 `list_vms`, `get_vm_status`, `list_actions`, `execute_action`, `execute_command`,
-`trigger_update`, `get_task`, `wait_for_task`, `get_audit_log`. Signatures and
+`trigger_update`, `get_task`, `wait_for_task`, `get_audit_log`. Browser
+automation: `browser_enable`, `browser_engine_check`, `browser_install`,
+`browser_start`, `browser_navigate`, `browser_screenshot`, `browser_pdf`,
+`browser_eval`. Signatures and
 docstrings live in `tools.rs::tool_definitions()`. Usage rules ship as connection
 `instructions` so compliant clients surface them to the model.
 
