@@ -162,7 +162,7 @@ jobs:
             -e HUGINN_ENV=dev \
             -e HUGINN_DATABASE_URL="postgresql://huginn:huginn@127.0.0.1:5432/huginn" \
             "ghcr.io/${owner}/huginn-hub:${VERSION}"
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/healthz; then
               echo
               echo "hub booted and answered /healthz"

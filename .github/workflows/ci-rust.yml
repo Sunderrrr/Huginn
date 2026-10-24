@@ -4,11 +4,13 @@ permissions:
   contents: read
 
 on:
+  # No path filter: these jobs are *required* status checks on main, and a
+  # required check that does not run for a given PR blocks that PR forever.
+  # A change to `scripts/`, `deploy/` or the workflows themselves must still
+  # be gated by the Rust suites.
   push:
     branches: [main]
-    paths: ["worker-rs/**", "mcp-rs/**", "hub-rs/**"]
   pull_request:
-    paths: ["worker-rs/**", "mcp-rs/**", "hub-rs/**"]
 
 # A new push supersedes the previous run: cancel it instead of burning
 # runner minutes on an outdated commit.
@@ -193,7 +195,7 @@ jobs:
           HUGINN_BOOTSTRAP_ADMIN_USERNAME=admin \
           HUGINN_BOOTSTRAP_ADMIN_PASSWORD=parity-admin-pass-123 \
           ./target/release/huginn-hub > /tmp/hub-rs.log 2>&1 &
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             curl -sf http://127.0.0.1:8000/healthz && exit 0
             sleep 1
           done

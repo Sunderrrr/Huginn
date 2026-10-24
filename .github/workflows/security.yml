@@ -20,6 +20,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  workflow-lint:
+    name: workflow lint (actionlint)
+    # The workflows are code too: a syntax error, a wrong `permissions:` block
+    # or an unresolvable action reference is only noticed when the workflow
+    # runs — and a broken workflow may never run at all. actionlint checks
+    # them on every PR (shellcheck/pyflakes are available on the runners).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+
   secrets:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest

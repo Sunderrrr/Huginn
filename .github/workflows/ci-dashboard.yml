@@ -4,11 +4,12 @@ permissions:
   contents: read
 
 on:
+  # No path filter: this workflow's job is a *required* status check on main,
+  # and a required check that does not run for a given PR blocks that PR
+  # forever. It has to exist on every PR.
   push:
     branches: [main]
-    paths: ["dashboard/**", ".github/workflows/ci-dashboard.yml"]
   pull_request:
-    paths: ["dashboard/**", ".github/workflows/ci-dashboard.yml"]
 
 # A new push supersedes the previous run.
 concurrency:
