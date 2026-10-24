@@ -307,6 +307,11 @@ pub struct HeartbeatRequest {
     pub worker_version: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub ip_address: String,
+    /// The installed Obscura engine version (`None` when no engine is
+    /// installed). The hub stores it so the dashboard can show the engine
+    /// state of a node instead of leaving the operator to guess.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_engine_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

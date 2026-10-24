@@ -504,6 +504,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             browser_enabled: false,
+            browser_engine_version: None,
+            browser_engine_reported_at: None,
         }
     }
 

@@ -174,6 +174,22 @@ mod live_tests {
             .unwrap()
             .unwrap();
         vm::update_heartbeat(&pool, v.id, now).await.unwrap();
+        // The engine state the worker reports (migrations/0009): the
+        // dashboard shows it so an operator knows whether browser steps can
+        // run on the node.
+        let v = vm::update_browser_engine_state(&pool, v.id, Some("v0.2.5"), now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(v.browser_engine_version.as_deref(), Some("v0.2.5"));
+        assert!(v.browser_engine_reported_at.is_some());
+        // A node without an engine reports an explicit null.
+        let v = vm::update_browser_engine_state(&pool, v.id, None, now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(v.browser_engine_version.is_none());
+        assert!(v.browser_engine_reported_at.is_some());
         vm::update(
             &pool,
             v.id,

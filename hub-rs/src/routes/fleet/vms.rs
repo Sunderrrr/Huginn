@@ -89,6 +89,12 @@ pub struct VMOut {
     /// Browser automation gate (migrations/0005) — off until an admin
     /// enables it on the VM.
     pub browser_enabled: bool,
+    /// The Obscura engine version the worker reported (migrations/0009);
+    /// `None` = no engine installed on that node.
+    pub browser_engine_version: Option<String>,
+    /// When the worker last reported its engine state.
+    #[serde(with = "ts_opt")]
+    pub browser_engine_reported_at: Option<DateTime<Utc>>,
 }
 
 impl VMOut {
@@ -117,6 +123,8 @@ impl VMOut {
             created_at: vm.created_at,
             tags: Vec::new(),
             browser_enabled: vm.browser_enabled,
+            browser_engine_version: vm.browser_engine_version.clone(),
+            browser_engine_reported_at: vm.browser_engine_reported_at,
         }
     }
 }
@@ -532,6 +540,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             browser_enabled: false,
+            browser_engine_version: None,
+            browser_engine_reported_at: None,
         }
     }
 
@@ -559,6 +569,8 @@ mod tests {
             "exec_mode": "whitelist",
             "worker_version": "v1.4.0",
             "browser_enabled": false,
+            "browser_engine_version": null,
+            "browser_engine_reported_at": null,
             "last_heartbeat_at": null,
             "enrolled_at": null,
             "approved_at": null,

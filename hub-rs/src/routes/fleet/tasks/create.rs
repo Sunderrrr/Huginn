@@ -387,6 +387,8 @@ mod tests {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             browser_enabled: false,
+            browser_engine_version: None,
+            browser_engine_reported_at: None,
         }
     }
 

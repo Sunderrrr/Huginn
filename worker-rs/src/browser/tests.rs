@@ -6,9 +6,9 @@ use super::install::{parse_libc_version, sha256_gate, version_gate};
 use super::process::{parse_max_rss_mb, random_cdp_token};
 use super::steps::{key_spec, navigate_url_allowed, BrowserStep, ScreenshotFormat, ScrollTarget};
 use super::{
-    data_uri, ensure_obscura_installed, install_roots, newest_binary, parse_steps, pdf_uri,
-    truncate_chars, ObscuraProcess, ENV_MUTEX, MAX_SELECTOR, MAX_STEP_JS, MAX_TYPE_TEXT,
-    MAX_URL_CHARS, OBSCURA_INSTALL_ROOT,
+    data_uri, ensure_obscura_installed, install_roots, installed_version, newest_binary,
+    parse_steps, pdf_uri, truncate_chars, ObscuraProcess, ENV_MUTEX, MAX_SELECTOR, MAX_STEP_JS,
+    MAX_TYPE_TEXT, MAX_URL_CHARS, OBSCURA_INSTALL_ROOT,
 };
 
 use serde_json::json;
@@ -516,6 +516,31 @@ fn version_directories_are_picked_newest() {
     let empty = crate::config::testutil::temp_dir("obscura-empty");
     std::fs::create_dir_all(&empty).unwrap();
     assert!(newest_binary(&empty).is_none());
+}
+
+#[test]
+fn the_installed_engine_version_is_reported() {
+    // The heartbeat reports the installed engine version so the dashboard
+    // can show whether a node can run browser steps.
+    let dir = crate::config::testutil::temp_dir("obscura-report");
+    for version in ["v0.2.4", "v0.2.5"] {
+        std::fs::create_dir_all(dir.join(version)).unwrap();
+        std::fs::write(dir.join(version).join("obscura"), b"#!/bin/sh\n").unwrap();
+    }
+    let _guard = ENV_MUTEX.blocking_lock();
+    std::env::set_var("HUGINN_OBSCURA_DIR", &dir);
+    let reported = installed_version("/tmp/state-report");
+    std::env::remove_var("HUGINN_OBSCURA_DIR");
+    assert_eq!(reported.as_deref(), Some("v0.2.5"));
+
+    // No engine installed -> no version reported (the hub shows "not
+    // installed").
+    let empty = crate::config::testutil::temp_dir("obscura-report-empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    std::env::set_var("HUGINN_OBSCURA_DIR", &empty);
+    let reported = installed_version("/tmp/state-report");
+    std::env::remove_var("HUGINN_OBSCURA_DIR");
+    assert!(reported.is_none());
 }
 
 #[test]
