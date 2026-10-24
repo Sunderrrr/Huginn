@@ -35,7 +35,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   verification), but the Marvin attack targets PKCS#1 v1.5 *decryption*, which
   the hub never performs, and the verification path it does use is
   constant-time (`subtle::ConstantTimeEq` accumulation, no early exit).
-
+  
+### Changed
+- **The MCP tools that create a task now return the RESULT, not a handle**:
+  `browser_start`, `browser_navigate`, `browser_screenshot`, `browser_pdf`,
+  `browser_eval`, `browser_install`, `execute_action` and `execute_command`
+  wait for their task and hand back the finished task (stdout/stderr inline)
+  — the agent no longer has to guess that it must call `wait_for_task`
+  afterwards. The wait uses the hub's `GET /api/tasks/{id}/wait` endpoint
+  (the hub holds it server-side), bounded by the task's own timeout and by a
+  90 s ceiling that keeps the response under the 100 s limit a CDN in front
+  of the MCP imposes. `wait=false` restores the previous behaviour (the task
+  handle straight away) for the long ones. The MCP no longer asks the hub
+  for its own 30 s create-side wait — that window collided with the MCP's
+  own request timeout.
+  
 ### Fixed
 - **The hub now validates the browser steps it queues** (it was the only front
   door that did not): a step naming an action the worker cannot execute
