@@ -108,7 +108,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [hub-rs, worker-rs, mcp-rs]
+        # Only the crates that ship as container images: the worker is a
+        # static binary distributed through /dist (no Dockerfile).
+        component: [hub-rs, mcp-rs]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
