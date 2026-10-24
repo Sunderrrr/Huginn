@@ -37,6 +37,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   constant-time (`subtle::ConstantTimeEq` accumulation, no early exit).
 
 ### Fixed
+- **The hub now validates the browser steps it queues** (it was the only front
+  door that did not): a step naming an action the worker cannot execute
+  (`"naviguer"`), or missing its own required field (`click` without a
+  selector, `type` without a text, `eval` without JavaScript, a `scroll`
+  without `selector`/`to`, a `set_viewport` outside 200-5000 px, a cookie
+  whose URL is not http(s)), is refused with **400** instead of being queued
+  and failing on the worker. The hub's validator is now the canonical gate and
+  mirrors the worker's bounds **exactly** (selector 512, `type` text 10 KiB,
+  `eval` script 64 KiB, `wait_for_text` 512, 20 cookies, URL 2048) — the MCP
+  keeps its own copy as defence in depth.
+- **The worker routes authenticate before parsing the payload**:
+  `POST /api/worker/heartbeat` and `POST /api/worker/tasks/{id}/result`
+  answered **400** about the caller's own body before checking the
+  credentials, which let an anonymous caller tell that the endpoint was
+  alive (and what was wrong with its body). They now answer **401** whatever
+  they send.
 - **The worker is now compiled for Windows** in CI (weekly job): the Windows
   path (`install.ps1`, `#[cfg(windows)]` code) had never been built by any
   pipeline, so a Windows-only break could only surface on a user's machine.

@@ -94,6 +94,24 @@ is `huginn-ca.crt`, also served at `/caddy-root.crt` for trust-on-first-use).
 To use Let's Encrypt instead, replace the `tls` directive in the Caddyfile with
 `tls <your-email>` and point `HUGINN_DOMAIN` at a public domain.
 
+### If a CDN sits in front (Cloudflare)
+
+A CDN in front of the deployment may apply its own bot/browser rules. One
+observed case: Cloudflare's *Browser Integrity Check* answers **403
+`error code: 1010`** to the exact User-Agent `Python-urllib/3.14` (the
+stdlib default of `urllib.request`), while `curl`, `python-requests`, `node`,
+Go and every browser pass. A script that uses `urllib` without setting a
+User-Agent is therefore refused *before* it reaches the hub.
+
+Two ways out, both one-liners:
+
+- client-side: set any User-Agent (`urllib.request.Request(..., headers={"User-Agent": "my-script/1.0"})`);
+- edge-side: add a WAF **skip rule** for that path/UA, or turn the Browser
+  Integrity Check off for the API paths (`/api/*`, `/mcp`).
+
+The hub itself does not depend on any User-Agent; nothing else in the stack
+(worker, installer, MCP) is affected.
+
 ## Environment
 
 `.env.prod` drives everything (see `.env.prod.example` for the full list):
