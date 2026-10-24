@@ -116,6 +116,11 @@ pub struct Options {
 }
 
 impl Client {
+    /// The hub URL this client talks to.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// New constructs a Client, validating the transport policy.
     pub fn new(opts: Options) -> Result<Self, Error> {
         let base = opts.base_url.trim_end_matches('/').to_string();
@@ -301,6 +306,25 @@ pub struct EnrollResponse {
     pub state: String,
 }
 
+/// The local address the kernel picks to reach `hub_url` — the worker's own
+/// address on the network the hub is reached from. A UDP `connect` sends no
+/// packet: it only makes the kernel pick the route (and therefore the source
+/// address) it would use. This is the address the node really has; the one
+/// the hub sees at enrollment is often a NAT/bridge address that is
+/// ambiguous (podman allocates the same subnets on different hosts).
+pub fn outbound_ip(hub_url: &str) -> Option<String> {
+    let rest = hub_url.split_once("://").map(|(_, r)| r).unwrap_or(hub_url);
+    let host = rest.split(['/', '?']).next().unwrap_or("");
+    let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    if host.is_empty() {
+        return None;
+    }
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect((host, 9)).ok()?; // discard port: no traffic is sent
+    let addr = sock.local_addr().ok()?;
+    Some(addr.ip().to_string())
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct HeartbeatRequest {
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -381,6 +405,25 @@ mod tests {
             ..Default::default()
         })
         .expect("client")
+    }
+
+    #[test]
+    fn outbound_ip_is_the_route_source_address() {
+        // A UDP connect sends no packet: it only makes the kernel pick the
+        // route (and the source address) it would use. Loopback keeps the
+        // test hermetic (no DNS, no traffic).
+        assert_eq!(
+            outbound_ip("http://127.0.0.1:8000").as_deref(),
+            Some("127.0.0.1")
+        );
+        // A path in the URL does not change the host.
+        assert_eq!(
+            outbound_ip("https://127.0.0.1:8443/hub").as_deref(),
+            Some("127.0.0.1")
+        );
+        // Nothing to report without a host.
+        assert!(outbound_ip("").is_none());
+        assert!(outbound_ip("https://").is_none());
     }
 
     #[test]
