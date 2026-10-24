@@ -10,9 +10,15 @@ on:
   pull_request:
     paths: ["dashboard/**", ".github/workflows/ci-dashboard.yml"]
 
+# A new push supersedes the previous run.
+concurrency:
+  group: ci-dashboard-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dashboard:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: dashboard
@@ -25,6 +31,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
+          # Cache the npm store (not node_modules): the install stays
+          # lockfile-exact, the download is just skipped next time.
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
       - name: Install
         run: npm ci
       - name: Lint
