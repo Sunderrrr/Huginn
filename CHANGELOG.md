@@ -117,6 +117,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     into an image layer.
 
 ### Added
+- **`browser_enable` MCP tool** (17 tools): the browser capability gate was
+  only reachable from the dashboard, so an agent could not arm a VM for
+  browser automation. The new tool calls the existing admin hub route
+  (`PUT /api/vms/{id}/browser-enabled`, audited `toggle_browser`) through the
+  hub client, with the on-behalf-of identity carried like every other fleet
+  call. Covered by a wiremock test asserting the PUT route, the body and the
+  400s on a missing `vm_id` / `enabled`.
 - **Full Obscura step vocabulary** (v1.7.0): `press_key` (Enter/Tab/arrows or
   one ASCII char — forms submit for real), `hover` (trusted mouse move),
   `scroll` (into view / top / bottom), `wait_for_text`, `title`,

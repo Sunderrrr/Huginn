@@ -151,6 +151,27 @@ impl HubClient {
         .await
     }
 
+    /// Enable or disable the browser capability on a VM (admin). The hub
+    /// refuses browser tasks while it is off.
+    pub async fn set_browser_enabled(
+        &self,
+        ctx: &CallCtx,
+        vm_id: &str,
+        enabled: bool,
+    ) -> Result<Value, HubError> {
+        self.request_with_timeout(
+            Method::PUT,
+            &format!("/api/vms/{vm_id}/browser-enabled"),
+            Some(&serde_json::json!({ "enabled": enabled })),
+            &ctx_headers(ctx),
+            // The fleet routes authenticate with the service token; the
+            // on-behalf-of header carries the user's identity.
+            true,
+            Duration::from_secs(30),
+        )
+        .await
+    }
+
     /// Trigger an immediate Obscura engine update check (admin). Returns
     /// `{"result": "up to date: v0.2.4"}` or `{"result": "updated to v0.2.5"}`.
     pub async fn check_browser_engine(&self, ctx: &CallCtx) -> Result<Value, HubError> {
