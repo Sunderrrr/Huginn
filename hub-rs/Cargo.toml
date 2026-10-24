@@ -36,8 +36,8 @@ thiserror = "2"
 # statements (packed / fido-u2f). All audit-clean (see the audit.toml at the
 # workspace root).
 ciborium = "0.2"
-signature = "2"
-p256 = "0.13"
+signature = "3"
+p256 = "0.14"
 ed25519-dalek = "2"
 rsa = "0.9"
 x509-cert = "0.2"
@@ -48,14 +48,19 @@ tokio-stream = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 # OIDC/SSO (port of hub/app/core/oidc.py): HTTP client + RS256/ES256 ID-token
-# verification against the provider's JWKS. `jsonwebtoken` uses the pure-Rust
-# `rust_crypto` backend so it reuses the `rsa`/`p256` already in the tree and
-# adds no new C/crypto build. reqwest/ldap3 use rustls (ring), which `sqlx`'s
-# TLS already requires. (Note: `rsa` is present for the WebAuthn port too; the
-# pre-existing RUSTSEC-2023-0071 is covered by the ignore in audit.toml / CI.)
+# verification against the provider's JWKS. `jsonwebtoken` runs on the
+# `aws_lc_rs` backend: the `rust_crypto` backend pins p256/p384 0.13, whose
+# elliptic-curve stack ships crypto-bigint 0.5 (RUSTSEC-2026-0387 — timing
+# variability in operations meant to be constant-time). aws-lc-rs verifies
+# RS256/ES256 with the same jsonwebtoken semantics and no vulnerable crate in
+# the tree; it does need a C toolchain (cmake) at build time, which the
+# Dockerfile's build stage installs. reqwest/ldap3 use rustls (ring), which
+# `sqlx`'s TLS already requires. (Note: `rsa` is present for the WebAuthn port
+# too; the pre-existing RUSTSEC-2023-0071 is covered by the ignore in
+# audit.toml / CI.)
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 regex = "1"
-jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 # LDAP/LDAPS fallback (port of hub/app/core/ldap.py). rustls-based TLS avoids an
 # OpenSSL/pkg-config build dependency.
 ldap3 = { version = "0.12", default-features = false, features = ["sync", "tls-rustls-ring"] }
