@@ -118,6 +118,11 @@ export interface VM {
   tags: Tag[];
   // Browser automation gate (off by default; an admin flips it per VM).
   browser_enabled: boolean;
+  // The Obscura engine version the worker reported (null = no engine
+  // installed on that node); null until the worker reports it.
+  browser_engine_version: string | null;
+  // When the worker last reported its engine state.
+  browser_engine_reported_at: string | null;
 }
 
 export interface Task {

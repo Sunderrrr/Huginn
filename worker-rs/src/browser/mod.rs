@@ -162,6 +162,26 @@ pub(crate) fn install_roots(state_dir: &str) -> Vec<PathBuf> {
     roots
 }
 
+/// The version of the newest installed Obscura engine, or `None` when no
+/// engine is installed. Reported in the heartbeat so the hub (and the
+/// dashboard) can show the engine state of a node instead of leaving the
+/// operator to guess whether "Run" will work.
+pub fn installed_version(state_dir: &str) -> Option<String> {
+    for root in install_roots(state_dir) {
+        if let Some(bin) = newest_binary(&root) {
+            let version = bin
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
+            if version.is_some() {
+                return version;
+            }
+        }
+    }
+    None
+}
+
 /// Resolve the Obscura binary to run — the `ensure_obscura_installed` gate:
 /// search [`install_roots`] for the newest `<root>/<version>/obscura`. The
 /// error names every root searched so an operator sees exactly what is

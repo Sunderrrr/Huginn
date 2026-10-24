@@ -39,6 +39,16 @@ Two admin actions, once per VM (Linux, glibc ≥ 2.35 — Ubuntu 22.04+, Debian
    install leaves nothing behind; `uninstall` removes the engine with the
    rest of the worker.
 
+**How do I know whether a node has the engine?** The engine lives on the
+worker's filesystem, so the worker reports it: every heartbeat carries the
+installed version (`vms.browser_engine_version`, migration 0009 — `null` means
+"the worker says it has no engine"). The dashboard's browser card shows a
+status dot — green with the version when it is installed, **red** when it is
+missing (the run button is then disabled and the reason is spelled out),
+grey while the worker has not reported yet. A worker that predates the
+report never sends the field, so its state stays "unknown" and the run is
+**not** blocked: "unknown" is not "missing".
+
 ## How it works
 
 ```
