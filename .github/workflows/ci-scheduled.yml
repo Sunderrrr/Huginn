@@ -87,7 +87,7 @@ jobs:
           HUGINN_BOOTSTRAP_ADMIN_PASSWORD: parity-admin-pass-123
         run: |
           ./target/release/huginn-hub > /tmp/hub.log 2>&1 &
-          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8000/healthz && break; sleep 1; done
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8000/healthz && break; sleep 1; done
           ./target/release/huginn-parity capture --base http://127.0.0.1:8000 \
             --admin-user admin --admin-pass parity-admin-pass-123 --out /tmp/golden
           ./target/release/huginn-parity diff golden/python /tmp/golden

@@ -193,7 +193,7 @@ jobs:
           HUGINN_BOOTSTRAP_ADMIN_USERNAME=admin \
           HUGINN_BOOTSTRAP_ADMIN_PASSWORD=parity-admin-pass-123 \
           ./target/release/huginn-hub > /tmp/hub-rs.log 2>&1 &
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             curl -sf http://127.0.0.1:8000/healthz && exit 0
             sleep 1
           done
