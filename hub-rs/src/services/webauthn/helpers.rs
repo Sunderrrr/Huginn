@@ -563,6 +563,7 @@ pub(super) fn verify_signature(
 }
 
 pub(super) fn p256_verifying_key(x: &[u8], y: &[u8]) -> Result<p256::ecdsa::VerifyingKey, String> {
+    use p256::elliptic_curve::sec1::FromSec1Point;
     if x.len() != 32 || y.len() != 32 {
         return Err("EC2 coordinates were not 32 bytes".into());
     }
@@ -570,7 +571,7 @@ pub(super) fn p256_verifying_key(x: &[u8], y: &[u8]) -> Result<p256::ecdsa::Veri
     point.push(0x04);
     point.extend_from_slice(x);
     point.extend_from_slice(y);
-    let point = p256::EncodedPoint::from_bytes(&point)
+    let point = p256::Sec1Point::from_bytes(&point)
         .map_err(|e| format!("Could not parse EC2 point: {e}"))?;
     let key = p256::PublicKey::from_sec1_bytes(point.as_bytes())
         .map_err(|e| format!("EC2 point was not on the P-256 curve: {e}"))?;
