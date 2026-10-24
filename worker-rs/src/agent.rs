@@ -165,7 +165,11 @@ impl Agent {
             .heartbeat(HeartbeatRequest {
                 worker_version: config::VERSION.into(),
                 browser_engine_version: crate::browser::installed_version(&self.state_dir),
-                ..Default::default()
+                // The node's own address on the network the hub is reached
+                // from — the hub would otherwise keep the NAT/bridge address
+                // it saw at enrollment, which is ambiguous (podman allocates
+                // the same subnets on different hosts).
+                ip_address: crate::hubclient::outbound_ip(client.base_url()).unwrap_or_default(),
             })
             .await
         {
