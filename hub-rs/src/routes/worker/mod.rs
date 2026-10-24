@@ -470,4 +470,26 @@ mod tests {
             json!({"detail": "invalid worker id"})
         );
     }
+
+    #[tokio::test]
+    async fn an_anonymous_caller_never_learns_about_its_own_body() {
+        // The credentials are checked BEFORE the payload is parsed: an
+        // anonymous caller gets 401 whatever it sends, never a 400 that would
+        // tell it the endpoint is alive and what was wrong with its body.
+        for (uri, body) in [
+            ("/api/worker/heartbeat", json!({"worker_version": 42})),
+            (
+                "/api/worker/tasks/11111111-1111-1111-1111-111111111111/result",
+                json!({"status": "not-a-status"}),
+            ),
+        ] {
+            let app = router(test_state(false));
+            let response = app.oneshot(json_request("POST", uri, body)).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{uri} must answer 401 before looking at the body"
+            );
+        }
+    }
 }
