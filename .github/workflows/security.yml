@@ -15,10 +15,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   secrets:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -34,9 +39,28 @@ jobs:
         # The repository's own .gitleaks.toml (repo root) is picked up
         # automatically by gitleaks.
 
+  dependency-review:
+    name: dependency review (new advisories only)
+    # Only on pull requests: it diffs the base against the head, so it is
+    # meaningless on a push to main.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Review the dependency changes
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          # Only HIGH/CRITICAL block a merge: a moderate advisory in a
+          # dev-only dependency is reported but does not stop the day.
+          fail-on-severity: high
+
   npm-audit:
     name: dependency audit (npm, production bundle)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: dashboard
@@ -47,6 +71,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
       - name: Install (lockfile-exact)
         run: npm ci
       - name: Audit the production bundle
@@ -55,7 +81,10 @@ jobs:
   cargo-audit:
     name: dependency audit (cargo, ${{ matrix.component }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      # One crate's failure must not hide the other crates' results.
+      fail-fast: false
       matrix:
         component: [worker-rs, mcp-rs, hub-rs]
     steps:
@@ -75,6 +104,11 @@ jobs:
   image:
     name: container image scan (trivy)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [hub-rs, worker-rs, mcp-rs]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -82,12 +116,12 @@ jobs:
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           trivy-version: v0.76.1
-      - name: Build the hub image
-        run: docker build -t huginn-hub:ci hub-rs
+      - name: Build the image
+        run: docker build -t "huginn-${{ matrix.component }}:ci" "${{ matrix.component }}"
       - name: Scan the image (HIGH + CRITICAL)
         run: |
           trivy image --exit-code 1 --severity HIGH,CRITICAL \
-            --ignore-unfixed huginn-hub:ci
+            --ignore-unfixed "huginn-${{ matrix.component }}:ci"
       - name: IaC / config scan
         run: |
           trivy config --exit-code 1 --severity HIGH,CRITICAL deploy/

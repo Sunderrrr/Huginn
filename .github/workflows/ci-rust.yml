@@ -10,18 +10,23 @@ on:
   pull_request:
     paths: ["worker-rs/**", "mcp-rs/**", "hub-rs/**"]
 
+# A new push supersedes the previous run: cancel it instead of burning
+# runner minutes on an outdated commit.
+concurrency:
+  group: ci-rust-${{ github.ref }}
+  cancel-in-progress: true
+
 # Runs per crate (worker-rs, mcp-rs, hub-rs — all land with their crate on the
 # branch). CI policy: fmt clean, clippy warnings as errors, tests green, zero
 # known vulnerabilities in dependencies. hub-rs additionally runs the API
 # parity gate: its responses must match the Python hub's golden responses.
 
-# Runs per crate (worker-rs, mcp-rs). CI policy: fmt clean, clippy warnings as
-# errors, tests green, zero known vulnerabilities in dependencies.
-
 jobs:
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
+      fail-fast: false
       matrix:
         component: [worker-rs, mcp-rs, hub-rs]
     defaults:
@@ -42,11 +47,13 @@ jobs:
       - name: Format
         run: cargo fmt --check
       - name: Lint (clippy, warnings as errors)
-        run: cargo clippy --release --locked -- -D warnings
+        # --all-targets: the test code is linted too (a warning there is a
+        # warning).
+        run: cargo clippy --release --locked --all-targets -- -D warnings
       - name: Test
         run: cargo test --release --locked
       - name: Audit dependencies
-        uses: rustsec/audit-check@v2.0.0
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ${{ matrix.component }}
@@ -56,10 +63,40 @@ jobs:
           # config from the workspace root.
           ignore: RUSTSEC-2023-0071
 
-  # The migration release gate: hub-rs must answer exactly like the Python hub
-  # (golden responses captured from it, see hub-rs/huginn-parity (Rust binary)).
+  # The browser end-to-end test: a REAL Obscura release is downloaded,
+  # installed (SHA-256 verified), driven through every step action against a
+  # local fixture, and torn down. It is the flagship feature — it must not
+  # rot in a branch. Needs network access to the GitHub release CDN.
+  worker-browser-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: worker-rs
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: worker-rs
+      - name: Build
+        run: cargo build --release --locked
+      - name: Browser end-to-end (real Obscura)
+        env:
+          # Opt-in flag of the ignored E2E test: downloads the pinned
+          # release, installs it, drives every action, checks the cleanup.
+          HUGINN_OBSCURA_E2E: "1"
+        run: cargo test --release --locked -- --ignored
+
+  # The migration release gate: hub-rs must answer exactly like the Python
+  # hub (golden responses captured from it, see hub-rs/huginn-parity (Rust
+  # binary)). The same job also runs the live-DB test suites (they need a
+  # real PostgreSQL — the service below provides one).
   hub-rs-parity:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -88,6 +125,13 @@ jobs:
           workspaces: hub-rs
       - name: Build
         run: cargo build --release --locked
+      - name: Live-database test suites
+        # These suites (RBAC, enrollment, session revocation, browser
+        # endpoints, audit chain…) need a real PostgreSQL; they drop and
+        # recreate the schema, so they run BEFORE the hub boots.
+        env:
+          HUGINN_TEST_DATABASE_URL: postgresql://huginn:x@127.0.0.1:5432/huginn
+        run: cargo test --release --locked
       - name: Start hub-rs against the service database
         run: |
           HUGINN_ENV=dev \
