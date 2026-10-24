@@ -25,6 +25,25 @@ pub struct HeartbeatRequest {
     pub worker_version: Option<String>,
     #[serde(default)]
     pub ip_address: Option<String>,
+    /// The Obscura engine version installed on the node (migrations/0009).
+    /// `Some(None)` = the node reports NO engine; `None` = the field was not
+    /// sent at all (a worker that predates the report) — the stored state is
+    /// then left untouched instead of being overwritten with "not installed".
+    /// The engine lives on the worker's filesystem, so this is the only way
+    /// for the hub (and the dashboard) to know whether the node can run
+    /// browser steps.
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub browser_engine_version: Option<Option<String>>,
+}
+
+/// Distinguish an absent field (`None`) from an explicit `null`
+/// (`Some(None)`) — see [`HeartbeatRequest::browser_engine_version`].
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 impl HeartbeatRequest {
@@ -43,6 +62,20 @@ impl HeartbeatRequest {
                 ));
             }
             validate_ip_literal(ip)?;
+        }
+        if let Some(Some(v)) = &self.browser_engine_version {
+            // A version tag: printable ASCII, bounded (it is stored and
+            // shown in the dashboard).
+            if v.is_empty() || v.chars().count() > 64 {
+                return Err(ApiError::unprocessable_entity(
+                    "browser_engine_version must be 1-64 characters",
+                ));
+            }
+            if !v.chars().all(|c| ('\x21'..='\x7e').contains(&c)) {
+                return Err(ApiError::unprocessable_entity(
+                    "browser_engine_version must be printable ASCII without spaces",
+                ));
+            }
         }
         Ok(())
     }
@@ -82,6 +115,20 @@ pub(super) async fn heartbeat(
     crate::models::vm::update_heartbeat(&state.pool, vm.id, Utc::now())
         .await
         .map_err(db_err)?;
+    // The engine state the worker reports (migrations/0009): a node with no
+    // engine reports an explicit null, which the dashboard shows as "not
+    // installed". A worker that does not report at all leaves the stored
+    // state untouched (the field is absent).
+    if let Some(reported) = &body.browser_engine_version {
+        crate::models::vm::update_browser_engine_state(
+            &state.pool,
+            vm.id,
+            reported.as_deref(),
+            Utc::now(),
+        )
+        .await
+        .map_err(db_err)?;
+    }
     if body.worker_version.is_some() || body.ip_address.is_some() {
         crate::models::vm::update(
             &state.pool,
@@ -185,13 +232,47 @@ mod tests {
         let ok = HeartbeatRequest {
             worker_version: Some("v1.2.3".into()),
             ip_address: Some("192.168.1.9".into()),
+            browser_engine_version: None,
         };
         assert!(ok.validate().is_ok());
         let bad = HeartbeatRequest {
             worker_version: None,
             ip_address: Some("<script>".into()),
+            browser_engine_version: None,
         };
         assert!(bad.validate().is_err());
+    }
+
+    /// The engine state is only trusted when it is a printable, bounded
+    /// version tag.
+    #[test]
+    fn heartbeat_validation_checks_the_engine_version() {
+        let ok = HeartbeatRequest {
+            worker_version: None,
+            ip_address: None,
+            browser_engine_version: Some(Some("v0.2.5".into())),
+        };
+        assert!(ok.validate().is_ok());
+        // Explicitly "no engine" is valid.
+        let none = HeartbeatRequest {
+            worker_version: None,
+            ip_address: None,
+            browser_engine_version: Some(None),
+        };
+        assert!(none.validate().is_ok());
+        // A version with a space or a control character is refused.
+        let bad = HeartbeatRequest {
+            worker_version: None,
+            ip_address: None,
+            browser_engine_version: Some(Some("v0.2.5\nrm -rf /".into())),
+        };
+        assert!(bad.validate().is_err());
+        let empty = HeartbeatRequest {
+            worker_version: None,
+            ip_address: None,
+            browser_engine_version: Some(Some(String::new())),
+        };
+        assert!(empty.validate().is_err());
     }
 
     // ---- release URLs ------------------------------------------------------

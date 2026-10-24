@@ -164,6 +164,7 @@ impl Agent {
         let resp = match client
             .heartbeat(HeartbeatRequest {
                 worker_version: config::VERSION.into(),
+                browser_engine_version: crate::browser::installed_version(&self.state_dir),
                 ..Default::default()
             })
             .await
