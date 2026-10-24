@@ -65,6 +65,30 @@ const PRESET_STEPS = {
 
 type Preset = "shot" | "text" | "pdf" | "custom";
 
+// The engine state of a node, as reported by its worker (the engine lives on
+// the worker's filesystem, so only the worker can answer). "unknown" means
+// the worker has not reported yet (or predates the report) — the run is NOT
+// blocked in that case, we simply do not know.
+type EngineState = "installed" | "missing" | "unknown";
+
+function engineState(vm: VM): EngineState {
+  if (vm.browser_engine_version) return "installed";
+  if (vm.browser_engine_reported_at) return "missing";
+  return "unknown";
+}
+
+const ENGINE_LABEL: Record<EngineState, string> = {
+  installed: "engine installed",
+  missing: "engine not installed",
+  unknown: "engine state unknown",
+};
+
+const ENGINE_COLOR: Record<EngineState, string> = {
+  installed: "var(--signal)",
+  missing: "var(--blood)",
+  unknown: "var(--muted)",
+};
+
 const PRESET_BUTTONS: { id: Preset; label: string }[] = [
   { id: "shot", label: "Screenshot" },
   { id: "text", label: "Page text" },
@@ -100,6 +124,9 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
   const isOperator = user?.role === "operator";
   const isActive = vm.state === "active" || vm.state === "offline";
   const canRun = (isAdmin || isOperator) && isActive;
+  // The engine state the worker reported (its own filesystem) — the operator
+  // must see whether "Run" can work before clicking it.
+  const engine = engineState(vm);
 
   const setEnabled = useSetBrowserEnabled();
   const install = useInstallBrowserEngine();
@@ -203,6 +230,33 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
         </div>
       </div>
 
+      {/* The engine state of the node (reported by its worker) — a red dot
+          means the browser engine is missing and no step can run. */}
+      <div
+        className="row"
+        style={{ gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: ENGINE_COLOR[engine],
+            color: ENGINE_COLOR[engine],
+            boxShadow: "0 0 8px currentColor",
+            flex: "0 0 auto",
+          }}
+        />
+        <span style={{ fontSize: 12, color: ENGINE_COLOR[engine] }}>
+          {ENGINE_LABEL[engine]}
+          {vm.browser_engine_version ? ` · ${vm.browser_engine_version}` : ""}
+        </span>
+        {engine === "unknown" && (
+          <span className="muted tiny">the worker has not reported its engine state yet</span>
+        )}
+      </div>
+
       {/* Admin: capability gate + engine install */}
       {isAdmin && (
         <div className="stack" style={{ gap: 14 }}>
@@ -222,14 +276,24 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
               style={{ display: "inline-block" }}
             >
               <button
-                className="btn btn--sm"
+                className={`btn btn--sm ${engine === "missing" ? "btn--primary" : ""}`}
                 onClick={installEngine}
                 disabled={!isActive || install.isPending}
               >
-                {install.isPending ? <span className="spin" /> : "Install browser engine"}
+                {install.isPending ? (
+                  <span className="spin" />
+                ) : engine === "installed" ? (
+                  "Reinstall browser engine"
+                ) : (
+                  "Install browser engine"
+                )}
               </button>
             </span>
-            <span className="muted tiny">pinned engine · ~70 MB download · 1–2 min</span>
+            <span className="muted tiny">
+              {engine === "installed"
+                ? `pinned engine · reinstalling downloads ~70 MB`
+                : "pinned engine · ~70 MB download · 1–2 min"}
+            </span>
           </div>
           {currentInstall && <TaskResultView task={currentInstall} />}
         </div>
@@ -250,6 +314,12 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
                 {vm.browser_enabled
                   ? "enabled on this node"
                   : "disabled on this node — an admin must enable it first"}
+              </div>
+            )}
+            {engine === "missing" && (
+              <div className="tiny" style={{ color: "var(--blood)", marginBottom: 12 }}>
+                the Obscura engine is not installed on this node — an admin must install it
+                before browser steps can run
               </div>
             )}
             <div className="row" style={{ gap: 4, marginBottom: 10 }}>
@@ -287,9 +357,22 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
                   }}
                 />
               </label>
-              <button className="btn btn--primary" onClick={doRun} disabled={run.isPending}>
-                {run.isPending ? <span className="spin" /> : "Run ›"}
-              </button>
+              <span
+                title={
+                  engine === "missing"
+                    ? "the Obscura engine is not installed on this node"
+                    : undefined
+                }
+                style={{ display: "inline-block" }}
+              >
+                <button
+                  className="btn btn--primary"
+                  onClick={doRun}
+                  disabled={run.isPending || engine === "missing"}
+                >
+                  {run.isPending ? <span className="spin" /> : "Run ›"}
+                </button>
+              </span>
             </div>
             {stepsError && (
               <div className="tiny" style={{ color: "var(--amber)", marginTop: 8 }}>

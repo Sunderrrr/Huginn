@@ -25,6 +25,8 @@ function vm(overrides: Partial<VM> = {}): VM {
     created_at: "2026-01-01T00:00:00Z",
     tags: [],
     browser_enabled: false,
+    browser_engine_version: null,
+    browser_engine_reported_at: null,
     ...overrides,
   };
 }
@@ -91,6 +93,39 @@ function renderCard(v: VM) {
 describe("BrowserAutomation", () => {
   beforeEach(() => setToken("test-token"));
   afterEach(() => vi.unstubAllGlobals());
+
+  it("shows the engine state reported by the worker", async () => {
+    stubApi(user("operator"));
+    renderCard(vm({ browser_engine_version: "v0.2.5" }));
+    expect(await screen.findByText(/engine installed · v0\.2\.5/)).toBeInTheDocument();
+  });
+
+  it("flags a missing engine and blocks the run", async () => {
+    stubApi(user("operator"));
+    renderCard(vm({ browser_engine_reported_at: "2026-01-01T00:00:00Z" }));
+    expect(await screen.findByText(/engine not installed/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/the Obscura engine is not installed on this node/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run ›" })).toBeDisabled();
+  });
+
+  it("does not block the run when the engine state is unknown", async () => {
+    stubApi(user("operator"));
+    renderCard(vm());
+    expect(await screen.findByText(/engine state unknown/)).toBeInTheDocument();
+    // findByRole waits for the auth context to resolve (the runner only
+    // renders once the user's role is known).
+    expect(await screen.findByRole("button", { name: "Run ›" })).not.toBeDisabled();
+  });
+
+  it("offers a reinstall once the engine is installed", async () => {
+    stubApi(user("admin"));
+    renderCard(vm({ browser_engine_version: "v0.2.5" }));
+    expect(
+      await screen.findByRole("button", { name: "Reinstall browser engine" }),
+    ).toBeInTheDocument();
+  });
 
   it("shows the admin gate, engine install and step runner", async () => {
     stubApi(user("admin"));

@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **The Obscura engine state of a node is now visible** (the engine lives on
+  the *worker's* filesystem, so only the worker can answer): the worker
+  reports the installed engine version in its heartbeat, the hub stores it
+  (`vms.browser_engine_version`, migration 0009) and exposes it on the VM
+  payload, and the dashboard's browser card shows a **status dot** — green
+  with the version when the engine is installed, **red** when it is missing
+  (with the run button disabled and the reason spelled out), grey while the
+  worker has not reported yet (a worker that predates the report never
+  reports, so its state stays "unknown" and the run is not blocked). The
+  install button becomes "Reinstall browser engine" once the engine is
+  there. A worker that reports no engine says so explicitly — the field's
+  absence (an older worker) is never read as "not installed".
+
 ## [1.9.0] — 2026-10-25
 
 ### Security

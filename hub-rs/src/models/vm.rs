@@ -14,7 +14,7 @@ use super::enums::{ExecMode, VMState, WorkerArch};
 const COLUMNS: &str = "id, name, hostname, ip_address, arch, os_info, state, exec_mode, \
                       worker_version, worker_secret_hash, enrollment_token_id, approved_by, \
                       last_heartbeat_at, enrolled_at, approved_at, created_at, updated_at, \
-                      browser_enabled";
+                      browser_enabled, browser_engine_version, browser_engine_reported_at";
 
 /// A fleet VM and its worker.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -43,6 +43,14 @@ pub struct VM {
     /// keeps rows/fixtures captured before 0005 decoding.
     #[serde(default)]
     pub browser_enabled: bool,
+    /// The Obscura engine version the worker reported (migrations/0009),
+    /// `None` when no engine is installed. The engine lives on the worker's
+    /// filesystem, so only the worker can answer that.
+    #[serde(default)]
+    pub browser_engine_version: Option<String>,
+    /// When the worker last reported its engine state.
+    #[serde(default)]
+    pub browser_engine_reported_at: Option<DateTime<Utc>>,
 }
 
 impl VM {
@@ -238,6 +246,27 @@ pub async fn update_heartbeat(
         "UPDATE vms SET last_heartbeat_at = $2, updated_at = $2 WHERE id = $1 RETURNING {COLUMNS}"
     ))
     .bind(id)
+    .bind(at)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Record the Obscura engine state the worker reported (migrations/0009).
+/// `version` is `None` when the node has no engine installed; the report
+/// timestamp tells the dashboard how fresh that statement is.
+pub async fn update_browser_engine_state(
+    pool: &PgPool,
+    id: Uuid,
+    version: Option<&str>,
+    at: DateTime<Utc>,
+) -> Result<Option<VM>, DbError> {
+    let row = sqlx::query_as::<_, VM>(&format!(
+        "UPDATE vms SET browser_engine_version = $2, browser_engine_reported_at = $3, \
+         updated_at = $3 WHERE id = $1 RETURNING {COLUMNS}"
+    ))
+    .bind(id)
+    .bind(version)
     .bind(at)
     .fetch_optional(pool)
     .await?;
@@ -476,6 +505,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             browser_enabled: false,
+            browser_engine_version: None,
+            browser_engine_reported_at: None,
         };
         let v = serde_json::to_value(&row).unwrap();
         assert_eq!(v["arch"], "arm64");
