@@ -1,5 +1,11 @@
 # Huginn hub image (Rust).
 FROM rust:1-slim AS build
+# jsonwebtoken runs on the `aws_lc_rs` backend (see Cargo.toml): aws-lc-sys
+# builds BoringSSL with CMake, so the build stage needs cmake + a generator
+# (make). The runtime stage is a separate, slim image — none of this ships.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake make \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY migrations ./migrations

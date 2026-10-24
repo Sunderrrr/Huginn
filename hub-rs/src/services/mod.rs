@@ -38,3 +38,21 @@ pub(crate) fn is_loopback_host(host: &str) -> bool {
         Err(_) => false,
     }
 }
+
+/// Test-only key material shared by the service modules' fixtures.
+#[cfg(test)]
+pub(crate) mod test_keys {
+    /// A distinct, ephemeral P-256 secret key per call. The scalar comes from
+    /// a process-local counter (never zero, always below the group order), so
+    /// the fixtures are reproducible and two of them never share a key. The
+    /// elliptic-curve stack (0.14) no longer ships an OS RNG inside
+    /// `rand_core`, so the keys are derived rather than sampled.
+    pub(crate) fn ephemeral_p256_key() -> p256::SecretKey {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        let mut bytes = [0u8; 32];
+        bytes[28..].copy_from_slice(&n.to_be_bytes());
+        p256::SecretKey::from_slice(&bytes).expect("counter-derived scalar is in range")
+    }
+}

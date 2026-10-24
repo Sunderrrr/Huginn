@@ -126,8 +126,8 @@ pub(crate) mod tests {
                     })
                 }
                 TestKey::Ec(sk) => {
-                    use p256::elliptic_curve::sec1::ToEncodedPoint;
-                    let point = sk.public_key().to_encoded_point(false);
+                    use p256::elliptic_curve::sec1::ToSec1Point;
+                    let point = sk.public_key().to_sec1_point(false);
                     let bytes = point.as_bytes();
                     serde_json::json!({
                         "kty": "EC", "kid": kid, "alg": "ES256", "use": "sig", "crv": "P-256",
@@ -177,7 +177,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn gen_ec() -> (TestKey, serde_json::Value) {
-        let key = TestKey::Ec(p256::SecretKey::random(&mut rand::rngs::OsRng));
+        let key = TestKey::Ec(crate::services::test_keys::ephemeral_p256_key());
         let jwk = key.jwk("ec-key");
         (key, jwk)
     }
