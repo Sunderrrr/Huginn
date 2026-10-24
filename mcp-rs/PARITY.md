@@ -48,7 +48,7 @@ Le hub voit exactement les mêmes appels REST (mêmes headers, mêmes corps).
 | `browser_enable(vm_id, enabled)` | Toggles the browser automation capability on a VM (admin-only hub route, audited). Off by default — the hub refuses every browser task while it is off. |
 | `browser_engine_check()` | Triggers an immediate Obscura release check (admin) and re-pins the settings on update. |
 | `browser_install(vm_id)` | Queues the Obscura engine install (admin-only hub route, hub-pinned version + SHA-256). |
-| `browser_start(vm_id, steps, timeout)` | Executes a step sequence on a headless browser (navigate, click, type, eval, wait_for, screenshot, get_text, get_html). |
+| `browser_start(vm_id, steps, timeout, wait)` | Executes a step sequence on a headless browser (navigate, click, type, eval, wait_for, screenshot, get_text, get_html). Waits for the result by default (`wait=false` returns the task handle). |
 | `browser_navigate(vm_id, url, timeout)` | Shortcut: navigate + get_text. |
 | `browser_screenshot(vm_id, url, quality, timeout)` | Shortcut: navigate + screenshot (JPEG/PNG, optional full page). |
 | `browser_pdf(vm_id, url, timeout)` | Shortcut: navigate + pdf (Page.printToPDF, base64 PDF in stdout). |
