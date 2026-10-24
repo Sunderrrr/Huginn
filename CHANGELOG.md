@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] — 2026-10-25
+
+### Fixed
+- **The fleet list showed the wrong IP**: the hub stored the address it saw
+  at enrollment — the NAT/bridge address of the node's network, which
+  podman allocates *identically* on different hosts (two nodes showed the
+  same `10.89.0.1`). The worker now reports the address the kernel
+  actually picks to reach the hub (its route's source address), at
+  enrollment and at every heartbeat.
+
 ## [1.10.0] — 2026-10-25
 
 ### Added
