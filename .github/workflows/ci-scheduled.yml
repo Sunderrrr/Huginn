@@ -11,9 +11,40 @@ on:
     - cron: "17 4 * * 1" # Mondays 04:17 UTC
   workflow_dispatch:
 
+# No cancel-in-progress here: a weekly run that gets interrupted halfway is
+# worse than one that finishes.
+concurrency:
+  group: ci-scheduled
+
 jobs:
-  audit-and-parity:
+  audit:
+    name: dependency audit (${{ matrix.component }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [worker-rs, mcp-rs, hub-rs]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # No token left in .git/config — a build script must not be able
+          # to exfiltrate the job's GITHUB_TOKEN.
+          persist-credentials: false
+      - name: Audit the lockfile
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: ${{ matrix.component }}
+          # RUSTSEC-2023-0071 (unpatched) — rationale in audit.toml at the
+          # repo root: `rsa` only enters hub-rs's lockfile through sqlx's
+          # unused mysql feature.
+          ignore: RUSTSEC-2023-0071
+
+  parity:
+    name: API parity gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -27,28 +58,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+    defaults:
+      run:
+        working-directory: hub-rs
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # No token left in .git/config — a build script must not be able
-          # to exfiltrate the job's GITHUB_TOKEN.
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: hub-rs
-      - name: Audit all crates
-        run: |
-          cargo install cargo-audit --quiet
-          for d in hub-rs worker-rs mcp-rs; do
-            echo "=== $d ==="
-            (cd "$d" && cargo audit)
-          done
       - name: Build hub-rs
-        working-directory: hub-rs
         run: cargo build --release --locked
       - name: Boot hub-rs and run the parity gate
-        working-directory: hub-rs
         env:
           HUGINN_ENV: dev
           HUGINN_REQUIRE_TLS: "false"
