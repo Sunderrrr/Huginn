@@ -124,6 +124,13 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: hub-rs
+      - name: Build toolchain (BoringSSL / aws-lc-sys)
+        # jsonwebtoken runs on the `aws_lc_rs` backend: aws-lc-sys compiles
+        # BoringSSL with CMake. Installed explicitly so a runner image change
+        # cannot break the release build silently.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake make
       - name: Build + test hub
         working-directory: hub-rs
         run: |

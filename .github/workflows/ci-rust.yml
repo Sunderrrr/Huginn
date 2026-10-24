@@ -44,6 +44,15 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ matrix.component }}
+      - name: Build toolchain (BoringSSL / aws-lc-sys)
+        # jsonwebtoken runs on the `aws_lc_rs` backend, whose aws-lc-sys
+        # build compiles BoringSSL with CMake. The runner image ships
+        # cmake/make, but the dependency is installed explicitly so a runner
+        # image change cannot break the build silently.
+        if: matrix.component == 'hub-rs'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake make
       - name: Format
         run: cargo fmt --check
       - name: Lint (clippy, warnings as errors)
@@ -58,9 +67,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ${{ matrix.component }}
           # RUSTSEC-2023-0071 (unpatched) — rationale in audit.toml at the repo
-          # root: `rsa` only enters hub-rs's lockfile through sqlx's unused
-          # mysql feature. Kept in both places because audit-check resolves the
-          # config from the workspace root.
+          # root: `rsa` IS compiled into hub-rs (WebAuthn RS256 verification),
+          # but the Marvin attack targets PKCS#1 v1.5 *decryption*, which the
+          # hub never performs; the verification path it uses is constant-time.
+          # Kept in both places because audit-check resolves the config from
+          # the workspace root.
           ignore: RUSTSEC-2023-0071
 
   # The browser end-to-end test: a REAL Obscura release is downloaded,
@@ -122,6 +133,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: hub-rs
+      - name: Build toolchain (BoringSSL / aws-lc-sys)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake make
       - name: Live-database test suites
         env:
           HUGINN_TEST_DATABASE_URL: postgresql://huginn:x@127.0.0.1:5432/huginn
@@ -159,6 +174,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: hub-rs
+      - name: Build toolchain (BoringSSL / aws-lc-sys)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake make
       - name: Build
         run: cargo build --release --locked
       - name: Start hub-rs against the service database

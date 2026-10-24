@@ -129,6 +129,31 @@ Challenge-token bypass (scope rejected by all 3 principal implementations) · ro
 2. **npm dev-only advisories** (vitest 5, vite 8, typescript-eslint 8): breaking majors, not in the production bundle. Scheduled for a maintenance window.
 3. **F-10 (TOTP replay on disable/regenerate)**: no extra attacker capability; fixing it would change the parity behaviour. Documented.
 
+### 7.1 Addendum — advisory published after the audit (remediated)
+
+`RUSTSEC-2026-0387` (`crypto-bigint` < 0.7.6, published 2026-10-23) appeared
+after this report was written. It reached the hub through
+`elliptic-curve 0.13` → `p256`/`p384` 0.13 and is **remediated, not ignored**:
+
+- the elliptic-curve stack moves to 0.14 (`crypto-bigint 0.7.7`);
+- `jsonwebtoken` moves from the `rust_crypto` backend (which pins `p256` 0.13)
+  to the `aws_lc_rs` backend — same verification semantics for RS256/ES256,
+  no vulnerable crate left in the tree;
+- `cargo audit` reports **0 vulnerabilities** for the three crates, with no
+  new ignore.
+
+**Correction — `RUSTSEC-2023-0071` (`rsa`):** the rationale recorded in
+`audit.toml` at the time of the audit ("`rsa` only enters the lockfile
+through sqlx's unused mysql feature, so it is not compiled into any of our
+binaries") was **wrong**: `rsa` is a direct dependency of the hub (WebAuthn
+RS256 attestation verification). The advisory still does not apply, but for a
+different and verifiable reason: the Marvin attack targets PKCS#1 v1.5
+**decryption** (`rsa::algorithms::pkcs1v15::decrypt_inner`), which the hub
+never performs, and the path it does use — signature **verification**
+(`pkcs1v15_sign_unpad`) — is constant-time: every comparison goes through
+`subtle::ConstantTimeEq` and is accumulated without early exit. The
+`audit.toml` comment now states this.
+
 ## 8. Limitations
 
 - No DAST (OWASP ZAP) — no dedicated staging environment was available; the audit used live-PostgreSQL integration tests instead.
