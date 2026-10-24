@@ -37,8 +37,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ${{ matrix.component }}
           # RUSTSEC-2023-0071 (unpatched) — rationale in audit.toml at the
-          # repo root: `rsa` only enters hub-rs's lockfile through sqlx's
-          # unused mysql feature.
+          # repo root: `rsa` IS compiled into hub-rs (WebAuthn RS256
+          # verification), but the Marvin attack targets PKCS#1 v1.5
+          # *decryption*, which the hub never performs; the verification path
+          # it uses is constant-time.
           ignore: RUSTSEC-2023-0071
 
   parity:
@@ -89,3 +91,29 @@ jobs:
           ./target/release/huginn-parity capture --base http://127.0.0.1:8000 \
             --admin-user admin --admin-pass parity-admin-pass-123 --out /tmp/golden
           ./target/release/huginn-parity diff golden/python /tmp/golden
+
+  # The worker also ships for Windows (install.ps1, `#[cfg(windows)]` code
+  # paths). Nothing compiled it, so a Windows-only break could only surface on
+  # a user's machine. This weekly job compiles the worker and its test
+  # binaries on a Windows runner — the guard is *not* a merge gate yet (the
+  # Windows test code is not known to compile), it exists to make the rot
+  # visible instead of silent.
+  worker-windows:
+    name: worker (windows build)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: worker-rs
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: worker-rs
+      - name: Build the worker (MSVC)
+        run: cargo build --release --locked
+      - name: Compile the test binaries (no run)
+        run: cargo test --release --locked --no-run

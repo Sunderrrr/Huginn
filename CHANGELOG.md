@@ -7,6 +7,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Security
+- **The container base images are pinned by digest** (`rust:1-slim`,
+  `debian:stable-slim`, `postgres:16-alpine`, `caddy:2-alpine`): a tag can be
+  re-pointed silently, a digest cannot. Dependabot keeps the digests current
+  (the `docker` ecosystem is now configured for `hub-rs/`, `mcp-rs/` and
+  `deploy/`).
+- **`main` is protected by a repository ruleset**: a pull request is required
+  (admins included), the 15 CI checks are *required status checks* (a merge is
+  blocked while one is red), no force-push, no branch deletion, linear
+  history. The rules are documented in CONTRIBUTING.md.
+- **The workflows are linted** (`actionlint`) on every pull request: a syntax
+  error, a wrong `permissions:` block or an unresolvable action reference is
+  caught before it can silently disable a gate.
 - **RUSTSEC-2026-0387 (crypto-bigint) — remediated, not ignored**: a new
   advisory (published 2026-10-23) flags timing variability in operations that
   were meant to be constant-time in `crypto-bigint` < 0.7.6, which reached the
@@ -23,6 +35,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   verification), but the Marvin attack targets PKCS#1 v1.5 *decryption*, which
   the hub never performs, and the verification path it does use is
   constant-time (`subtle::ConstantTimeEq` accumulation, no early exit).
+
+### Fixed
+- **The worker is now compiled for Windows** in CI (weekly job): the Windows
+  path (`install.ps1`, `#[cfg(windows)]` code) had never been built by any
+  pipeline, so a Windows-only break could only surface on a user's machine.
+  The job compiles the worker and its test binaries on a Windows runner; it is
+  not a merge gate yet — the Windows test code is not known to compile — it
+  exists to make the rot visible instead of silent.
 - **Server-side session revocation** (audit finding F-08): a per-user
   `session_epoch` counter now travels in the access token and is compared
   with the stored value on every request. A logout, a password change or an

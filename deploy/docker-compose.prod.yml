@@ -23,7 +23,9 @@ x-hardening: &hardening
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # Pinned by digest (a tag can be re-pointed silently, a digest cannot);
+    # Dependabot keeps the digest current (.github/dependabot.yml).
+    image: postgres:16-alpine@sha256:7a8050e52090c5f77effbe7e0cbed4a0587306776c3f26dc99933a63c619eaf1
     container_name: huginn-postgres
     restart: unless-stopped
     security_opt:
@@ -129,7 +131,8 @@ services:
       - "80"
 
   caddy:
-    image: caddy:2-alpine
+    # Pinned by digest, like the PostgreSQL image above.
+    image: caddy:2-alpine@sha256:cc447f149425221422153c6cdf33a123b3f458839679f950298f68a690a54a5b
     container_name: huginn-caddy
     restart: unless-stopped
     security_opt:
