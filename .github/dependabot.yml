@@ -10,6 +10,36 @@
 # week.
 version: 2
 updates:
+  # The container base images are pinned by digest (a tag can be re-pointed
+  # silently, a digest cannot). Dependabot keeps those digests current.
+  - package-ecosystem: docker
+    directory: /hub-rs
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: UTC
+    labels:
+      - dependencies
+  - package-ecosystem: docker
+    directory: /mcp-rs
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: UTC
+    labels:
+      - dependencies
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: UTC
+    labels:
+      - dependencies
+
   - package-ecosystem: npm
     directory: /dashboard
     schedule:

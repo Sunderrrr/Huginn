@@ -73,6 +73,20 @@ Every PR must be green on these, enforced in CI:
   IaC scans.
 - **Dashboard**: lint, vitest, type-check and build.
 
+## Branch rules
+
+`main` is protected by a repository ruleset, so the rules below are enforced
+by the platform, not only by convention:
+
+- every change goes through a pull request — no direct push to `main`
+  (admins included);
+- the PR must be green: the 15 CI checks above are *required* status checks,
+  so a merge is blocked while one is failing or missing;
+- no force-push, no branch deletion, linear history only;
+- squash or merge commit (no rebase).
+
+Keep PRs focused: one change per PR.
+
 ### Parity gate (hub-rs)
 
 `hub-rs` must answer exactly like the reference API. If you touch an endpoint,
