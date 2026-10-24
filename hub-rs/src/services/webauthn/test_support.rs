@@ -4,6 +4,7 @@
 //! are exercised for real instead of being mocked out.
 use super::helpers::{cbor_encode, sha256, FLAG_AT, FLAG_UP, FLAG_UV};
 use super::*;
+use crate::services::test_keys::ephemeral_p256_key;
 use ciborium::value::Value;
 use serde_json::json;
 
@@ -29,10 +30,10 @@ pub(crate) enum FabricatedKey {
 impl FabricatedKey {
     /// ES256 — the algorithm every real passkey uses.
     pub(crate) fn es256() -> Self {
-        use p256::elliptic_curve::sec1::ToEncodedPoint;
-        let secret = p256::SecretKey::random(&mut rand::rngs::OsRng);
+        use p256::elliptic_curve::sec1::ToSec1Point;
+        let secret = ephemeral_p256_key();
         let signing = p256::ecdsa::SigningKey::from(secret.clone());
-        let point = secret.public_key().to_encoded_point(false);
+        let point = secret.public_key().to_sec1_point(false);
         let point = point.as_bytes();
         let cose = cose_ec2_key(&point[1..33], &point[33..65]);
         Self::Es256 { signing, cose }
