@@ -169,15 +169,26 @@ pub fn ensure_state_dir(dir: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// The icacls grants applied to the state directory: SYSTEM and the
+/// Administrators group, the latter by **SID** (`*S-1-5-32-544`) and never by
+/// its English name — on a localized Windows ("Administrateurs") the name does
+/// not resolve, so icacls warns instead of applying the right.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // used by the Windows build and the tests
+pub(crate) const STATE_DIR_ACL_GRANTS: &[&str] = &[
+    "/inheritance:r",
+    "/grant:r",
+    "SYSTEM:(OI)(CI)F",
+    "/grant:r",
+    "*S-1-5-32-544:(OI)(CI)F",
+];
+
 /// Locks the state dir down to SYSTEM and Administrators via icacls (ships
 /// with every supported Windows; fixed argv, no shell involved).
 #[cfg(windows)]
 fn restrict_dir_acl(dir: &Path) {
     let output = std::process::Command::new("icacls")
         .arg(dir)
-        .args(["/inheritance:r"])
-        .args(["/grant:r", "SYSTEM:(OI)(CI)F"])
-        .args(["/grant:r", "Administrators:(OI)(CI)F"])
+        .args(STATE_DIR_ACL_GRANTS)
         .output();
     match output {
         Ok(out) if out.status.success() => {}
@@ -427,5 +438,21 @@ mod tests {
             DEFAULT_BINARY_PATH,
             "C:\\Program Files\\Huginn\\huginn-worker.exe"
         );
+    }
+
+    /// The Administrators group is granted by SID: a localized Windows has
+    /// no "Administrators" name to resolve, and icacls would only warn.
+    #[test]
+    fn the_acl_grants_use_the_administrators_sid() {
+        let grants = STATE_DIR_ACL_GRANTS.join(" ");
+        assert!(
+            grants.contains("*S-1-5-32-544"),
+            "the Administrators SID is missing: {grants}"
+        );
+        assert!(
+            !grants.contains("Administrators"),
+            "the English group name must not be used: {grants}"
+        );
+        assert!(grants.contains("SYSTEM"), "SYSTEM must keep its grant");
     }
 }

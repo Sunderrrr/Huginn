@@ -18,6 +18,17 @@ use std::process::Stdio;
 #[cfg(unix)]
 use tokio::process::Command;
 
+/// Formats an OS error with its numeric code. The message itself is
+/// localized ("Accès refusé", "Access is denied"), the code is not — so the
+/// code is what makes a failure readable in a log.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // used by the Windows build and the tests
+pub(crate) fn win32_message(context: &str, io: &std::io::Error) -> String {
+    format!(
+        "{context}: Win32 error {} ({io})",
+        io.raw_os_error().unwrap_or(0)
+    )
+}
+
 /// The service name as registered with the OS supervisor: the systemd unit
 /// name on Linux, the SCM service name on Windows.
 #[cfg(unix)]
@@ -135,6 +146,21 @@ fn check_exit(status: std::process::ExitStatus) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The error a Windows operator sees must carry the numeric Win32 code:
+    /// the message text is localized ("Accès refusé"), the code is not.
+    #[test]
+    fn a_windows_error_reports_its_numeric_code() {
+        let io = std::io::Error::from_raw_os_error(5);
+        let msg = win32_message("set failure actions", &io);
+        assert!(
+            msg.starts_with("set failure actions: Win32 error 5"),
+            "unexpected message: {msg}"
+        );
+        // A code-less error still renders.
+        let msg = win32_message("open service", &std::io::Error::other("boom"));
+        assert!(msg.contains("Win32 error 0"), "unexpected message: {msg}");
+    }
 
     #[test]
     fn test_unit_content_matches_go_template() {
@@ -380,14 +406,23 @@ mod windows {
         }
     }
 
-    /// Installs the "HuginnWorker" service (own process, LocalSystem,
-    /// auto-start) launching `binary run --state-dir <dir>`.
+    /// Installs (or re-configures) the "HuginnWorker" service (own process,
+    /// LocalSystem, auto-start) launching `binary run --state-dir <dir>`.
     pub fn install(binary_path: &str, state_dir: &str) -> Result<(), String> {
         use windows_service::service::{
             ServiceAccess, ServiceAction, ServiceActionType, ServiceErrorControl,
             ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceStartType,
             ServiceType,
         };
+
+        // The SCM error, with its numeric code: the localized message alone
+        // is not enough to tell an access error from a bad parameter.
+        fn win32_error(context: &str, e: windows_service::Error) -> String {
+            match e {
+                windows_service::Error::Winapi(io) => super::win32_message(context, &io),
+                other => format!("{context}: {other}"),
+            }
+        }
 
         // The state dir must exist before the service first starts
         // (restricted ACLs — see config::ensure_state_dir).
@@ -409,12 +444,33 @@ mod windows {
             account_name: None, // LocalSystem
             account_password: None,
         };
-        let service = manager
-            .create_service(&info, ServiceAccess::CHANGE_CONFIG)
-            .map_err(|e| format!("create service: {e}"))?;
+        // Open the service explicitly with CHANGE_CONFIG, which is the right
+        // the SCM needs to reconfigure it (the recovery actions below).
+        //
+        // CreateServiceW takes the access mask as the service object's DACL,
+        // not as the rights on the handle it returns: relying on that handle
+        // is what made ChangeServiceConfig2W fail with an access error. And
+        // the install is idempotent: a service left over from an earlier run
+        // is opened and re-configured instead of failing with
+        // ERROR_SERVICE_EXISTS.
+        const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
+        let service = match manager.open_service(SERVICE_NAME, ServiceAccess::CHANGE_CONFIG) {
+            Ok(s) => s,
+            Err(windows_service::Error::Winapi(e))
+                if e.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST) =>
+            {
+                manager
+                    .create_service(&info, ServiceAccess::CHANGE_CONFIG)
+                    .map_err(|e| win32_error("create service", e))?;
+                manager
+                    .open_service(SERVICE_NAME, ServiceAccess::CHANGE_CONFIG)
+                    .map_err(|e| win32_error("open the new service", e))?
+            }
+            Err(e) => return Err(win32_error("open service", e)),
+        };
         service
             .set_description(SERVICE_DESCRIPTION)
-            .map_err(|e| format!("set description: {e}"))?;
+            .map_err(|e| win32_error("set description", e))?;
 
         // Restart on failure (5s/10s/60s backoff), counting non-zero clean
         // exits as failures: that is how the post-update exit gets the SCM
@@ -439,10 +495,10 @@ mod windows {
                     },
                 ]),
             })
-            .map_err(|e| format!("set failure actions: {e}"))?;
+            .map_err(|e| win32_error("set failure actions", e))?;
         service
             .set_failure_actions_on_non_crash_failures(true)
-            .map_err(|e| format!("set failure-actions flag: {e}"))?;
+            .map_err(|e| win32_error("set failure-actions flag", e))?;
         Ok(())
     }
 
