@@ -27,6 +27,11 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      # The audit step publishes its findings as a check run; without the
+      # permission, a real finding fails the job with an opaque error.
+      checks: write
     strategy:
       fail-fast: false
       matrix:
