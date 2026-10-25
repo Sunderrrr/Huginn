@@ -153,9 +153,10 @@ services:
       # TLS cert/key pair generated for this deployment (see deploy/README.md).
       - ./certs:/etc/caddy/certs:ro
       # Self-hosted worker artifacts served at /install.sh and /dist/*.
-      - ../scripts/install.sh:/srv/install.sh:ro
-      - ../scripts/uninstall.sh:/srv/uninstall.sh:ro
-      - ../scripts/install.ps1:/srv/install.ps1:ro
+      # The scripts are mounted as a DIRECTORY: podman copies a single-file
+      # bind mount, so an updated installer stayed invisible to the running
+      # container until it was recreated. A directory mount is always live.
+      - ../scripts:/srv/scripts:ro
       - ./artifacts:/srv/dist:ro
       - caddy_data:/data
       - caddy_config:/config

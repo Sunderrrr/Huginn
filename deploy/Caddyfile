@@ -78,15 +78,15 @@
 	# Self-hosted worker artifacts (served from mounted files), so the install
 	# one-liner works without depending on GitHub releases.
 	handle /install.sh {
-		root * /srv
+		root * /srv/scripts
 		file_server
 	}
 	handle /uninstall.sh {
-		root * /srv
+		root * /srv/scripts
 		file_server
 	}
 	handle /install.ps1 {
-		root * /srv
+		root * /srv/scripts
 		file_server
 	}
 	handle /dist/* {
