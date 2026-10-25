@@ -20,7 +20,15 @@ type OS = "linux" | "windows";
 /** Per-OS install command, shown after a token is generated. */
 function installCommand(os: OS, base: string, token: string): string {
   if (os === "windows") {
-    return `irm ${base}/install.ps1 | iex  # or: .\\install.ps1 -HUB_URL "${base}" -Token "${token}"`;
+    // Run the installer AS A FILE: `irm | iex` cannot bind HUB_URL and Token
+    // to the script's param() block, and a failure in a piped script closes
+    // the session. The commands are separated by semicolons so the whole
+    // line stays copy-pasteable in PowerShell 7.
+    return (
+      `$installer = "$env:TEMP\\huginn-install.ps1"; ` +
+      `Invoke-WebRequest -Uri "${base}/install.ps1" -OutFile $installer; ` +
+      `pwsh -NoProfile -ExecutionPolicy Bypass -File $installer -HUB_URL "${base}" -Token "${token}"`
+    );
   }
   return `curl -fsSLk ${base}/install.sh | HUB_URL=${base} TOKEN=${token} bash`;
 }
@@ -162,7 +170,16 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
             <button className="btn btn--sm" onClick={() => setRevealCmd((v) => !v)}>
               {revealCmd ? "hide" : "reveal"}
             </button>
-            <button className="btn btn--sm" onClick={() => copy(installCommand(os, base, created.token), "command copied")}>
+            <button
+              className="btn btn--sm"
+              aria-label="copy install command"
+              onClick={() =>
+                copy(
+                  installCommand(os, base, created.token),
+                  `${os === "windows" ? "Windows" : "Linux"} command copied`,
+                )
+              }
+            >
               copy
             </button>
           </div>
@@ -191,7 +208,13 @@ export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => vo
               {reveal ? created.token : mask(created.token)}
             </div>
             <button className="btn btn--sm" onClick={() => setReveal((v) => !v)}>{reveal ? "hide" : "reveal"}</button>
-            <button className="btn btn--sm" onClick={() => copy(created.token, "token copied")}>copy</button>
+            <button
+              className="btn btn--sm"
+              aria-label="copy enrollment token"
+              onClick={() => copy(created.token, "token copied")}
+            >
+              copy
+            </button>
           </div>
 
           <div className="muted tiny" style={{ marginTop: 10, lineHeight: 1.6 }}>

@@ -12,7 +12,12 @@ path = "src/main.rs"
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "io-util", "sync", "signal", "fs"] }
 futures = "0.3"
-reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+# The HTTP client trusts the PLATFORM trust store (rustls-native-certs): on
+# Windows that is the machine Root store, so the CA the installer adds there
+# is honoured; on Linux it is /etc/ssl/certs, where the installer puts the
+# hub's root. The bundled Mozilla set (rustls-tls-webpki-roots) ignored both
+# and made a private hub fail with "invalid peer certificate: UnknownIssuer".
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
