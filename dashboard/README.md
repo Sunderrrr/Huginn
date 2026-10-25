@@ -5,14 +5,17 @@ distinctive "raven control-console" interface (near-black panels, ember signal
 accents, HUD telemetry).
 
 ## Features
-- **Auth** — local password, OIDC/SSO, and LDAP login; two-step **TOTP 2FA** and
-  passwordless **passkeys**; an Account/Security page to manage your own password,
-  TOTP, and passkeys. RBAC (admin / operator / read-only) reflected in the UI.
+- **Auth** — local password, OIDC/SSO, and LDAP login, with two-step **TOTP 2FA**
+  and passwordless **passkeys**. An Account/Security page lets a user manage
+  their own password and factors. RBAC (admin / operator / read-only) is
+  reflected in the UI.
 - **Home** — fleet-health overview, recent activity, upcoming schedules, stale workers.
 - **Fleet view** — live roster with state, mode, installed-vs-target version,
   heartbeat, tags; filter by tag, one-click approve, bulk actions.
 - **Node detail** — whitelisted actions, toggle/use unrestricted shell, trigger
-  updates, assign tags, revoke, permanently delete, live activity feed.
+  updates, assign tags, revoke, permanently delete, and a live activity feed.
+  It also carries the browser automation card: the Obscura engine state of the
+  node, the capability toggle, and the step runner.
 - **Tags**, **Schedules** (cron/preset commands), **Users** (incl. 2FA reset).
 - **Tokens** — enrollment tokens (with the install one-liner) and a rotatable
   **MCP token** with ready-to-paste agent configs.

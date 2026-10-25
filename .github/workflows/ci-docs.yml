@@ -1,0 +1,76 @@
+name: ci-docs
+
+# The documentation is part of the product: it is what a reader lands on
+# before touching anything. This gate runs the SlopMonster checker over the
+# shipped copy, so a draft that reads like machine output fails the build
+# instead of shipping.
+#
+# The checker is a Python 3 script with no dependencies. It is pinned to a
+# commit SHA (like every other action here) and it never modifies the files
+# it checks.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - ".github/workflows/ci-docs.yml"
+  pull_request:
+    paths:
+      - "**/*.md"
+      - ".github/workflows/ci-docs.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deslop:
+    name: documentation lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Fetch the checker
+        run: |
+          git clone --quiet --depth 1 \
+            https://github.com/ItsssssJack/SlopMonster.git \
+            "$RUNNER_TEMP/slopmonster"
+          cd "$RUNNER_TEMP/slopmonster"
+          git fetch --quiet --depth 1 origin 3fc9787d9337b57c599a80afbefbbb3be5a8eb0b
+          git checkout --quiet 3fc9787d9337b57c599a80afbefbbb3be5a8eb0b
+      - name: Check the shipped copy
+        run: |
+          cd "$RUNNER_TEMP/slopmonster"
+          status=0
+          for file in \
+            README.md \
+            CONTRIBUTING.md \
+            SECURITY.md \
+            dashboard/README.md \
+            deploy/README.md \
+            docs/README.md \
+            docs/architecture.md \
+            docs/auth.md \
+            docs/browser.md \
+            docs/deployment.md \
+            docs/enrollment.md \
+            docs/mcp.md \
+            docs/mcp-agents.md \
+            docs/security.md \
+            hub-rs/README.md \
+            mcp-rs/README.md \
+            worker-rs/README.md
+          do
+            printf '%-24s ' "$file"
+            python3 tools/deslop.py "$GITHUB_WORKSPACE/$file" || status=1
+          done
+          exit $status

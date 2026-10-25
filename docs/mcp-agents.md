@@ -45,8 +45,8 @@ HUGINN_MCP_PORT=9000 \
 huginn-mcp
 ```
 
-Or use the `mcp` service from `docker-compose.yml` (already configured for
-streamable-http on port 9000, behind Caddy at `/mcp`).
+Or use the `mcp` service from `docker-compose.prod.yml` (already configured
+for streamable-http on port 9000, behind Caddy at `/mcp`).
 
 > The HTTP endpoint is gated by **per-user tokens** validated against the hub —
 > there is no shared client token to configure. A request without a valid token
@@ -185,17 +185,33 @@ Once connected, the agent has access to these tools:
 | `execute_action(vm_id, action, params?, wait?)` | Run a built-in or custom action |
 | `execute_command(vm_id, command, wait?)` | Free shell command (unrestricted VMs only) |
 | `trigger_update(vm_id)` | Trigger worker self-update |
-| `get_task(task_id)` | Poll task status and result once |
+| `get_task(task_id)` | Read a task's status and result once |
 | `wait_for_task(task_id, timeout?)` | Block until the task finishes (or timeout) — avoids a poll loop |
 | `get_audit_log(vm_id?, event_type?, limit?)` | Read audit entries |
+| `browser_enable(vm_id, enabled)` | Arm (or disarm) the browser capability of a VM (admin) |
+| `browser_engine_check()` | Check the pinned Obscura release now (admin) |
+| `browser_install(vm_id, wait?)` | Install the pinned Obscura engine on a VM (admin) |
+| `browser_start(vm_id, steps, timeout?, wait?)` | Run a step sequence on a headless browser |
+| `browser_navigate(vm_id, url, timeout?, wait?)` | Load a URL and return the page text |
+| `browser_screenshot(vm_id, url, quality?, timeout?, wait?)` | Load a URL and return a capture |
+| `browser_pdf(vm_id, url, timeout?, wait?)` | Load a URL and return a PDF |
+| `browser_eval(vm_id, url, js, timeout?, wait?)` | Load a URL and evaluate JavaScript |
 
-> **Long tasks — do not poll `get_task` in a loop.** Either pass `wait=true` to
-> `execute_action`/`execute_command` to get the result inline, or after launching
-> with `wait=false` call `wait_for_task(task_id)` **once** — it blocks server-side
-> (event-driven, no busy polling) and returns the instant the worker reports a
-> result. Only call it again if it returned still-running at the timeout.
-> `get_task` is a one-off status check, not a busy-wait. Use
+> **A tool that creates a task returns the result, not a handle.** The browser
+> family and the action/command tools wait for their task (the hub holds the wait
+> server-side) and hand back the finished task with its stdout inline.
+>
+> **Long tasks — do not poll `get_task` in a loop.** Pass `wait=false` to launch
+> without waiting, then call `wait_for_task(task_id)` **once**: it blocks
+> server-side (event-driven, no busy polling) and returns the instant the
+> worker reports a result. Only call it again if it returned still-running at
+> the timeout. `get_task` is a one-off status check, not a busy-wait. Use
 > `list_vms(brief=true)` for a compact roster (id, name, state, mode).
+>
+> **Browser tasks need an admin first.** The capability must be enabled on the
+> VM (`browser_enable`) and the Obscura engine installed on it
+> (`browser_install`). The hub answers 403 with the missing step when the
+> capability is off.
 >
 > The MCP server ships these usage rules as connection `instructions`, so a
 > compliant client surfaces them to the model automatically.
@@ -251,7 +267,13 @@ Two token layers, kept distinct:
 Put the MCP server behind a reverse proxy with TLS. The bundled **Caddy** config
 already proxies `/mcp` and stamps the real client IP into `X-Real-IP`
 (overwriting any client-supplied value), which is what makes the per-token IP
-allow-list trustworthy:
+allow-list trustworthy.
+
+The MCP server only honours that header when `HUGINN_MCP_TRUST_PROXY=true`
+(the bundled compose files set it), and `HUGINN_MCP_TRUSTED_PROXY_CIDRS` narrows
+which peers may stamp it. With the default, the forwarded headers are ignored
+and the allow-list is checked against the proxy's own address, which makes it
+silently useless. Set both when you front the server with your own proxy:
 
 ```caddyfile
 handle /mcp* {
