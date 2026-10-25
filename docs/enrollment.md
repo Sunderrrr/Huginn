@@ -68,6 +68,37 @@ The installer detects the architecture, downloads and checksum-verifies the
 worker binary **from the hub** (`/dist`), bootstraps trust for a self-signed hub
 CA if needed. It then enrolls and installs the systemd service.
 
+### Windows
+
+Run the commands **separately**, from a **PowerShell 7** console opened as
+administrator. If the prompt is Windows PowerShell 5.1, start PowerShell 7
+first:
+
+```powershell
+pwsh -NoProfile
+$PSVersionTable.PSVersion        # expect 7.6.8
+```
+
+Then fetch the installer and run it **as a file**. Do not pipe it to `iex`:
+`Invoke-Expression` cannot bind `HUB_URL` and `Token` to the script's
+`param()` block, and a failure inside a piped script would terminate your
+session.
+
+```powershell
+$installer = "$env:TEMP\huginn-install.ps1"
+Invoke-WebRequest -Uri "https://<hub>/install.ps1" -OutFile $installer
+pwsh -NoProfile -ExecutionPolicy Bypass -File $installer -HUB_URL "https://<hub>" -Token "<token>"
+```
+
+The installer detects the architecture, downloads the matching `.exe` from
+`/dist`, verifies its SHA-256 against the hub's manifest (`/dist/checksums.txt`,
+one line per published asset), enrolls, and installs the **HuginnWorker**
+Windows Service (auto-start).
+
+With a hub behind a private CA, the installer fetches the CA root
+(trust-on-first-use) and adds it to the LocalMachine Root store. Pass
+`-CaSha256 <fingerprint>` to pin that root instead of trusting it blindly.
+
 ### What enrollment does
 - The worker calls `POST /api/worker/enroll` with the token and host metadata.
 - The hub validates the token (timing-safe), consumes one use, creates the VM in

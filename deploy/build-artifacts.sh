@@ -56,7 +56,11 @@ build_rust() {
 
 build_rust
 
-( cd "$out" && sha256sum huginn-worker-linux-* > checksums.txt )
+# The manifest covers EVERY asset this script publishes — the Windows binary
+# included. A glob limited to the Linux assets produced a checksums.txt that
+# the Windows installer could not match against, and the install failed with
+# "no checksum entry" on a file that had been downloaded correctly.
+( cd "$out" && sha256sum huginn-worker-* > checksums.txt )
 
 echo "==> artifacts in ${out}:"
 ls -1 "$out"

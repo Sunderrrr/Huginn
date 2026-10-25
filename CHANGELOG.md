@@ -6,6 +6,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **The Windows worker could not be installed or updated.** The manifest
+  published at `/dist/checksums.txt` listed only the Linux assets, so the
+  Windows installer downloaded the binary correctly and then failed with "no
+  checksum entry". The build script now writes one manifest line per
+  published asset, and the release pipeline builds and publishes the Windows
+  binary (mingw-w64, the same target as the local build) next to the two
+  Linux ones.
+- **The worker no longer compiles for Windows**: the heartbeat now reports
+  the installed Obscura engine version, and that module only exists on Linux.
+  The report is `None` elsewhere, and the Windows-only code path is clean
+  again under `-D warnings`.
+- **The Windows installer** runs the CA fetch with `-SkipCertificateCheck`
+  under PowerShell 7 (the `ServicePointManager` callback does not affect the
+  PowerShell 6+ web cmdlets) and keeps that callback for Windows PowerShell
+  5.1. It no longer calls `exit`, so a failure cannot close an interactive
+  session. The download goes to a `.part` file, is verified in full, and only
+  then replaces the binary (with a rollback if the replacement fails). The
+  checksum parser accepts CRLF and LF, tolerates the usual spacing, and
+  matches the asset name exactly. The hub's published assets are listed when
+  the manifest has no entry for the expected one.
+
 ### Changed
 - **The documentation was refreshed** against the code it describes, and now
   passes an automated writing check. The pages cover what actually shipped in

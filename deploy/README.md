@@ -159,19 +159,39 @@ The installer detects the architecture (`uname -m` → amd64/arm64), downloads t
 matching static musl binary from the hub, verifies its SHA-256, installs a
 systemd unit, and enrolls.
 
-### Windows (PowerShell, as Administrator)
+### Windows (PowerShell 7, as Administrator)
+
+Run the commands **separately**, from a *PowerShell 7* console opened as
+administrator. If the prompt is Windows PowerShell 5.1, start PowerShell 7
+first:
 
 ```powershell
-irm https://<HUGINN_DOMAIN>/install.ps1 | iex   # or download and:
-.\install.ps1 -HUB_URL "https://<HUGINN_DOMAIN>" -Token "<token>"
+pwsh -NoProfile
+$PSVersionTable.PSVersion        # expect 7.6.8
 ```
 
-The PowerShell installer detects the architecture, downloads the matching
-`.exe`, verifies its SHA-256, installs a **Windows Service** ("HuginnWorker",
-auto-start), and enrolls. Free commands run through PowerShell (`unrestricted`
-mode), whitelisted actions use OS-specific commands (`Get-CimInstance`,
-`Restart-Service` instead of `uname`/`systemctl`).
+Then fetch the installer and run it **as a file** (do not pipe it to `iex`:
+`Invoke-Expression` cannot bind `HUB_URL` and `Token` to the script's
+`param()` block, and a failure would close your session):
+
+```powershell
+$installer = "$env:TEMP\huginn-install.ps1"
+Invoke-WebRequest -Uri "https://<HUGINN_DOMAIN>/install.ps1" -OutFile $installer
+pwsh -NoProfile -ExecutionPolicy Bypass -File $installer -HUB_URL "https://<HUGINN_DOMAIN>" -Token "<token>"
+```
+
+The installer detects the architecture, downloads the matching `.exe` from
+`/dist`, verifies its SHA-256 against the hub's own manifest, installs a
+**Windows Service** ("HuginnWorker", auto-start), and enrolls. Free commands
+run through PowerShell (`unrestricted` mode), whitelisted actions use
+OS-specific commands (`Get-CimInstance`, `Restart-Service` instead of
+`uname`/`systemctl`).
+
+If the hub sits behind a private CA, the installer fetches the CA root
+(trust-on-first-use) and adds it to the LocalMachine Root store. Pass
+`-CaSha256 <fingerprint>` to pin that root instead of trusting it blindly.
 
 The worker self-updates toward `HUGINN_TARGET_WORKER_VERSION`. Artifacts are
 served by the hub itself at `/dist` (see `deploy/build-artifacts.sh`, which
-cross-compiles all three: linux/amd64, linux/arm64, windows/amd64).
+cross-compiles all three: linux/amd64, linux/arm64, windows/amd64, and writes
+one manifest line per published asset).
