@@ -1,20 +1,34 @@
 # Huginn worker installer for Windows.
 #
-#   irm https://<hub>/install.ps1 | iex   # or download and run manually
-#   .\install.ps1 -HUB_URL "https://<hub>" -Token "<token>"
+# Run the commands separately, from an elevated "Run as administrator"
+# PowerShell 7 console:
 #
-# Detects the architecture, downloads the matching worker binary FROM THE HUB,
-# verifies its SHA-256, installs it as a Windows Service, and enrolls with the
-# hub. The VM is PENDING until approved.
+#   pwsh -NoProfile
+#   $PSVersionTable.PSVersion        # expect 7.6.8
+#   $installer = "$env:TEMP\huginn-install.ps1"
+#   Invoke-WebRequest -Uri "https://<hub>/install.ps1" -OutFile $installer
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File $installer -HUB_URL "https://<hub>" -Token "<token>"
 #
-# If the hub uses a self-signed certificate, the installer fetches the hub's
-# CA root (trust-on-first-use) and installs it into the Windows trust store.
+# Do NOT use "irm ... | iex" here: Invoke-Expression cannot bind HUB_URL and
+# Token to this script's param() block, and a failure inside the piped script
+# would terminate the caller's shell. Run it as a file, as above.
+#
+# The script detects the architecture, downloads the matching worker binary
+# from the hub, verifies its SHA-256 against the hub's own manifest, installs
+# it as a Windows Service, and enrolls with the hub. The VM stays PENDING
+# until an admin approves it.
+#
+# If the hub uses a private CA, the installer fetches the hub's CA root
+# (trust-on-first-use) and installs it into the Windows trust store. Pass
+# -CaSha256 <fingerprint> to pin that root instead of trusting it blindly.
 #
 # Parameters:
-#   HUB_URL   (required) base URL of the hub, e.g. https://192.0.2.13
+#   HUB_URL   (required) base URL of the hub, e.g. https://172.16.2.5
 #   Token     (required) enrollment token from the dashboard
-#   Name      (optional) friendly VM name (defaults to hostname)
+#   Name      (optional) friendly VM name (defaults to the hostname)
 #   BinDir    (optional) install directory (default C:\Program Files\Huginn)
+#   CaSha256  (optional) expected SHA-256 of the hub's CA root, as published
+#             by the hub. When given, the fetched CA must match it.
 
 param(
     [Parameter(Mandatory = $true)]
@@ -24,26 +38,103 @@ param(
     [string]$Token,
 
     [string]$Name = "",
-    [string]$BinDir = "C:\Program Files\Huginn"
+    [string]$BinDir = "C:\Program Files\Huginn",
+    [string]$CaSha256 = ""
 )
 
 $ErrorActionPreference = "Stop"
 $BinaryName = "huginn-worker.exe"
 $StateDir = "C:\ProgramData\Huginn"
+$DownloadTimeoutSec = 120
 
 function Log([string]$msg) {
     Write-Host "==> $msg" -ForegroundColor Cyan
 }
 
+# Fail throws instead of calling exit: a script run with `exit` would close an
+# interactive PowerShell session, and the caller could not read the error or
+# try a fallback. The message is prefixed so it stands out in a transcript.
 function Fail([string]$msg) {
-    Write-Host "error: $msg" -ForegroundColor Red
-    exit 1
+    throw "huginn-install: $msg"
+}
+
+function Invoke-WebRequestAllowUntrustedCertificate {
+    # PowerShell 6+ web cmdlets go through HttpClient, and
+    # ServicePointManager.ServerCertificateValidationCallback does not affect
+    # them: the supported per-request switch is -SkipCertificateCheck. The
+    # callback is kept for Windows PowerShell 5.1, which still uses
+    # ServicePointManager.
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$RequestParameters
+    )
+
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $RequestParameters["SkipCertificateCheck"] = $true
+        return Invoke-WebRequest @RequestParameters
+    }
+
+    $previousCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
+    try {
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+        return Invoke-WebRequest @RequestParameters
+    }
+    finally {
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = $previousCallback
+    }
+}
+
+# Downloads to a sibling .part file and returns its path. The caller removes
+# it on any failure, so a truncated download is never mistaken for a complete
+# one and never replaces a working binary. The timeout is a parameter (not a
+# script-level variable) so the function stands on its own.
+function Save-Download([string]$Uri, [string]$OutFile, [int]$TimeoutSec = 120) {
+    $part = "$OutFile.part"
+    try {
+        if (Test-Path $part) { Remove-Item $part -Force -ErrorAction SilentlyContinue }
+        Invoke-WebRequest -Uri $Uri -OutFile $part -UseBasicParsing -TimeoutSec $TimeoutSec
+        if (-not (Test-Path $part)) {
+            Fail "the download produced no file: $Uri"
+        }
+        $length = (Get-Item $part).Length
+        if ($length -le 0) {
+            Fail "the downloaded file is empty: $Uri"
+        }
+        return $part
+    }
+    catch {
+        if (Test-Path $part) { Remove-Item $part -Force -ErrorAction SilentlyContinue }
+        throw
+    }
+}
+
+# Parses a `sha256sum`-style manifest. The line endings may be CRLF or LF,
+# the separator may be spaces or a tab, and the asset name must match
+# exactly (no globbing, no prefix match).
+function Get-ManifestHash([string]$Content, [string]$Asset) {
+    foreach ($line in ($Content -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed) { continue }
+
+        $parts = $trimmed -split '\s+', 2
+        if ($parts.Count -ne 2) { continue }
+
+        $hash = $parts[0]
+        $name = $parts[1].TrimStart('*').Trim()
+        if ($name -cne $Asset) { continue }
+
+        if ($hash -notmatch '^[0-9A-Fa-f]{64}$') {
+            Fail "the manifest entry for $Asset is not a SHA-256: '$hash'"
+        }
+        return $hash.ToLowerInvariant()
+    }
+    return $null
 }
 
 # --- Must run as Administrator ---
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Fail "please run as Administrator (installs a Windows Service)"
+    Fail "please run as Administrator (it installs a Windows Service)"
 }
 
 # --- Detect architecture ---
@@ -54,62 +145,88 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
 }
 Log "architecture: $arch"
 
-# --- Validate HUB_URL ---
+# --- Validate the parameters ---
 if (-not $HUB_URL) { Fail "HUB_URL is required" }
 if (-not $Token) { Fail "Token is required" }
 $HUB_URL = $HUB_URL.TrimEnd('/')
+if ($CaSha256 -and $CaSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+    Fail "CaSha256 must be a SHA-256 fingerprint (64 hex characters)"
+}
 
-# --- TLS trust (trust-on-first-use for self-signed hubs) ---
+# --- TLS trust (trust-on-first-use for a hub behind a private CA) ---
 function Ensure-HubTrust {
-    # No-op for HTTP or an already-trusted cert
     if ($HUB_URL -match '^http://') { return }
+
     try {
         Invoke-WebRequest -Uri "$HUB_URL/healthz" -UseBasicParsing -TimeoutSec 10 | Out-Null
         return
-    } catch { }
+    }
+    catch {
+        $healthCheckError = $_.Exception.Message
+    }
 
-    Log "hub certificate not trusted; installing the hub CA (trust-on-first-use)"
+    Log "the hub certificate is not trusted ($healthCheckError); fetching its CA root"
     $caUrl = "$HUB_URL/caddy-root.crt"
     $caFile = [System.IO.Path]::GetTempFileName() + ".crt"
 
     try {
-        # Bypass TLS validation for the CA fetch itself
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-        Invoke-WebRequest -Uri $caUrl -OutFile $caFile -UseBasicParsing -TimeoutSec 10
-    } catch {
-        Fail "could not fetch the hub CA from $caUrl"
-    } finally {
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = $null
+        # The validation is bypassed for this one request: the CA is the thing
+        # we are trying to establish trust in. It is checked against
+        # -CaSha256 when the caller pinned it.
+        Invoke-WebRequestAllowUntrustedCertificate -RequestParameters @{
+            Uri             = $caUrl
+            OutFile         = $caFile
+            UseBasicParsing = $true
+            TimeoutSec      = 10
+        }
+    }
+    catch {
+        Remove-Item $caFile -Force -ErrorAction SilentlyContinue
+        Fail "could not fetch the hub CA from ${caUrl}: $($_.Exception.Message)"
     }
 
-    # Install into the Windows Root CA store
-    $caContent = Get-Content $caFile -Raw
-    if ($caContent -notmatch 'BEGIN CERTIFICATE') {
-        Fail "fetched CA does not look like a certificate"
-    }
-    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "LocalMachine")
-    $store.Open("ReadWrite")
-    $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($caFile)
-    $store.Add($cert)
-    $store.Close()
-    Remove-Item $caFile -Force
-    Log "hub CA installed into the Root trust store"
+    try {
+        $caContent = Get-Content $caFile -Raw
+        if ($caContent -notmatch 'BEGIN CERTIFICATE') {
+            Fail "the fetched CA does not look like a PEM certificate"
+        }
 
-    # Re-check
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($caFile)
+        if ($CaSha256) {
+            $actual = ([System.Security.Cryptography.SHA256]::Create().ComputeHash($cert.RawData) |
+                ForEach-Object { $_.ToString("x2") }) -join ""
+            if ($actual -ne $CaSha256.ToLowerInvariant()) {
+                Fail "the hub CA fingerprint does not match the expected one (got $actual)"
+            }
+            Log "hub CA fingerprint matches the pinned value"
+        }
+
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "LocalMachine")
+        try {
+            $store.Open("ReadWrite")
+            $store.Add($cert)
+        }
+        finally {
+            $store.Close()
+        }
+        Log "hub CA installed into the LocalMachine Root trust store"
+    }
+    finally {
+        Remove-Item $caFile -Force -ErrorAction SilentlyContinue
+    }
+
+    # The hub must now answer with a normal certificate validation.
     try {
         Invoke-WebRequest -Uri "$HUB_URL/healthz" -UseBasicParsing -TimeoutSec 10 | Out-Null
-    } catch {
-        Fail "hub still not trusted after installing its CA"
+    }
+    catch {
+        Fail "the hub is still not trusted after installing its CA: $($_.Exception.Message)"
     }
 }
 
 Ensure-HubTrust
 
-# --- Download the worker binary ---
-$base = "$HUB_URL/dist"
-$asset = "huginn-worker-windows-$arch.exe"
-$checksumUrl = "$base/checksums.txt"
-
+# --- Prepare the directories ---
 if (-not (Test-Path $BinDir)) {
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 }
@@ -117,29 +234,62 @@ if (-not (Test-Path $StateDir)) {
     New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
 }
 
+$base = "$HUB_URL/dist"
+$asset = "huginn-worker-windows-$arch.exe"
+$binaryUrl = "$base/$asset"
+$checksumUrl = "$base/checksums.txt"
 $binaryPath = Join-Path $BinDir $BinaryName
 
-Log "downloading $asset from $base"
-$binaryUrl = "$base/$asset"
-Invoke-WebRequest -Uri $binaryUrl -OutFile "$binaryPath.new" -UseBasicParsing
+# --- Fetch the manifest first: it tells us what the hub actually publishes ---
+Log "fetching the manifest from $checksumUrl"
+try {
+    $checksumsContent = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -TimeoutSec 30).Content
+}
+catch {
+    Fail "could not fetch $checksumUrl : $($_.Exception.Message)"
+}
 
-# --- Verify checksum ---
-Log "verifying checksum"
-$checksumsContent = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing | Select-Object -ExpandProperty Content
-$expectedHash = ($checksumsContent -split "`n" | Where-Object { $_ -match $asset } | ForEach-Object { ($_ -split '\s+')[0] })
+$expectedHash = Get-ManifestHash -Content $checksumsContent -Asset $asset
 if (-not $expectedHash) {
-    Fail "no checksum entry for $asset"
+    $published = @()
+    foreach ($line in ($checksumsContent -split "`r?`n")) {
+        $parts = $line.Trim() -split '\s+', 2
+        if ($parts.Count -eq 2) { $published += $parts[1].TrimStart('*') }
+    }
+    Fail ("no checksum entry for $asset in $checksumUrl. The hub publishes: " +
+          (($published -join ", ")))
 }
 
-$actualHash = (Get-FileHash -Path "$binaryPath.new" -Algorithm SHA256).Hash.ToLower()
-if ($actualHash -ne $expectedHash.ToLower()) {
-    Remove-Item "$binaryPath.new" -Force
-    Fail "checksum mismatch: got $actualHash want $expectedHash"
-}
-Log "checksum OK"
+# --- Download the binary ---
+Log "downloading $asset from $base"
+$newPath = Save-Download -Uri $binaryUrl -OutFile "$binaryPath.new" -TimeoutSec $DownloadTimeoutSec
 
-# --- Install the binary ---
-Move-Item "$binaryPath.new" $binaryPath -Force
+try {
+    # --- Verify the checksum before the file goes anywhere near the install ---
+    Log "verifying the SHA-256"
+    $actualHash = (Get-FileHash -Path $newPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $expectedHash) {
+        Fail "checksum mismatch for ${asset}: got $actualHash, the manifest says $expectedHash"
+    }
+    Log "checksum OK ($actualHash)"
+}
+catch {
+    Remove-Item $newPath -Force -ErrorAction SilentlyContinue
+    throw
+}
+
+# --- Replace the binary atomically, keeping the old one until the new one is in place ---
+$backupPath = "$binaryPath.old"
+if (Test-Path $backupPath) { Remove-Item $backupPath -Force -ErrorAction SilentlyContinue }
+if (Test-Path $binaryPath) { Move-Item $binaryPath $backupPath -Force }
+try {
+    Move-Item $newPath $binaryPath -Force
+}
+catch {
+    if (Test-Path $backupPath) { Move-Item $backupPath $binaryPath -Force }
+    throw
+}
+Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
 Log "installed $binaryPath"
 
 # --- Enroll with the hub ---
@@ -151,13 +301,19 @@ $env:TOKEN = $Token
 $env:NAME = $Name
 $env:HUGINN_ALLOW_INSECURE = if ($HUB_URL -match '^http://') { "1" } else { "" }
 
-& $binaryPath enroll --state-dir $StateDir
-if ($LASTEXITCODE -ne 0) {
-    Fail "enrollment failed (exit code $LASTEXITCODE)"
+try {
+    & $binaryPath enroll --state-dir $StateDir
+    if ($LASTEXITCODE -ne 0) {
+        Fail "enrollment failed (exit code $LASTEXITCODE)"
+    }
+}
+finally {
+    # The token must not linger in the environment of this session.
+    Remove-Item Env:TOKEN -ErrorAction SilentlyContinue
 }
 
 # --- Install the Windows Service ---
-Log "installing Windows Service 'HuginnWorker'"
+Log "installing the Windows Service 'HuginnWorker'"
 & $binaryPath install-service --state-dir $StateDir $binaryPath
 if ($LASTEXITCODE -ne 0) {
     Fail "service installation failed (exit code $LASTEXITCODE)"

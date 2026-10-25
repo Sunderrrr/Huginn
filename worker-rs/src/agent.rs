@@ -164,7 +164,7 @@ impl Agent {
         let resp = match client
             .heartbeat(HeartbeatRequest {
                 worker_version: config::VERSION.into(),
-                browser_engine_version: crate::browser::installed_version(&self.state_dir),
+                browser_engine_version: installed_engine_version(&self.state_dir),
                 // The node's own address on the network the hub is reached
                 // from — the hub would otherwise keep the NAT/bridge address
                 // it saw at enrollment, which is ambiguous (podman allocates
@@ -455,6 +455,7 @@ impl Agent {
         let binary_path = self.state.lock().await.binary_location();
         let _ = std::fs::remove_file(&binary_path);
         let _ = std::fs::remove_dir_all(config::DEFAULT_STATE_DIR);
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut notes = vec!["worker service removed, binary and state cleaned up".to_owned()];
         // The browser engine (Obscura) lives under its own managed roots;
         // uninstall it with the rest (Linux only — the feature answers
@@ -553,6 +554,19 @@ fn argv_list(v: Option<&Value>) -> Option<Vec<Vec<String>>> {
         }
         _ => None,
     }
+}
+
+/// The installed Obscura engine version, or `None` when the node has no
+/// engine. The engine is a Linux-only feature (the `browser` module is
+/// compiled out elsewhere), so the answer is `None` on Windows.
+#[cfg(target_os = "linux")]
+fn installed_engine_version(state_dir: &str) -> Option<String> {
+    crate::browser::installed_version(state_dir)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn installed_engine_version(_state_dir: &str) -> Option<String> {
+    None
 }
 
 fn as_string(v: Option<&Value>) -> String {

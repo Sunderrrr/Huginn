@@ -27,14 +27,21 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: worker-rs
       - uses: taiki-e/install-action@d2bea38207d08b13b798c8a031b0912d13e2a802 # cargo-zigbuild
       - name: Install zig (cross-linker for musl targets)
         run: pip install --no-cache-dir ziglang==0.17.0
-      - name: Cross-compile static worker binaries
+      - name: Install the mingw-w64 toolchain (Windows target)
+        # The Windows binary is linked with mingw-w64, not zig — the same
+        # target as deploy/build-artifacts.sh, so both routes publish the
+        # same asset name.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - name: Cross-compile the worker binaries
         env:
           VERSION: ${{ github.ref_name }}
         run: |
@@ -47,6 +54,12 @@ jobs:
             HUGINN_WORKER_VERSION="$VERSION" cargo zigbuild --release --locked --target "$t"
             cp "target/$t/release/huginn-worker" "../dist/huginn-worker-linux-$arch"
           done
+          # Windows (mingw-w64 linker). Same target as deploy/build-artifacts.sh,
+          # so the asset published here and the one served at /dist have the
+          # same name — the manifest below then lists every published asset,
+          # and the Windows installer finds its entry.
+          HUGINN_WORKER_VERSION="$VERSION" cargo build --release --locked --target x86_64-pc-windows-gnu
+          cp "target/x86_64-pc-windows-gnu/release/huginn-worker.exe" "../dist/huginn-worker-windows-amd64.exe"
         shell: bash
       - name: Generate checksums
         working-directory: .
