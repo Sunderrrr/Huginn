@@ -96,6 +96,12 @@ jobs:
     name: dependency audit (cargo, ${{ matrix.component }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      # rustsec/audit-check publishes its findings as a check run on the
+      # commit. Without this, a real finding fails the job with an opaque
+      # "Resource not accessible by integration" instead of the advisory.
+      checks: write
     strategy:
       # One crate's failure must not hide the other crates' results.
       fail-fast: false
