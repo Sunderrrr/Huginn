@@ -28,6 +28,11 @@ services:
     image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
     container_name: huginn-postgres
     restart: unless-stopped
+    # SIGTERM asks PostgreSQL for a *smart* shutdown, which waits for the open
+    # client sessions: the hub's idle pool kept it waiting, and the container
+    # had to be SIGKILLed. SIGINT is the documented "fast shutdown" — it
+    # disconnects the clients and shuts down at the next checkpoint.
+    stop_signal: SIGINT
     security_opt:
       - no-new-privileges:true
       # Ubuntu + podman: the default AppArmor profile (containers-default-*)
