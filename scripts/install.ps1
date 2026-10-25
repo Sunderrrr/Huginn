@@ -45,6 +45,10 @@ param(
 $ErrorActionPreference = "Stop"
 $BinaryName = "huginn-worker.exe"
 $StateDir = "C:\ProgramData\Huginn"
+# The hub's CA root is kept there (not in a temporary file): the worker runs as
+# a service and needs it after the installation. The enrollment passes the
+# path, the worker stores it in its state, and the service inherits it.
+$HubCaFile = Join-Path $StateDir "hub-ca.crt"
 $DownloadTimeoutSec = 120
 
 function Log([string]$msg) {
@@ -167,7 +171,7 @@ function Ensure-HubTrust {
 
     Log "the hub certificate is not trusted ($healthCheckError); fetching its CA root"
     $caUrl = "$HUB_URL/caddy-root.crt"
-    $caFile = [System.IO.Path]::GetTempFileName() + ".crt"
+    $caFile = $HubCaFile
 
     try {
         # The validation is bypassed for this one request: the CA is the thing
@@ -201,6 +205,10 @@ function Ensure-HubTrust {
             Log "hub CA fingerprint matches the pinned value"
         }
 
+        # Same lock-down as the worker applies to its state directory: SYSTEM
+        # and Administrators only.
+        & icacls $caFile /inheritance:r /grant:r "SYSTEM:(R)" /grant:r "Administrators:(R)" | Out-Null
+
         $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "LocalMachine")
         try {
             $store.Open("ReadWrite")
@@ -210,9 +218,11 @@ function Ensure-HubTrust {
             $store.Close()
         }
         Log "hub CA installed into the LocalMachine Root trust store"
+        Log "hub CA kept at $caFile (the worker is given that path)"
     }
-    finally {
+    catch {
         Remove-Item $caFile -Force -ErrorAction SilentlyContinue
+        throw
     }
 
     # The hub must now answer with a normal certificate validation.
@@ -224,15 +234,15 @@ function Ensure-HubTrust {
     }
 }
 
-Ensure-HubTrust
-
-# --- Prepare the directories ---
+# --- Prepare the directories (the CA lands in the state dir) ---
 if (-not (Test-Path $BinDir)) {
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 }
 if (-not (Test-Path $StateDir)) {
     New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
 }
+
+Ensure-HubTrust
 
 $base = "$HUB_URL/dist"
 $asset = "huginn-worker-windows-$arch.exe"
@@ -300,6 +310,11 @@ $env:HUB_URL = $HUB_URL
 $env:TOKEN = $Token
 $env:NAME = $Name
 $env:HUGINN_ALLOW_INSECURE = if ($HUB_URL -match '^http://') { "1" } else { "" }
+# The worker keeps this path in its state, so the service (LocalSystem) trusts
+# the same CA after the installation.
+if (Test-Path $HubCaFile) {
+    $env:HUGINN_CA_CERT = $HubCaFile
+}
 
 try {
     & $binaryPath enroll --state-dir $StateDir
@@ -308,7 +323,8 @@ try {
     }
 }
 finally {
-    # The token must not linger in the environment of this session.
+    # The token must not linger in the environment of this session. The CA path
+    # stays: the service needs it.
     Remove-Item Env:TOKEN -ErrorAction SilentlyContinue
 }
 

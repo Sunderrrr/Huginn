@@ -407,6 +407,114 @@ mod tests {
         .expect("client")
     }
 
+    /// A TLS server with a self-signed certificate, to check that the
+    /// client validates certificates (and that the explicit CA path works).
+    async fn spawn_self_signed_tls_server() -> (String, String) {
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+        use tokio_rustls::rustls::crypto::ring;
+        use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+        use tokio_rustls::TlsAcceptor;
+
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("self-signed cert");
+        let cert = certified.cert.der().clone();
+        let key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
+        let provider = Arc::new(ring::default_provider());
+        let config = tokio_rustls::rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("protocol version")
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .expect("server cert");
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(v) => v,
+                    Err(_) => return,
+                };
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut tls = match acceptor.accept(stream).await {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    };
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        match tls.read(&mut chunk).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                buf.extend_from_slice(&chunk[..n]);
+                                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // A heartbeat answer the client can decode.
+                    let body = br#"{"target_worker_version":"v1.0.0","exec_mode":"whitelist","allowed_release_domains":[]}"#;
+                    let mut head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .into_bytes();
+                    head.extend_from_slice(body);
+                    let _ = tls.write_all(&head).await;
+                });
+            }
+        });
+        let pem = certified.cert.pem();
+        (format!("https://localhost:{port}"), pem)
+    }
+
+    /// The client must never accept an unknown certificate: the fix for the
+    /// Windows enrollment ("invalid peer certificate: UnknownIssuer") was to
+    /// trust the PLATFORM store, not to stop validating.
+    #[tokio::test]
+    async fn the_client_refuses_an_untrusted_certificate() {
+        let (url, _pem) = spawn_self_signed_tls_server().await;
+        let client = Client::new(Options {
+            base_url: url,
+            ..Default::default()
+        })
+        .expect("client");
+        let err = client
+            .heartbeat(HeartbeatRequest::default())
+            .await
+            .expect_err("an unknown certificate must be refused");
+        assert!(
+            format!("{err}").to_lowercase().contains("certificate")
+                || format!("{err}").to_lowercase().contains("unknownissuer"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The explicit CA path still works: the Linux installer hands the hub's
+    /// root to the worker that way.
+    #[tokio::test]
+    async fn the_client_trusts_the_certificate_given_by_ca_cert_path() {
+        let (url, pem) = spawn_self_signed_tls_server().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, pem.as_bytes()).expect("write ca");
+        let client = Client::new(Options {
+            base_url: url,
+            ca_cert_path: Some(ca_path.to_string_lossy().to_string()),
+            ..Default::default()
+        })
+        .expect("client");
+        client
+            .heartbeat(HeartbeatRequest::default())
+            .await
+            .expect("the CA given by path must be trusted");
+    }
+
     #[test]
     fn outbound_ip_is_the_route_source_address() {
         // A UDP connect sends no packet: it only makes the kernel pick the
