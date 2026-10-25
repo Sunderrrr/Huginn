@@ -206,8 +206,10 @@ function Ensure-HubTrust {
         }
 
         # Same lock-down as the worker applies to its state directory: SYSTEM
-        # and Administrators only.
-        & icacls $caFile /inheritance:r /grant:r "SYSTEM:(R)" /grant:r "Administrators:(R)" | Out-Null
+        # and Administrators only. The Administrators group is granted by SID
+        # (*S-1-5-32-544): on a localized Windows the English name does not
+        # resolve and icacls only warns.
+        & icacls $caFile /inheritance:r /grant:r "SYSTEM:(R)" /grant:r "*S-1-5-32-544:(R)" | Out-Null
 
         $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "LocalMachine")
         try {
