@@ -31,13 +31,17 @@ migrations (`hub-rs/migrations/`), applied idempotently on startup. It is the
 single source of truth:
 
 - **Inventory & lifecycle** — machines, their state
-  (PENDING / ACTIVE / OFFLINE / REVOKED), and exec mode.
+  (PENDING / ACTIVE / OFFLINE / REVOKED), exec mode, and the browser
+  capability gate.
 - **Enrollment** — limited-use, revocable tokens. Approval is manual by default.
 - **AuthN/Z** — local (Argon2id), LDAP, and OIDC/SSO users with admin / operator
   / read-only RBAC. Optional 2FA (TOTP + WebAuthn) is supported, and each worker
-  gets its own secret.
+  gets its own secret. Sessions are revocable server-side (a per-user epoch
+  travels in the token).
 - **Task queue** — a DB-backed queue routes work to workers. It delivers the
   actions and commands they run, plus the updates they install.
+- **Browser automation** — the per-VM capability gate, the pinned Obscura
+  release (version + per-arch SHA-256) and the daily update check.
 - **Audit** — append-only, hash-chained log of every sensitive operation.
 - **Versioning** — the target worker version and the SSRF allowlist for releases.
 
@@ -48,8 +52,12 @@ machines.
 
 A single static Rust binary, installed natively via systemd. It **pulls** work
 from the hub over one outbound HTTPS connection (NAT-friendly), executes it
-locally, and reports results. An optional push listener can be enabled where a
-machine is directly routable.
+locally, and reports results. It never listens for inbound traffic.
+
+It also drives the **Obscura** headless browser for browser tasks: it spawns
+the engine locally, speaks CDP to it, and reports each step's output. The
+engine is installed on demand under `/opt/huginn/obscura/<version>/` — never
+embedded in the worker binary.
 
 ### MCP server (`mcp-rs/`)
 
@@ -65,8 +73,10 @@ React SPA (Vite + TypeScript). It calls the hub **same-origin** (relative
 
 The worker is the connection initiator:
 
-1. **Heartbeat** (`POST /api/worker/heartbeat`) — liveness and installed version.
-   The hub replies with the desired target version and the machine's exec mode.
+1. **Heartbeat** (`POST /api/worker/heartbeat`) — liveness, installed worker
+   version, the node's own address, and the version of the Obscura engine it
+   has installed. The hub replies with the desired target version and the
+   machine's exec mode.
 2. **Poll** (`GET /api/worker/tasks/next`) — claims the oldest pending task
    (row-locked in PostgreSQL) and returns `null` when idle.
 3. **Result** (`POST /api/worker/tasks/{id}/result`) — submits the outcome
@@ -82,10 +92,38 @@ pending ──poll──▶ dispatched ──result──▶ succeeded | failed 
    └── sweeper ◀──────┘  (requeue, then dead_letter after the retry budget)
 ```
 
+## Browser automation
+
+```
+dashboard / MCP agent
+        │  POST /api/vms/{id}/browser  {steps}
+        ▼
+     HUB  ── validates the steps (action, fields, caps) ──▶ queues a `browser` task
+        │
+        ▼  (the worker long-polls it)
+     WORKER ── spawns `obscura serve` on an ephemeral port
+        │     speaks CDP (a minimal client, no browser SDK)
+        ▼
+     OBSCURA ── the page runs ──▶ screenshots / PDF / text back to the hub
+```
+
+Each step's output is one line (`step 3 (click): #button`), captures ride as
+`data:` URLs in the task stdout. The engine is per-task: it is started, used
+and killed with the task, so nothing is left listening on the node.
+
 ## Data model
 
-See `hub-rs/src/models/`. Key tables: `users` (with TOTP columns),
-`enrollment_tokens`, `vms`, `tasks`, `audit_log` (append-only, hash-chained), a
-single-row `settings`, `user_vm_access`, `tags` + `vm_tags`,
-`scheduled_commands`, `mfa_backup_codes`, and `webauthn_credentials` /
-`webauthn_challenges`.
+See `hub-rs/src/models/`. Key tables:
+
+| Table | Holds |
+|---|---|
+| `users` | credentials, TOTP columns, `session_epoch` (the revocation counter) |
+| `enrollment_tokens` | limited-use join tokens |
+| `vms` | inventory, exec mode, `browser_enabled`, and the engine version the worker reported |
+| `tasks` | the queue: one row per unit of work |
+| `audit_log` | append-only, hash-chained |
+| `settings` | a single row: target worker version, pinned Obscura release, MFA and OIDC policy |
+| `user_vm_access`, `tags`, `vm_tags` | who sees which VM, and the labels used to scope custom commands |
+| `scheduled_commands`, `mfa_backup_codes` | schedules, and the hashed single-use 2FA backup codes |
+| `webauthn_credentials`, `webauthn_challenges` | passkeys and their short-lived challenges |
+

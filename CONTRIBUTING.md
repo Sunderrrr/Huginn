@@ -7,8 +7,8 @@ bar for security and for test coverage, and we expect the code to stay clear.
 
 - **Open an issue first** for anything non-trivial so we can agree on the
   approach.
-- **Tests are required.** New behaviour ships with tests; bug fixes ship with a
-  regression test.
+- **Tests are required.** New behaviour ships with its tests. A bug fix ships
+  with a regression test.
 - **Security first.** Never weaken the guarantees in
   [docs/security.md](docs/security.md): auth on every endpoint, timing-safe
   comparisons, no shell construction on the worker, audited unrestricted mode,
@@ -80,10 +80,10 @@ by the platform, not only by convention:
 
 - every change goes through a pull request — no direct push to `main`
   (admins included);
-- the PR must be green: the 15 CI checks above are *required* status checks,
-  so a merge is blocked while one is failing or missing;
+- the PR must be green. The CI workflows are *required* status checks, so a
+  merge is blocked while one of them is failing or missing;
 - no force-push, no branch deletion, linear history only;
-- squash or merge commit (no rebase).
+- squash or merge commit, never rebase.
 
 Keep PRs focused: one change per PR.
 
@@ -94,9 +94,10 @@ regenerate the goldens and reconcile the diff:
 
 ```bash
 cd hub-rs
-python3 tools/api_parity.py capture --base http://127.0.0.1:8000 \
+cargo build --release
+./target/release/huginn-parity capture --base http://127.0.0.1:8000 \
   --admin-user admin --admin-pass <pass> --out /tmp/golden-rust
-python3 tools/api_parity.py diff golden/python /tmp/golden-rust
+./target/release/huginn-parity diff golden/python /tmp/golden-rust
 ```
 
 A diff must be intentional and explained in the PR. See `hub-rs/PARITY_HUB.md`.
@@ -137,7 +138,7 @@ A diff must be intentional and explained in the PR. See `hub-rs/PARITY_HUB.md`.
 ## Pull requests
 
 - Keep PRs focused: one change per PR.
-- Describe **what** changed and **why**; link the issue.
+- Describe **what** changed and **why**, and link the issue.
 - Call out any security-relevant or parity-relevant change explicitly.
 - Update docs (and `CHANGELOG.md`) alongside the code.
 - Green CI + a reviewed parity diff before merge.
@@ -150,10 +151,10 @@ a machine, a network or a person** may ever enter the tree or the history.
 - Use the RFC 5737 documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`,
   `203.0.113.0/24`) in fixtures — never a real address, and never a range
   that belongs to the machine you develop on.
-- Use generic names for hosts (`node-a`, `dxg-01`, `web-01`); never a
+- Use generic names for hosts (`node-a`, `dxg-01`, `web-01`). Never a
   hostname, a domain or an internal CA name.
-- The same applies to **commit messages** and **pull-request descriptions**:
-  they are public, and they are what a `git log -p` on the clone will show.
+- The same applies to **commit messages** and **pull-request descriptions**.
+  They are public, and they are what a `git log -p` on the clone will show.
 - Before pushing, check what you are about to publish:
 
   ```bash

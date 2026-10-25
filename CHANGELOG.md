@@ -4,7 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.10.1] — 2026-10-25
+## [Unreleased]
+
+### Changed
+- **The documentation was refreshed** against the code it describes, and now
+  passes an automated writing check. The pages cover what actually shipped in
+  this cycle: the browser automation subsystem (engine state, step reference,
+  validation), the MCP tools that now return the result instead of a handle,
+  the revocable sessions, the crypto stack, the browser security model, the
+  supply-chain and CI gates, and the release rollout. A new `ci-docs` workflow
+  runs the SlopMonster checker over the shipped copy on every pull request, so
+  a draft that reads like machine output fails the build instead of shipping.
+
+## [1.10.1] — 2026-10.25
 
 ### Fixed
 - **The fleet list showed the wrong IP**: the hub stored the address it saw

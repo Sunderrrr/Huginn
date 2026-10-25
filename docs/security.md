@@ -49,6 +49,16 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
   (stamped by the edge proxy as `X-Real-IP`, not client-forgeable).
 - Workers authenticate with their VM id + a per-worker secret on every request.
   PENDING/REVOKED workers are rejected.
+- **The worker routes authenticate before they read the payload.** A request
+  without valid worker credentials is answered 401 whatever its body, so an
+  anonymous caller cannot probe the endpoints or learn what their body got
+  wrong.
+- **Sessions are revocable.** The access token carries a per-user session
+  counter (`users.session_epoch`), compared with the stored value on every
+  request. A logout, a password change or an MFA reset bumps it and kills
+  every token issued before that moment, immediately and with no denylist to
+  keep. The role in a token is not authoritative: the hub reads the account's
+  role from the database, so a tampered claim changes nothing.
 
 ### Fail-closed configuration
 - In production (`HUGINN_ENV=prod`) the hub **refuses to start** if any of
@@ -66,6 +76,19 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
   tokens and decrypt MFA seeds. (`hub-rs/src/security/fernet.rs`)
 - All secret/token comparisons are **timing-safe** (`subtle::ConstantTimeEq`).
 - The worker writes its credentials file with `0600` permissions.
+
+### Cryptography
+- The signing stack is **pure Rust**: HS256 tokens (hand-rolled, PyJWT-compatible
+  claim order), Argon2id passwords, and an `aws_lc_rs`-backed verifier for the
+  OIDC/RS256 and ES256 id_tokens. No C library is compiled into the hub
+  binary.
+- The elliptic-curve stack is on `crypto-bigint` ≥ 0.7.6 (the release that
+  fixed the constant-time issues of RUSTSEC-2026-0387) — `p256` 0.14 for the
+  WebAuthn ES256 path.
+- RSA is used only to **verify** WebAuthn RS256 attestations. That path is
+  constant-time (`rsa`'s PKCS#1 v1.5 verification compares every byte with
+  `subtle::ConstantTimeEq` and has no early exit), and the hub never performs
+  RSA decryption, which is what the Marvin attack (RUSTSEC-2023-0071) targets.
 
 ### Command injection
 - Whitelisted actions map to **fixed argv vectors** executed directly
@@ -102,11 +125,46 @@ infrastructure: lock down the hub, use TLS, and keep the audit log.
 - Execution endpoints are **rate-limited** per principal and reject oversized
   bodies. Stored output is capped.
 
+### Browser automation
+- **Off by default per VM.** An admin arms the capability
+  (`PUT /api/vms/{id}/browser-enabled`, audited `toggle_browser`); browser
+  tasks are refused with a 403 until then. Operators can run them, read-only
+  users never can.
+- **The engine is installed on the node, never embedded.** The hub pins the
+  release (version plus per-arch SHA-256) in the fleet settings, the worker
+  refuses any download that does not hash to the pin, and the extraction is
+  strict (no symlink or path escape). The install is admin-only and audited.
+- **The engine cannot reach the network's private side.** Page navigation to
+  private or link-local addresses is refused by the engine itself, and the
+  install download rides the updater's allowlist-validated client.
+- **No shell, no secrets in argv.** The engine is spawned as a separated argv
+  (never `sh -c`) with the CDP token in the environment.
+- **The audit records the step count, never the content.** A `type` step can
+  carry a password.
+- **Nothing survives a task.** The engine and its process group are killed on
+  every exit path, and no cookie or storage state is carried over.
+
 ### Auditability
 - The audit log is **append-only and hash-chained**: each row commits to the
   previous one, so tampering is detectable via `GET /api/audit/verify`. There is
   no update/delete path. Login, enrollment, approval, execution, unrestricted
   toggles, and updates are all recorded.
+
+### Supply chain and CI
+- Every GitHub action is pinned to a **commit SHA**, every container base image
+  to a **digest** (Dependabot keeps the digests current), and the worker
+  releases to a **SHA-256** published in `checksums.txt`.
+- `cargo audit` and `npm audit` run on every pull request, and a Trivy scan
+  covers the container images and the deployment manifests. The only advisory
+  ignored is documented in `audit.toml` with the reason it does not apply.
+- The workflows themselves are linted (`actionlint`), so a broken gate is
+  caught before it silently stops running.
+- `main` is protected: a pull request is required, the CI checks are required
+  status checks, force-pushes and branch deletions are refused.
+- **No personal data.** Nothing that identifies a machine, a network or a
+  person may enter the tree, the commit messages or the pull-request
+  descriptions — the repository is public. See
+  [CONTRIBUTING.md](../CONTRIBUTING.md#no-personal-data-in-the-repository).
 
 ## Operational guidance
 - Generate real secrets: `openssl rand -hex 32` for `HUGINN_JWT_SECRET`,

@@ -17,7 +17,7 @@ Compose stacks + Caddy reverse proxy + Kubernetes manifests. Works with
 ```bash
 cd deploy
 cp .env.prod.example .env.prod        # set HUGINN_DOMAIN + real secrets (openssl rand -hex 32)
-../scripts/build-artifacts.sh v1.4.4  # static worker binaries served at /dist
+./build-artifacts.sh vX.Y.Z         # static worker binaries served at /dist
 ./manage.sh up                        # Docker or Podman — auto-detected
 ```
 
@@ -89,8 +89,9 @@ If the `huginn-postgres` name is taken by a leftover container, remove it first:
 ## TLS certificates
 
 `Caddyfile` serves the certificate pair mounted from `./certs/` (generate your
-own CA + server cert — `deploy/certs/huginn.crt` and `huginn.key`; the CA root
-is `huginn-ca.crt`, also served at `/caddy-root.crt` for trust-on-first-use).
+own CA + server cert: `deploy/certs/huginn.crt` and `deploy/certs/huginn.key`).
+The CA root is `huginn-ca.crt`, also served at `/caddy-root.crt` for
+trust-on-first-use.
 To use Let's Encrypt instead, replace the `tls` directive in the Caddyfile with
 `tls <your-email>` and point `HUGINN_DOMAIN` at a public domain.
 
@@ -105,12 +106,12 @@ User-Agent is therefore refused *before* it reaches the hub.
 
 Two ways out, both one-liners:
 
-- client-side: set any User-Agent (`urllib.request.Request(..., headers={"User-Agent": "my-script/1.0"})`);
+- client-side: set any User-Agent (`urllib.request.Request(..., headers={"User-Agent": "my-script/1.0"})`).
 - edge-side: add a WAF **skip rule** for that path/UA, or turn the Browser
   Integrity Check off for the API paths (`/api/*`, `/mcp`).
 
-The hub itself does not depend on any User-Agent; nothing else in the stack
-(worker, installer, MCP) is affected.
+The hub itself does not depend on any User-Agent, and nothing else in the
+stack (worker, installer, MCP) is affected.
 
 ## Environment
 
@@ -125,7 +126,7 @@ secrets.
 ### Keeping the stack up (watchdog)
 
 The host's own supervisor (and some maintenance scripts) can stop the
-containers; `restart: unless-stopped` does **not** restart a container that was
+containers. `restart: unless-stopped` does **not** restart a container that was
 stopped explicitly, so the hub and the TLS edge can stay down for hours.
 
 `scripts/ensure-stack.sh` is an idempotent check that starts whatever is not
@@ -171,6 +172,6 @@ auto-start), and enrolls. Free commands run through PowerShell (`unrestricted`
 mode), whitelisted actions use OS-specific commands (`Get-CimInstance`,
 `Restart-Service` instead of `uname`/`systemctl`).
 
-The worker self-updates toward `HUGINN_TARGET_WORKER_VERSION`; artifacts are
+The worker self-updates toward `HUGINN_TARGET_WORKER_VERSION`. Artifacts are
 served by the hub itself at `/dist` (see `deploy/build-artifacts.sh`, which
 cross-compiles all three: linux/amd64, linux/arm64, windows/amd64).
