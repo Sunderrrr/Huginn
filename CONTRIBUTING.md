@@ -142,6 +142,31 @@ A diff must be intentional and explained in the PR. See `hub-rs/PARITY_HUB.md`.
 - Update docs (and `CHANGELOG.md`) alongside the code.
 - Green CI + a reviewed parity diff before merge.
 
+## No personal data in the repository
+
+This project is public and may be published on npm: **nothing that identifies
+a machine, a network or a person** may ever enter the tree or the history.
+
+- Use the RFC 5737 documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`,
+  `203.0.113.0/24`) in fixtures — never a real address, and never a range
+  that belongs to the machine you develop on.
+- Use generic names for hosts (`node-a`, `dxg-01`, `web-01`); never a
+  hostname, a domain or an internal CA name.
+- The same applies to **commit messages** and **pull-request descriptions**:
+  they are public, and they are what a `git log -p` on the clone will show.
+- Before pushing, check what you are about to publish:
+
+  ```bash
+  git grep -nIE '([0-9]{1,3}\.){3}[0-9]{1,3}|your-domain' -- . \
+    | grep -vE '192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|0\.0\.0\.0|255\.255|127\.0\.0\.1'
+  ```
+
+  and, for the history, `git log --all -p | grep -E '<pattern>'`.
+- If something slipped in, **rewrite the history** (`git filter-repo
+  --replace-text`), not just the file: the old blob stays in the clone
+  forever. Force-push the rewritten refs, and ask GitHub Support to delete
+  the hidden `refs/pull/*` refs — they are read-only from the API.
+
 ## Reporting security issues
 
 Do **not** open a public issue for vulnerabilities. See
