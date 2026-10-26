@@ -61,7 +61,18 @@ compose() {
 
 case "${1:-}" in
   up)
-    compose up -d --build
+    compose build
+    # podman-compose does NOT recreate a container whose image changed, and a
+    # container of the project pod cannot be removed on its own — so a rebuilt
+    # image could stay un-deployed (the old container keeps serving the old
+    # files). The project is therefore recreated: the containers go, the
+    # volumes (the database) stay.
+    if command -v podman >/dev/null 2>&1; then
+      podman rm -f --all >/dev/null 2>&1 || true
+    else
+      docker rm -f $(docker ps -aq) >/dev/null 2>&1 || true
+    fi
+    compose up -d
     # The containers being "Up" proves nothing: a database stuck in a
     # shutdown keeps its container running while the whole stack fails. The
     # smoke test checks the real paths, and a deploy that does not pass it
