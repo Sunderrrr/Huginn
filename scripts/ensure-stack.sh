@@ -28,6 +28,18 @@ for c in $CONTAINERS; do
   if [ "$running" != "true" ]; then
     printf '==> starting %s\n' "$c" >> /var/log/huginn-ensure-stack.log 2>&1
     $ENGINE start "$c" >> /var/log/huginn-ensure-stack.log 2>&1 || true
+    continue
+  fi
+  # Running is not the same as working: a container can be up and broken
+  # (a database stuck in a shutdown, for instance). Recycle the unhealthy
+  # ones — SIGKILL rather than a stop, because a stop of a database waiting
+  # on a client session never completes.
+  health="$($ENGINE inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null || echo none)"
+  if [ "$health" = "unhealthy" ]; then
+    printf '==> recycling unhealthy %s\n' "$c" >> /var/log/huginn-ensure-stack.log 2>&1
+    $ENGINE kill "$c" >> /var/log/huginn-ensure-stack.log 2>&1 || true
+    sleep 2
+    $ENGINE start "$c" >> /var/log/huginn-ensure-stack.log 2>&1 || true
   fi
 done
 
