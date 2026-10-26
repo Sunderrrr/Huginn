@@ -385,6 +385,8 @@ if ($existing) {
     # The node is already enrolled: do NOT enroll again (that would create a
     # second worker, or fail on an already-consumed token).
     Log "reusing the existing identity $($existing.worker_id) — no enrollment"
+    Log "if the hub has revoked or removed that worker, this identity is dead:"
+    Log "move $StateFile aside and run the installer again with a fresh token"
 }
 else {
     if (-not $Token) {
