@@ -6,6 +6,47 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **A stack smoke test** (`scripts/smoke.sh`): it checks the real paths
+  (health, dashboard, installer scripts, manifest, MCP endpoint, database,
+  container health) instead of trusting that the containers are "Up" — a
+  database stuck in a shutdown keeps its container running while the whole
+  stack answers errors. `deploy/manage.sh up` now runs it and **fails** when
+  the stack does not answer, and a new `ci-stack` workflow starts the stack
+  on every pull request and runs the same check.
+
+### Fixed
+- **The watchdog could not recover a broken container.** It recycled an
+  unhealthy container with a kill, but podman refuses to kill a container
+  that belongs to the project pod: the attempt failed, the container stayed
+  broken and the watchdog repeated the same failing action every two
+  minutes. It now escalates to recreating the project (with a cooldown) when
+  the kill is refused.
+- **The Windows service could not be configured.** `ChangeServiceConfig2`
+  requires `SERVICE_START` in addition to `SERVICE_CHANGE_CONFIG` when the
+  failure actions include `SC_ACTION_RESTART`: the install failed with
+  `Win32 error 5 (Access denied)`. The service is now opened (and created)
+  with both rights, and its configuration — binary path, launch arguments,
+  account, start type — is reconciled on every install, so a reinstall with
+  another `BinDir` cannot leave the SCM launching an old executable.
+- **The installer is idempotent.** When the node already has an identity
+  (`worker.json`), the enrollment is not redone: the script only repairs the
+  service, so no second worker is created and no token is consumed.
+- **The state directory is locked down before anything secret lands in it.**
+  The ACL is applied on every run (not only when the directory is created),
+  a failure is fatal instead of a warning, the effective ACL is read back and
+  the install stops if `Users`, `Authenticated Users` or `Everyone` can still
+  read it.
+- **The worker's CA file is no longer optional.** A configured hub CA that
+  cannot be read, or that is not a PEM certificate, now fails with the path
+  and the reason, instead of being silently skipped and surfacing later as a
+  misleading "invalid peer certificate: UnknownIssuer".
+- **The enrollment message follows the real state** returned by the hub: an
+  auto-approved node comes back ACTIVE and is no longer announced as PENDING.
+- **Windows ARM64 is refused before any download**: only windows/amd64 is
+  published, and the installer now says so exactly instead of asking for an
+  asset that does not exist.
+
 ### Fixed
 - **The Windows service could not be configured.** `ChangeServiceConfig2`
   requires `SERVICE_START` in addition to `SERVICE_CHANGE_CONFIG` when the

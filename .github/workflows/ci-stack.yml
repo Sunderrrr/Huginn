@@ -1,0 +1,78 @@
+name: ci-stack
+
+# The stack smoke test: the containers being "Up" proves nothing — a
+# database stuck in a shutdown keeps its container running while the hub, the
+# MCP and the dashboard all fail. This job starts the real compose stack and
+# checks that it answers.
+#
+# It is the gate that catches a deployment broken by a change nobody looked at
+# from the outside (a migration, an environment variable, a mount).
+
+on:
+  # Manual trigger: re-run the stack check on demand (a flaky environment, a
+  # manual verification before a deployment).
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "hub-rs/**"
+      - "mcp-rs/**"
+      - "deploy/**"
+      - "scripts/**"
+      - ".github/workflows/ci-stack.yml"
+  pull_request:
+    paths:
+      - "hub-rs/**"
+      - "mcp-rs/**"
+      - "deploy/**"
+      - "scripts/**"
+      - ".github/workflows/ci-stack.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-stack-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: stack smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # The dev compose interpolates these (they are required, and the real
+      # ones live in the gitignored deploy/.env). Throwaway values: this
+      # stack is started, checked and thrown away.
+      HUGINN_BOOTSTRAP_ADMIN_PASSWORD: "ci-stack-admin-pass-123"
+      HUGINN_JWT_SECRET: "ci-stack-jwt-secret-0123456789abcdef012345"
+      HUGINN_MCP_SERVICE_TOKEN: "ci-stack-mcp-token-0123456789abcdef0123"
+      HUGINN_SECRET_HASH_KEY: "ci-stack-hmac-key-0123456789abcdef012345"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Start the stack
+        # The dev compose: no TLS edge, no certificates to mount, the three
+        # services on their own ports.
+        run: |
+          cd deploy
+          docker compose -f docker-compose.yml up -d --build
+      - name: Smoke test
+        # The smoke script waits for the stack (it retries), so no separate
+        # wait step is needed: one mechanism, not two.
+        run: |
+          SMOKE_DASHBOARD_URL="http://127.0.0.1:5173" \
+          SMOKE_MCP_URL="http://127.0.0.1:9000" \
+          bash scripts/smoke.sh "http://127.0.0.1:8000"
+      - name: Logs on failure
+        if: failure()
+        run: |
+          cd deploy
+          docker compose -f docker-compose.yml ps
+          docker compose -f docker-compose.yml logs --tail 80
+      - name: Tear down
+        if: always()
+        run: |
+          cd deploy
+          docker compose -f docker-compose.yml down -v || true
