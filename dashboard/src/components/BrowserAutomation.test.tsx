@@ -16,6 +16,7 @@ function vm(overrides: Partial<VM> = {}): VM {
     hostname: "h",
     ip_address: "1.2.3.4",
     arch: "amd64",
+    os: "linux",
     state: "active",
     exec_mode: "whitelist",
     worker_version: "1.0.0",
@@ -93,6 +94,26 @@ function renderCard(v: VM) {
 describe("BrowserAutomation", () => {
   beforeEach(() => setToken("test-token"));
   afterEach(() => vi.unstubAllGlobals());
+
+  it("does not offer the engine on a node that is not Linux", async () => {
+    // The Obscura engine is a Linux-only feature: a Windows node has no
+    // system to install it on.
+    stubApi(user("operator"));
+    renderCard(vm({ os: "windows" }));
+    // The message spans several lines, so it is several text nodes: match on
+    // the text content (every ancestor matches too, hence findAll).
+    const messages = await screen.findAllByText(
+      (_content, element) =>
+        element?.textContent?.includes("not available on this node") ?? false,
+    );
+    expect(messages.length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: /Install browser engine/ }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Reinstall browser engine/ }),
+    ).toBeNull();
+  });
 
   it("shows the engine state reported by the worker", async () => {
     stubApi(user("operator"));

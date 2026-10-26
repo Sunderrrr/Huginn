@@ -74,6 +74,10 @@ pub struct VMOut {
     pub hostname: Option<String>,
     pub ip_address: Option<String>,
     pub arch: WorkerArch,
+    /// The operating system the worker reported at enrollment ("linux",
+    /// "windows"). The browser engine is Linux-only, so the dashboard uses
+    /// it to tell the operator that automation is not available here.
+    pub os: Option<String>,
     pub state: VMState,
     pub exec_mode: ExecMode,
     pub worker_version: Option<String>,
@@ -123,6 +127,11 @@ impl VMOut {
             created_at: vm.created_at,
             tags: Vec::new(),
             browser_enabled: vm.browser_enabled,
+            os: vm
+                .os_info
+                .get("os")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             browser_engine_version: vm.browser_engine_version.clone(),
             browser_engine_reported_at: vm.browser_engine_reported_at,
         }
@@ -565,6 +574,7 @@ mod tests {
             "hostname": "host-1",
             "ip_address": "10.0.0.9",
             "arch": "amd64",
+            "os": "linux",
             "state": "active",
             "exec_mode": "whitelist",
             "worker_version": "v1.4.0",

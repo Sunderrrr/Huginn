@@ -108,6 +108,9 @@ export interface VM {
   hostname: string | null;
   ip_address: string | null;
   arch: "amd64" | "arm64";
+  // The operating system the worker reported at enrollment ("linux",
+  // "windows"). The Obscura engine is Linux-only.
+  os: string | null;
   state: VMState;
   exec_mode: ExecMode;
   worker_version: string | null;
