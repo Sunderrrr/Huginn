@@ -31,15 +31,35 @@ for c in $CONTAINERS; do
     continue
   fi
   # Running is not the same as working: a container can be up and broken
-  # (a database stuck in a shutdown, for instance). Recycle the unhealthy
-  # ones — SIGKILL rather than a stop, because a stop of a database waiting
-  # on a client session never completes.
+  # (a database stuck in a shutdown, for instance).
   health="$($ENGINE inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null || echo none)"
   if [ "$health" = "unhealthy" ]; then
-    printf '==> recycling unhealthy %s\n' "$c" >> /var/log/huginn-ensure-stack.log 2>&1
-    $ENGINE kill "$c" >> /var/log/huginn-ensure-stack.log 2>&1 || true
-    sleep 2
-    $ENGINE start "$c" >> /var/log/huginn-ensure-stack.log 2>&1 || true
+    printf '==> unhealthy %s — recycling it\n' "$c" >> /var/log/huginn-ensure-stack.log 2>&1
+    # SIGKILL rather than a stop: a stop of a database that waits on a
+    # client session never completes.
+    if $ENGINE kill "$c" >> /var/log/huginn-ensure-stack.log 2>&1; then
+      sleep 2
+      $ENGINE start "$c" >> /var/log/huginn-ensure-stack.log 2>&1 || true
+    else
+      # The container could not be killed: it belongs to the project pod, and
+      # podman refuses to kill a container in a pod. Recreate the project
+      # instead — with a cooldown, so a stuck container cannot make the
+      # watchdog recreate the stack every two minutes.
+      now=$(date +%s)
+      last=$(cat /var/log/huginn-last-recreate 2>/dev/null || echo 0)
+      if [ $((now - last)) -ge 600 ]; then
+        printf '==> recreating the deploy project (unrecoverable container)\n' >> /var/log/huginn-ensure-stack.log 2>&1
+        echo "$now" > /var/log/huginn-last-recreate
+        $ENGINE rm -f --all >> /var/log/huginn-ensure-stack.log 2>&1 || true
+        if command -v podman-compose >/dev/null 2>&1; then
+          podman-compose -f docker-compose.prod.yml --env-file .env.prod up -d \
+            >> /var/log/huginn-ensure-stack.log 2>&1 || true
+        else
+          podman compose -f docker-compose.prod.yml --env-file .env.prod up -d \
+            >> /var/log/huginn-ensure-stack.log 2>&1 || true
+        fi
+      fi
+    fi
   fi
 done
 

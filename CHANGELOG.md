@@ -6,7 +6,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **A stack smoke test** (`scripts/smoke.sh`): it checks the real paths
+  (health, dashboard, installer scripts, manifest, MCP endpoint, database,
+  container health) instead of trusting that the containers are "Up" — a
+  database stuck in a shutdown keeps its container running while the whole
+  stack answers errors. `deploy/manage.sh up` now runs it and **fails** when
+  the stack does not answer, and a new `ci-stack` workflow starts the stack
+  on every pull request and runs the same check.
+
 ### Fixed
+- **The watchdog could not recover a broken container.** It recycled an
+  unhealthy container with a kill, but podman refuses to kill a container
+  that belongs to the project pod: the attempt failed, the container stayed
+  broken and the watchdog repeated the same failing action every two
+  minutes. It now escalates to recreating the project (with a cooldown) when
+  the kill is refused.
 - **The Windows service could not be configured.** `ChangeServiceConfig2`
   requires `SERVICE_START` in addition to `SERVICE_CHANGE_CONFIG` when the
   failure actions include `SC_ACTION_RESTART`: the install failed with

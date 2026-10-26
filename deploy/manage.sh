@@ -60,7 +60,18 @@ compose() {
 }
 
 case "${1:-}" in
-  up)     compose up -d --build ;;
+  up)
+    compose up -d --build
+    # The containers being "Up" proves nothing: a database stuck in a
+    # shutdown keeps its container running while the whole stack fails. The
+    # smoke test checks the real paths, and a deploy that does not pass it
+    # has broken the stack — so it fails here, loudly.
+    sleep 5
+    ../scripts/smoke.sh || {
+      echo "the stack did not come up cleanly — see the smoke output above" >&2
+      exit 1
+    }
+    ;;
   down)   compose down ;;
   ps)     compose ps ;;
   build)  compose build ;;
