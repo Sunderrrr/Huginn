@@ -421,12 +421,22 @@ else {
 }
 
 # --- Install (or repair) the Windows Service ---
-# The service is never started here: it is created and configured, and the
+# The service is never *started* here: it is created and configured, and the
 # operator starts it (or the SCM does, at boot).
 Log "installing (or repairing) the Windows Service 'HuginnWorker'"
 & $binaryPath install-service --state-dir $StateDir $binaryPath
 if ($LASTEXITCODE -ne 0) {
     Fail "service installation failed (exit code $LASTEXITCODE)"
+}
+
+# A service that was already running still holds the OLD identity in memory:
+# after a re-enrollment it would keep polling with it and the hub would
+# refuse every request (the tasks then stay pending forever). Restart it if
+# it was running.
+$service = Get-Service -Name "HuginnWorker" -ErrorAction SilentlyContinue
+if ($service -and $service.Status -eq "Running") {
+    Log "restarting the running service so it picks up the current identity"
+    Restart-Service -Name "HuginnWorker" -ErrorAction SilentlyContinue
 }
 
 Log "done. Start the service with 'Start-Service HuginnWorker' and approve the VM in the dashboard."
