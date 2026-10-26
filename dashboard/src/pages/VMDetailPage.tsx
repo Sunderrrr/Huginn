@@ -23,6 +23,7 @@ import { TaskResultView } from "../components/TaskOutput";
 import { Modal } from "../components/Dialog";
 import { useToast } from "../components/Toast";
 import { fmtTime, timeAgo } from "../lib/format";
+import { uninstallCommand } from "../lib/commands";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -191,7 +192,7 @@ export function VMDetailPage() {
         {isAdmin && (
           <details style={{ marginTop: 8 }}>
             <summary className="muted tiny" style={{ cursor: "pointer" }}>
-              Uninstall worker from a machine (curl one-liner)
+              Uninstall worker from a machine (one-liner)
             </summary>
             <code
               className="codeblock"
@@ -203,12 +204,13 @@ export function VMDetailPage() {
                 wordBreak: "break-all",
               }}
             >
-              {`curl -fsSL ${window.location.origin}/uninstall.sh | bash`}
+              {uninstallCommand(vm.os, window.location.origin)}
             </code>
             <div className="muted tiny" style={{ marginTop: 4 }}>
-              Stops and removes the worker service, binary, state, hub CA and the
-              Obscura engine. Use the self-signed variant (curl -k) when
-              connecting by IP.
+              Stops and removes the worker service, binary, state and hub CA
+              {vm.os && vm.os.toLowerCase() === "windows"
+                ? ". Run it from a PowerShell console opened as Administrator."
+                : ", plus the Obscura engine. Use the self-signed variant (curl -k) when connecting by IP."}
             </div>
           </details>
         )}

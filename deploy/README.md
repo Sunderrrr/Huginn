@@ -210,6 +210,19 @@ returns is not proof of the hub's identity by itself: pass
 `-CaSha256 <fingerprint>` (obtained over a trusted channel) to pin the real
 root — the fetched certificate must then match.
 
+To remove the worker from a machine, fetch `uninstall.ps1` the same way and
+run it as a file:
+
+```powershell
+$uninstaller = "$env:TEMP\huginn-uninstall.ps1"
+Invoke-WebRequest -Uri "https://<HUGINN_DOMAIN>/uninstall.ps1" -OutFile $uninstaller
+pwsh -NoProfile -ExecutionPolicy Bypass -File $uninstaller
+```
+
+It stops and deletes the `HuginnWorker` service, removes the binary and the
+state (`C:\ProgramData\Huginn`), and removes the hub CA from the LocalMachine
+Root store. The node stays in the fleet until it is revoked in the dashboard.
+
 The worker self-updates toward `HUGINN_TARGET_WORKER_VERSION`. Artifacts are
 served by the hub itself at `/dist` (see `deploy/build-artifacts.sh`, which
 cross-compiles all three: linux/amd64, linux/arm64, windows/amd64, and writes

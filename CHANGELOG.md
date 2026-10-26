@@ -24,6 +24,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **Delete permanently** on a revoked node.
 
 ### Added
+- **A Windows uninstaller** (`scripts/uninstall.ps1`, served at
+  `/uninstall.ps1`): the reverse of the Windows installer. It stops and
+  deletes the `HuginnWorker` service, removes the binary and the state
+  (identity and secret), and removes the hub CA root from the LocalMachine
+  Root trust store. Like the Linux `uninstall.sh`, it is safe to re-run — a
+  missing piece is skipped, not an error. The VM page shows the matching
+  one-liner for the node's OS (PowerShell on Windows, curl on Linux).
+- **A lint job for the installer scripts** (`ci-scripts`): the shell scripts
+  are checked with shellcheck and the PowerShell ones are parsed with the
+  real PowerShell parser. These scripts run on the operator's own machine,
+  where a syntax error surfaces late; the check now lands in the pull
+  request.
 - **A stack smoke test** (`scripts/smoke.sh`): it checks the real paths
   (health, dashboard, installer scripts, manifest, MCP endpoint, database,
   container health) instead of trusting that the containers are "Up" — a

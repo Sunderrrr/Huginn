@@ -62,15 +62,46 @@ if [ "$code" = "200" ]; then ok "GET $DASHBOARD_URL/ -> $code"; else bad "GET $D
 
 # 3. The installer scripts. They are served by the TLS edge (Caddy), which
 #    the dev stack has not: the check is mandatory for a production stack.
-for f in install.sh install.ps1 uninstall.sh; do
-  code=$(get_code "$BASE/$f")
-  if [ "$code" = "200" ]; then
-    ok "GET /$f -> $code"
-  elif [ "${SMOKE_REQUIRE_DIST:-0}" = "1" ]; then
-    bad "GET /$f -> $code"
+#    The body is checked too: a route that does not exist falls through to
+#    the dashboard SPA, which answers 200 with an HTML page — the script
+#    would then be "served" while it is not downloadable at all.
+#
+#    The edge is detected first (from a reference script), then every script
+#    is checked: on a stack that has the edge, a missing script is a failure.
+fetch_script() {
+  # fetch_script <name> <out-file> -> prints the HTTP code
+  rm -f "$2"
+  curl $CURL_OPTS -m 15 -o "$2" -w '%{http_code}' "$BASE/$1" 2>/dev/null || echo 000
+}
+
+is_script() {
+  # is_script <file> -> true when the file is a served script, not the SPA
+  [ -s "$1" ] && ! grep -qi '<!doctype html' "$1"
+}
+
+reference="/tmp/smoke-script-reference"
+edge=0
+for f in install.sh install.ps1; do
+  code=$(fetch_script "$f" "$reference")
+  if [ "$code" = "200" ] && is_script "$reference"; then
+    edge=1
+    break
+  fi
+done
+rm -f "$reference"
+
+for f in install.sh install.ps1 uninstall.sh uninstall.ps1; do
+  served="/tmp/smoke-script-$f"
+  code=$(fetch_script "$f" "$served")
+  if [ "$code" = "200" ] && is_script "$served"; then
+    ok "GET /$f -> $code ($(wc -c <"$served" | tr -d ' ') bytes)"
+  elif [ "$edge" = "1" ]; then
+    # The edge serves the other scripts: this one is missing.
+    bad "GET /$f -> $code (not served as a script)"
   else
     printf '  --   skipping %s (this stack has no TLS edge)\n' "$f"
   fi
+  rm -f "$served"
 done
 
 # 4. The manifest, and the Windows asset it must list.
