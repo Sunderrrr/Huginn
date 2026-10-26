@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
       - name: Lint the shell scripts (shellcheck)
         run: |
-          # shellcheck ships with the runner image, but a missing one must
+          # The linter ships with the runner image, but a missing one must
           # fail the job rather than skip the lint silently.
           if ! command -v shellcheck >/dev/null 2>&1; then
             sudo apt-get update
