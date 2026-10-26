@@ -21,16 +21,36 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(70);
 fn build_http_client(
     _allow_insecure: bool,
     ca_cert_path: Option<&str>,
-) -> Result<reqwest::Client, reqwest::Error> {
+) -> Result<reqwest::Client, Error> {
     let mut builder = reqwest::Client::builder().timeout(HTTP_TIMEOUT);
     if let Some(path) = ca_cert_path {
-        if let Ok(pem) = std::fs::read(path) {
-            if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
-                builder = builder.add_root_certificate(cert);
-            }
+        // A configured CA that cannot be read or parsed is fatal. Silently
+        // continuing without it turns a clear "the file is missing" into a
+        // later "invalid peer certificate: UnknownIssuer".
+        let pem = std::fs::read(path).map_err(|e| Error::CaCert {
+            path: path.to_string(),
+            detail: format!("cannot be read: {e}"),
+        })?;
+        // reqwest accepts any bytes here and only fails later, at the TLS
+        // handshake, with a misleading "invalid peer certificate". A PEM
+        // certificate block is checked first, so the operator is told which
+        // file is wrong.
+        if !pem
+            .windows("-----BEGIN CERTIFICATE-----".len())
+            .any(|w| w == b"-----BEGIN CERTIFICATE-----")
+        {
+            return Err(Error::CaCert {
+                path: path.to_string(),
+                detail: "is not a PEM certificate (no BEGIN CERTIFICATE block)".to_string(),
+            });
         }
+        let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| Error::CaCert {
+            path: path.to_string(),
+            detail: format!("is not a valid PEM certificate: {e}"),
+        })?;
+        builder = builder.add_root_certificate(cert);
     }
-    builder.build()
+    builder.build().map_err(Error::Http)
 }
 /// Response bodies are read with a hard 4 MiB cap (mirrors io.LimitReader).
 const MAX_RESPONSE_BYTES: usize = 4 << 20;
@@ -58,6 +78,14 @@ pub enum Error {
     Http(reqwest::Error),
     Encode(String),
     Decode(String),
+    /// The hub's CA file is configured but could not be read or parsed.
+    /// Failing here is deliberate: a client silently built without the
+    /// configured root produces a confusing "invalid peer certificate:
+    /// UnknownIssuer" much later, instead of naming the actual problem.
+    CaCert {
+        path: String,
+        detail: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -65,6 +93,9 @@ impl fmt::Display for Error {
         match self {
             Error::Policy(msg) => write!(f, "{msg}"),
             Error::Api(err) => write!(f, "{err}"),
+            Error::CaCert { path, detail } => {
+                write!(f, "hub CA certificate {path}: {detail}")
+            }
             // The reqwest message alone ("error sending request for url")
             // hides the cause (TLS, timeout, connection refused). The
             // source chain carries it.
@@ -129,8 +160,7 @@ impl Client {
                 "hub URL must use https (got {base:?}); set allow_insecure for dev"
             )));
         }
-        let http = build_http_client(opts.allow_insecure, opts.ca_cert_path.as_deref())
-            .map_err(Error::Http)?;
+        let http = build_http_client(opts.allow_insecure, opts.ca_cert_path.as_deref())?;
         Ok(Self {
             base_url: base,
             worker_id: opts.worker_id,
@@ -513,6 +543,28 @@ mod tests {
             .heartbeat(HeartbeatRequest::default())
             .await
             .expect("the CA given by path must be trusted");
+    }
+
+    /// A configured CA that cannot be read must fail loudly, with the path:
+    /// a client silently built without the root turns into a confusing
+    /// "invalid peer certificate: UnknownIssuer" much later.
+    #[test]
+    fn a_configured_ca_that_cannot_be_read_is_an_error() {
+        let missing = std::path::Path::new("/nonexistent/hub-ca.pem");
+        let err = build_http_client(false, Some(missing.to_str().unwrap()))
+            .expect_err("a missing CA file must be fatal");
+        let text = format!("{err}");
+        assert!(text.contains("hub-ca.pem"), "unexpected error: {text}");
+        assert!(text.contains("cannot be read"), "unexpected error: {text}");
+
+        // And a file that is not a certificate is refused too.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("not-a-cert.pem");
+        std::fs::write(&path, b"this is not a certificate").expect("write");
+        let err = build_http_client(false, Some(path.to_str().unwrap()))
+            .expect_err("an invalid CA file must be fatal");
+        let text = format!("{err}");
+        assert!(text.contains("PEM certificate"), "unexpected error: {text}");
     }
 
     #[test]
