@@ -444,30 +444,42 @@ mod windows {
             account_name: None, // LocalSystem
             account_password: None,
         };
-        // Open the service explicitly with CHANGE_CONFIG, which is the right
-        // the SCM needs to reconfigure it (the recovery actions below).
+        // The rights the SCM asks for:
+        //  - SERVICE_CHANGE_CONFIG, to reconfigure the service (description,
+        //    binary path, arguments, recovery actions);
+        //  - SERVICE_START, which ChangeServiceConfig2 requires as well
+        //    when the failure actions include SC_ACTION_RESTART
+        //    ("SERVICE_CHANGE_CONFIG | SERVICE_START"). Without it the
+        //    call fails with ERROR_ACCESS_DENIED (5).
         //
-        // CreateServiceW takes the access mask as the service object's DACL,
-        // not as the rights on the handle it returns: relying on that handle
-        // is what made ChangeServiceConfig2W fail with an access error. And
-        // the install is idempotent: a service left over from an earlier run
-        // is opened and re-configured instead of failing with
+        // The mask given to CreateServiceW is the access granted on the
+        // handle it returns, so the service is opened explicitly with the
+        // same rights. The install is idempotent: a service left over from
+        // an earlier run is opened and re-configured instead of failing with
         // ERROR_SERVICE_EXISTS.
         const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
-        let service = match manager.open_service(SERVICE_NAME, ServiceAccess::CHANGE_CONFIG) {
+        let rights = ServiceAccess::CHANGE_CONFIG | ServiceAccess::START;
+        let service = match manager.open_service(SERVICE_NAME, rights) {
             Ok(s) => s,
             Err(windows_service::Error::Winapi(e))
                 if e.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST) =>
             {
                 manager
-                    .create_service(&info, ServiceAccess::CHANGE_CONFIG)
+                    .create_service(&info, rights)
                     .map_err(|e| win32_error("create service", e))?;
                 manager
-                    .open_service(SERVICE_NAME, ServiceAccess::CHANGE_CONFIG)
+                    .open_service(SERVICE_NAME, rights)
                     .map_err(|e| win32_error("open the new service", e))?
             }
             Err(e) => return Err(win32_error("open service", e)),
         };
+        // Reconcile the configuration of an existing service: the binary
+        // path, the launch arguments, the account and the start type. A
+        // reinstall with a different BinDir must not leave the SCM running
+        // an old executable.
+        service
+            .change_config(&info)
+            .map_err(|e| win32_error("update the service configuration", e))?;
         service
             .set_description(SERVICE_DESCRIPTION)
             .map_err(|e| win32_error("set description", e))?;

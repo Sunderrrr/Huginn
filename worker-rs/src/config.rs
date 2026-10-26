@@ -117,6 +117,9 @@ pub enum Error {
         path: String,
         source: serde_json::Error,
     },
+    /// The state directory could not be locked down (Windows ACL).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // built by the Windows code
+    Acl(String),
 }
 
 impl std::fmt::Display for Error {
@@ -126,6 +129,7 @@ impl std::fmt::Display for Error {
             Error::Json(e) => write!(f, "{e}"),
             Error::Identity => write!(f, "refusing to save state without worker identity"),
             Error::Parse { path, source } => write!(f, "parse state {path}: {source}"),
+            Error::Acl(detail) => write!(f, "state directory ACL: {detail}"),
         }
     }
 }
@@ -135,7 +139,7 @@ impl std::error::Error for Error {
         match self {
             Error::Io(e) => Some(e),
             Error::Json(e) | Error::Parse { source: e, .. } => Some(e),
-            Error::Identity => None,
+            Error::Identity | Error::Acl(_) => None,
         }
     }
 }
@@ -155,17 +159,24 @@ pub fn load(path: &Path) -> Result<State, Error> {
     })
 }
 
-/// Creates the state directory (recursively). On Unix it is tightened to
-/// 0700; on Windows inheritance from ProgramData is stripped and access is
-/// limited to SYSTEM and Administrators — the state file holds the worker
-/// secret, and the default ACLs would let every local user read it.
-/// Best-effort, like a restrictive umask.
+/// Creates the state directory (recursively) and makes sure it is locked
+/// down. On Unix it is tightened to 0700; on Windows inheritance from
+/// ProgramData is stripped and access is limited to SYSTEM and
+/// Administrators — the state file holds the worker secret, and the default
+/// ACLs would let every local user read it.
+///
+/// The lock-down is applied **every time**, not only when the directory is
+/// created: the directory may already exist with the inherited, wide-open
+/// ProgramData ACL (the installer creates it before the first enrollment), and
+/// the secret would then be written into a directory anyone can read. On
+/// Windows a failure is fatal (the error propagates) and the effective ACL
+/// is verified afterwards.
 pub fn ensure_state_dir(dir: &Path) -> Result<(), Error> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     #[cfg(windows)]
-    restrict_dir_acl(dir);
+    restrict_dir_acl(dir)?;
     Ok(())
 }
 
@@ -182,22 +193,66 @@ pub(crate) const STATE_DIR_ACL_GRANTS: &[&str] = &[
     "*S-1-5-32-544:(OI)(CI)F",
 ];
 
+/// The principals that must NOT be able to read the state directory. The
+/// directory holds the worker secret.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // used by the Windows build and the tests
+pub(crate) const FORBIDDEN_ACL_PRINCIPALS: &[&str] = &[
+    "BUILTIN\\Users",
+    "BUILTIN\\Authenticated Users",
+    "NT AUTHORITY\\Everyone",
+    "Everyone",
+    "Users",
+    "Authenticated Users",
+];
+
 /// Locks the state dir down to SYSTEM and Administrators via icacls (ships
-/// with every supported Windows; fixed argv, no shell involved).
+/// with every supported Windows; fixed argv, no shell involved), then
+/// **verifies** the result: the state directory holds the worker secret, so a
+/// silent failure here would leave it readable by every local account.
 #[cfg(windows)]
-fn restrict_dir_acl(dir: &Path) {
+fn restrict_dir_acl(dir: &Path) -> Result<(), Error> {
     let output = std::process::Command::new("icacls")
         .arg(dir)
         .args(STATE_DIR_ACL_GRANTS)
-        .output();
-    match output {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => eprintln!(
-            "huginn-worker: warning: could not restrict state dir ACL: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ),
-        Err(e) => eprintln!("huginn-worker: warning: icacls failed: {e}"),
+        .output()
+        .map_err(|e| Error::Acl(format!("icacls could not be run: {e}")))?;
+    if !output.status.success() {
+        return Err(Error::Acl(format!(
+            "icacls refused to lock down {}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
+    verify_dir_acl(dir)
+}
+
+/// Reads back the ACL and refuses to continue if a forbidden principal can
+/// still read the directory.
+#[cfg(windows)]
+fn verify_dir_acl(dir: &Path) -> Result<(), Error> {
+    let output = std::process::Command::new("icacls")
+        .arg(dir)
+        .output()
+        .map_err(|e| Error::Acl(format!("icacls could not be run: {e}")))?;
+    let listing = String::from_utf8_lossy(&output.stdout).to_string();
+    // icacls prints one ACE per line, each starting with the principal.
+    for line in listing.lines() {
+        let ace = line.trim();
+        if ace.is_empty() || ace.starts_with("Successfully processed") {
+            continue;
+        }
+        let principal = ace.split_whitespace().next().unwrap_or("");
+        for forbidden in FORBIDDEN_ACL_PRINCIPALS {
+            if principal.eq_ignore_ascii_case(forbidden) {
+                return Err(Error::Acl(format!(
+                    "{} is still readable by {} — the worker secret would be exposed",
+                    dir.display(),
+                    principal
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Creates the secret-bearing temp file with restrictive permissions before

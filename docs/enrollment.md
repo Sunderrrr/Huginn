@@ -90,14 +90,28 @@ Invoke-WebRequest -Uri "https://<hub>/install.ps1" -OutFile $installer
 pwsh -NoProfile -ExecutionPolicy Bypass -File $installer -HUB_URL "https://<hub>" -Token "<token>"
 ```
 
-The installer detects the architecture, downloads the matching `.exe` from
-`/dist`, verifies its SHA-256 against the hub's manifest (`/dist/checksums.txt`,
-one line per published asset), enrolls, and installs the **HuginnWorker**
-Windows Service (auto-start).
+The installer detects the **OS** architecture (not the PowerShell process's),
+downloads the matching `.exe` from `/dist`, verifies its SHA-256 against the
+hub's manifest (`/dist/checksums.txt`, one line per published asset),
+enrolls, and installs the **HuginnWorker** Windows Service (auto-start). Only
+**windows/amd64** is published; any other architecture is refused before
+anything is downloaded.
+
+**Re-running it is safe**: when the node already has an identity
+(`C:\ProgramData\Huginn\worker.json`), the enrollment is **not** redone — the
+script only repairs the service. To repair it alone:
+
+```powershell
+& "C:\Program Files\Huginn\huginn-worker.exe" install-service --state-dir "C:\ProgramData\Huginn" "C:\Program Files\Huginn\huginn-worker.exe"
+```
+
+The installer never starts the service: `Start-Service HuginnWorker` does.
 
 With a hub behind a private CA, the installer fetches the CA root
-(trust-on-first-use) and adds it to the LocalMachine Root store. Pass
-`-CaSha256 <fingerprint>` to pin that root instead of trusting it blindly.
+(trust-on-first-use) and adds it to the LocalMachine Root store. That first
+fetch runs with the TLS validation **disabled**, so it is not proof of the
+hub's identity on its own: pass `-CaSha256 <fingerprint>` (obtained over a
+trusted channel) to pin the real root.
 
 ### What enrollment does
 - The worker calls `POST /api/worker/enroll` with the token and host metadata.

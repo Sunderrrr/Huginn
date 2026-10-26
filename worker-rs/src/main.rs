@@ -188,8 +188,23 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
         return 1;
     }
     println!("enrolled as {} (state: {})", resp.worker_id, resp.state);
-    println!("the VM is PENDING; approve it in the dashboard before it can run tasks");
+    // The hub decides the state (an auto-approving enrollment token comes
+    // back ACTIVE). Telling the operator to approve a node that is already
+    // active is misleading, so the instruction follows the real state.
+    println!("{}", enrollment_state_message(&resp.state));
     0
+}
+
+/// What to tell the operator after an enrollment, based on the state the hub
+/// actually returned (an auto-approving token comes back ACTIVE).
+fn enrollment_state_message(state: &str) -> String {
+    match state {
+        "pending" => {
+            "the VM is PENDING: approve it in the dashboard before it can run tasks".to_string()
+        }
+        "active" => "the VM is ACTIVE: it can already receive tasks".to_string(),
+        other => format!("the VM state is '{other}'; check the dashboard"),
+    }
 }
 
 async fn cmd_run(state_dir: &str) -> i32 {
@@ -319,6 +334,16 @@ async fn cmd_install_service(state_dir: &str, args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_enrollment_message_follows_the_real_state() {
+        // The hub decides the state; an auto-approving token comes back
+        // ACTIVE, and telling the operator to approve it would be wrong.
+        assert!(super::enrollment_state_message("pending").contains("PENDING"));
+        assert!(super::enrollment_state_message("active").contains("ACTIVE"));
+        assert!(!super::enrollment_state_message("active").contains("approve"));
+        assert!(super::enrollment_state_message("revoked").contains("revoked"));
+    }
+
     use super::*;
 
     #[test]

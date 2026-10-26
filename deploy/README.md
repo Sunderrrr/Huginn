@@ -180,16 +180,35 @@ Invoke-WebRequest -Uri "https://<HUGINN_DOMAIN>/install.ps1" -OutFile $installer
 pwsh -NoProfile -ExecutionPolicy Bypass -File $installer -HUB_URL "https://<HUGINN_DOMAIN>" -Token "<token>"
 ```
 
-The installer detects the architecture, downloads the matching `.exe` from
-`/dist`, verifies its SHA-256 against the hub's own manifest, installs a
-**Windows Service** ("HuginnWorker", auto-start), and enrolls. Free commands
-run through PowerShell (`unrestricted` mode), whitelisted actions use
+The installer detects the **OS** architecture (not the PowerShell process's:
+a 32-bit shell on a 64-bit Windows would report x86), downloads the matching
+`.exe` from `/dist`, verifies its SHA-256 against the hub's own manifest,
+installs a **Windows Service** ("HuginnWorker", auto-start) and enrolls. Free
+commands run through PowerShell (`unrestricted` mode), whitelisted actions use
 OS-specific commands (`Get-CimInstance`, `Restart-Service` instead of
 `uname`/`systemctl`).
 
+Only **windows/amd64** is published (the release builds
+`x86_64-pc-windows-gnu`); the installer refuses any other architecture
+before downloading anything.
+
+**Re-running the installer is safe.** When the node already has an identity
+(`C:\ProgramData\Huginn\worker.json`), the enrollment is **not** redone: the
+script only repairs the service, so no second worker is created and no token
+is consumed. To repair the service alone:
+
+```powershell
+& "C:\Program Files\Huginn\huginn-worker.exe" install-service --state-dir "C:\ProgramData\Huginn" "C:\Program Files\Huginn\huginn-worker.exe"
+```
+
+The installer never starts the service: `Start-Service HuginnWorker` does.
+
 If the hub sits behind a private CA, the installer fetches the CA root
-(trust-on-first-use) and adds it to the LocalMachine Root store. Pass
-`-CaSha256 <fingerprint>` to pin that root instead of trusting it blindly.
+(trust-on-first-use) and adds it to the LocalMachine Root store. That first
+fetch runs with the TLS validation **disabled**, so the certificate it
+returns is not proof of the hub's identity by itself: pass
+`-CaSha256 <fingerprint>` (obtained over a trusted channel) to pin the real
+root — the fetched certificate must then match.
 
 The worker self-updates toward `HUGINN_TARGET_WORKER_VERSION`. Artifacts are
 served by the hub itself at `/dist` (see `deploy/build-artifacts.sh`, which

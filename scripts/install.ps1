@@ -1,7 +1,7 @@
 # Huginn worker installer for Windows.
 #
-# Run the commands separately, from an elevated "Run as administrator"
-# PowerShell 7 console:
+# Run the commands separately, from a PowerShell 7 console opened as
+# administrator:
 #
 #   pwsh -NoProfile
 #   $PSVersionTable.PSVersion        # expect 7.6.8
@@ -13,18 +13,25 @@
 # Token to this script's param() block, and a failure inside the piped script
 # would terminate the caller's shell. Run it as a file, as above.
 #
-# The script detects the architecture, downloads the matching worker binary
+# The script detects the OS architecture, downloads the matching worker binary
 # from the hub, verifies its SHA-256 against the hub's own manifest, installs
-# it as a Windows Service, and enrolls with the hub. The VM stays PENDING
-# until an admin approves it.
+# it as a Windows Service, and enrolls with the hub.
+#
+# Re-running it is safe: when the node already has an identity
+# (C:\ProgramData\Huginn\worker.json), the enrollment is NOT redone — the
+# script only repairs the service. The identity is preserved.
 #
 # If the hub uses a private CA, the installer fetches the hub's CA root
-# (trust-on-first-use) and installs it into the Windows trust store. Pass
-# -CaSha256 <fingerprint> to pin that root instead of trusting it blindly.
+# (trust-on-first-use) and installs it into the Windows trust store. That
+# first fetch is done with the TLS validation DISABLED, so the certificate
+# it returns is not proof of the hub's identity on its own. Pass
+# -CaSha256 <fingerprint> to pin the root: the fetched certificate must then
+# match the fingerprint you obtained through a trusted channel.
 #
 # Parameters:
 #   HUB_URL   (required) base URL of the hub, e.g. https://172.16.2.5
-#   Token     (required) enrollment token from the dashboard
+#   Token     (required) enrollment token from the dashboard (only used when
+#             the node has no identity yet)
 #   Name      (optional) friendly VM name (defaults to the hostname)
 #   BinDir    (optional) install directory (default C:\Program Files\Huginn)
 #   CaSha256  (optional) expected SHA-256 of the hub's CA root, as published
@@ -34,8 +41,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$HUB_URL,
 
-    [Parameter(Mandatory = $true)]
-    [string]$Token,
+    [string]$Token = "",
 
     [string]$Name = "",
     [string]$BinDir = "C:\Program Files\Huginn",
@@ -49,7 +55,14 @@ $StateDir = "C:\ProgramData\Huginn"
 # a service and needs it after the installation. The enrollment passes the
 # path, the worker stores it in its state, and the service inherits it.
 $HubCaFile = Join-Path $StateDir "hub-ca.crt"
+$StateFile = Join-Path $StateDir "worker.json"
 $DownloadTimeoutSec = 120
+
+# The state directory holds the worker secret: only SYSTEM and the
+# Administrators group may read it. The group is granted by SID, never by its
+# English name (a localized Windows has no such name to resolve).
+$AclGrants = @("/inheritance:r", "/grant:r", "SYSTEM:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F")
+$ForbiddenPrincipals = @("BUILTIN\Users", "BUILTIN\Authenticated Users", "NT AUTHORITY\Everyone", "Everyone", "Users", "Authenticated Users")
 
 function Log([string]$msg) {
     Write-Host "==> $msg" -ForegroundColor Cyan
@@ -135,27 +148,75 @@ function Get-ManifestHash([string]$Content, [string]$Asset) {
     return $null
 }
 
+# Locks a path down to SYSTEM and Administrators, then reads the ACL back and
+# refuses to continue if a forbidden principal can still read it. The state
+# directory holds the worker secret, so a silent failure here would leave it
+# readable by every local account.
+function Protect-Path([string]$Path, [string]$What) {
+    $icacls = Get-Command icacls -ErrorAction SilentlyContinue
+    if (-not $icacls) {
+        Fail "icacls is not available: cannot secure $What"
+    }
+    # The return code is checked: a warning (a localized name that does not
+    # resolve, a missing privilege) must not pass as success.
+    & icacls $Path @AclGrants | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Fail "icacls failed to lock down ${What} (exit code $LASTEXITCODE)"
+    }
+    $listing = & icacls $Path
+    if ($LASTEXITCODE -ne 0) {
+        Fail "icacls could not read the ACL of ${What} (exit code $LASTEXITCODE)"
+    }
+    foreach ($line in $listing) {
+        $ace = $line.Trim()
+        if (-not $ace -or $ace.StartsWith("Successfully processed")) { continue }
+        $principal = ($ace -split '\s+')[0]
+        foreach ($forbidden in $ForbiddenPrincipals) {
+            if ($principal -ieq $forbidden) {
+                Fail "${What} is still readable by $principal — the worker secret would be exposed"
+            }
+        }
+    }
+}
+
 # --- Must run as Administrator ---
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Fail "please run as Administrator (it installs a Windows Service)"
 }
 
-# --- Detect architecture ---
-$arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-    "AMD64" { "amd64" }
-    "ARM64" { "arm64" }
-    default { Fail "unsupported architecture: $($env:PROCESSOR_ARCHITECTURE)" }
+# --- Detect the OS architecture, not the PowerShell process's ---
+# A 32-bit PowerShell on a 64-bit Windows reports PROCESSOR_ARCHITECTURE=x86
+# (WOW64), which would download the wrong worker.
+$osArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+switch ($osArch) {
+    "X64" { $arch = "amd64" }
+    "Arm64" { $arch = "arm64" }
+    default { Fail "unsupported OS architecture: $osArch (this worker is published for windows/amd64 only)" }
 }
-Log "architecture: $arch"
+Log "OS architecture: $osArch ($arch)"
+
+# Only windows/amd64 is published (release.yml and build-artifacts.sh build
+# x86_64-pc-windows-gnu only), so refuse anything else BEFORE downloading.
+if ($arch -ne "amd64") {
+    Fail "no windows/$arch worker is published: the release builds windows/amd64 only (x86_64-pc-windows-gnu). Use an amd64 node, or publish a windows/$arch build first."
+}
 
 # --- Validate the parameters ---
 if (-not $HUB_URL) { Fail "HUB_URL is required" }
-if (-not $Token) { Fail "Token is required" }
 $HUB_URL = $HUB_URL.TrimEnd('/')
 if ($CaSha256 -and $CaSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
     Fail "CaSha256 must be a SHA-256 fingerprint (64 hex characters)"
 }
+
+# --- Prepare the directories, and lock them down BEFORE anything secret lands in them ---
+if (-not (Test-Path $BinDir)) {
+    New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+}
+if (-not (Test-Path $StateDir)) {
+    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+}
+Protect-Path -Path $StateDir -What "the state directory $StateDir"
 
 # --- TLS trust (trust-on-first-use for a hub behind a private CA) ---
 function Ensure-HubTrust {
@@ -170,8 +231,13 @@ function Ensure-HubTrust {
     }
 
     Log "the hub certificate is not trusted ($healthCheckError); fetching its CA root"
+    if (-not $CaSha256) {
+        Log "WARNING: this CA is fetched over a connection whose certificate was NOT verified."
+        Log "         It is therefore not proof of the hub's identity: a man-in-the-middle could"
+        Log "         substitute its own root. Pass -CaSha256 <fingerprint> (obtained over a"
+        Log "         trusted channel) to pin the hub's real CA."
+    }
     $caUrl = "$HUB_URL/caddy-root.crt"
-    $caFile = $HubCaFile
 
     try {
         # The validation is bypassed for this one request: the CA is the thing
@@ -179,23 +245,23 @@ function Ensure-HubTrust {
         # -CaSha256 when the caller pinned it.
         Invoke-WebRequestAllowUntrustedCertificate -RequestParameters @{
             Uri             = $caUrl
-            OutFile         = $caFile
+            OutFile         = $HubCaFile
             UseBasicParsing = $true
             TimeoutSec      = 10
         }
     }
     catch {
-        Remove-Item $caFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $HubCaFile -Force -ErrorAction SilentlyContinue
         Fail "could not fetch the hub CA from ${caUrl}: $($_.Exception.Message)"
     }
 
     try {
-        $caContent = Get-Content $caFile -Raw
+        $caContent = Get-Content $HubCaFile -Raw
         if ($caContent -notmatch 'BEGIN CERTIFICATE') {
             Fail "the fetched CA does not look like a PEM certificate"
         }
 
-        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($caFile)
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($HubCaFile)
         if ($CaSha256) {
             $actual = ([System.Security.Cryptography.SHA256]::Create().ComputeHash($cert.RawData) |
                 ForEach-Object { $_.ToString("x2") }) -join ""
@@ -204,12 +270,13 @@ function Ensure-HubTrust {
             }
             Log "hub CA fingerprint matches the pinned value"
         }
+        else {
+            Log "hub CA accepted on trust (no fingerprint pinned)"
+        }
 
-        # Same lock-down as the worker applies to its state directory: SYSTEM
-        # and Administrators only. The Administrators group is granted by SID
-        # (*S-1-5-32-544): on a localized Windows the English name does not
-        # resolve and icacls only warns.
-        & icacls $caFile /inheritance:r /grant:r "SYSTEM:(R)" /grant:r "*S-1-5-32-544:(R)" | Out-Null
+        # Same lock-down as the state directory: the CA file is read by the
+        # service (LocalSystem), by SYSTEM and the administrators only.
+        Protect-Path -Path $HubCaFile -What "the hub CA file $HubCaFile"
 
         $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "LocalMachine")
         try {
@@ -220,10 +287,10 @@ function Ensure-HubTrust {
             $store.Close()
         }
         Log "hub CA installed into the LocalMachine Root trust store"
-        Log "hub CA kept at $caFile (the worker is given that path)"
+        Log "hub CA kept at $HubCaFile (the worker is given that path)"
     }
     catch {
-        Remove-Item $caFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $HubCaFile -Force -ErrorAction SilentlyContinue
         throw
     }
 
@@ -234,14 +301,6 @@ function Ensure-HubTrust {
     catch {
         Fail "the hub is still not trusted after installing its CA: $($_.Exception.Message)"
     }
-}
-
-# --- Prepare the directories (the CA lands in the state dir) ---
-if (-not (Test-Path $BinDir)) {
-    New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-}
-if (-not (Test-Path $StateDir)) {
-    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
 }
 
 Ensure-HubTrust
@@ -304,37 +363,68 @@ catch {
 Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
 Log "installed $binaryPath"
 
-# --- Enroll with the hub ---
-if (-not $Name) { $Name = $env:COMPUTERNAME }
-
-Log "enrolling with $HUB_URL"
-$env:HUB_URL = $HUB_URL
-$env:TOKEN = $Token
-$env:NAME = $Name
-$env:HUGINN_ALLOW_INSECURE = if ($HUB_URL -match '^http://') { "1" } else { "" }
-# The worker keeps this path in its state, so the service (LocalSystem) trusts
-# the same CA after the installation.
-if (Test-Path $HubCaFile) {
-    $env:HUGINN_CA_CERT = $HubCaFile
-}
-
-try {
-    & $binaryPath enroll --state-dir $StateDir
-    if ($LASTEXITCODE -ne 0) {
-        Fail "enrollment failed (exit code $LASTEXITCODE)"
+# --- Identity: reuse it when the node already has one ---
+$existing = $null
+if (Test-Path $StateFile) {
+    try {
+        $existing = Get-Content $StateFile -Raw | ConvertFrom-Json
+    }
+    catch {
+        Fail ("$StateFile exists but could not be read ($($_.Exception.Message)). " +
+              "Move it aside to enroll a new identity, or repair the service with " +
+              "'huginn-worker.exe install-service --state-dir $StateDir $binaryPath'.")
+    }
+    if (-not $existing.worker_id -or -not $existing.worker_secret) {
+        Fail ("$StateFile exists but has no worker identity. Move it aside to enroll " +
+              "a new identity, or repair the service with 'huginn-worker.exe " +
+              "install-service --state-dir $StateDir $binaryPath'.")
     }
 }
-finally {
-    # The token must not linger in the environment of this session. The CA path
-    # stays: the service needs it.
-    Remove-Item Env:TOKEN -ErrorAction SilentlyContinue
+
+if ($existing) {
+    # The node is already enrolled: do NOT enroll again (that would create a
+    # second worker, or fail on an already-consumed token).
+    Log "reusing the existing identity $($existing.worker_id) — no enrollment"
+}
+else {
+    if (-not $Token) {
+        Fail ("this node has no identity yet: an enrollment token is required " +
+              "(HUB_URL and Token), and the enrollment writes " +
+              "$StateFile")
+    }
+    if (-not $Name) { $Name = $env:COMPUTERNAME }
+
+    Log "enrolling with $HUB_URL"
+    $env:HUB_URL = $HUB_URL
+    $env:TOKEN = $Token
+    $env:NAME = $Name
+    $env:HUGINN_ALLOW_INSECURE = if ($HUB_URL -match '^http://') { "1" } else { "" }
+    # The worker keeps this path in its state, so the service (LocalSystem)
+    # trusts the same CA after the installation.
+    if (Test-Path $HubCaFile) {
+        $env:HUGINN_CA_CERT = $HubCaFile
+    }
+
+    try {
+        & $binaryPath enroll --state-dir $StateDir
+        if ($LASTEXITCODE -ne 0) {
+            Fail "enrollment failed (exit code $LASTEXITCODE)"
+        }
+    }
+    finally {
+        # The token must not linger in the environment of this session. The CA
+        # path stays: the service needs it.
+        Remove-Item Env:TOKEN -ErrorAction SilentlyContinue
+    }
 }
 
-# --- Install the Windows Service ---
-Log "installing the Windows Service 'HuginnWorker'"
+# --- Install (or repair) the Windows Service ---
+# The service is never started here: it is created and configured, and the
+# operator starts it (or the SCM does, at boot).
+Log "installing (or repairing) the Windows Service 'HuginnWorker'"
 & $binaryPath install-service --state-dir $StateDir $binaryPath
 if ($LASTEXITCODE -ne 0) {
     Fail "service installation failed (exit code $LASTEXITCODE)"
 }
 
-Log "done. Approve this VM in the dashboard to activate it."
+Log "done. Start the service with 'Start-Service HuginnWorker' and approve the VM in the dashboard."
