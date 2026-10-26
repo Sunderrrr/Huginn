@@ -95,24 +95,21 @@ describe("BrowserAutomation", () => {
   beforeEach(() => setToken("test-token"));
   afterEach(() => vi.unstubAllGlobals());
 
-  it("does not offer the engine on a node that is not Linux", async () => {
+  it("shows nothing on a node that is not Linux", async () => {
     // The Obscura engine is a Linux-only feature: a Windows node has no
-    // system to install it on.
+    // system to install it on, so the whole section is hidden.
     stubApi(user("operator"));
-    renderCard(vm({ os: "windows" }));
-    // The message spans several lines, so it is several text nodes: match on
-    // the text content (every ancestor matches too, hence findAll).
-    const messages = await screen.findAllByText(
-      (_content, element) =>
-        element?.textContent?.includes("not available on this node") ?? false,
-    );
-    expect(messages.length).toBeGreaterThan(0);
+    const { container } = renderCard(vm({ os: "windows" }));
+    await waitFor(() => expect(container.innerHTML).not.toBe(""));
+    expect(screen.queryByText(/browser automation/i)).toBeNull();
+    expect(screen.queryByText(/Obscura/)).toBeNull();
     expect(
       screen.queryByRole("button", { name: /Install browser engine/ }),
     ).toBeNull();
     expect(
       screen.queryByRole("button", { name: /Reinstall browser engine/ }),
     ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Run/ })).toBeNull();
   });
 
   it("shows the engine state reported by the worker", async () => {
