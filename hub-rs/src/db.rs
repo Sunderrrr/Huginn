@@ -47,7 +47,16 @@ impl DbError {
 /// Build a pool with the given maximum size (maps to the Python hub's
 /// `pool_size + max_overflow`).
 pub fn pool_options(max_connections: u32) -> PgPoolOptions {
-    PgPoolOptions::new().max_connections(max_connections.max(1))
+    PgPoolOptions::new()
+        .max_connections(max_connections.max(1))
+        // Close idle sessions. A PostgreSQL "smart shutdown" (what SIGTERM asks
+        // for) waits for every open client connection, and a pool that keeps
+        // its connections forever leaves the database waiting on a session
+        // that never goes away: the container stays up but answers nothing.
+        .idle_timeout(Some(std::time::Duration::from_secs(60)))
+        // And recycle the connections themselves, so a long-lived hub does
+        // not pin one backend forever.
+        .max_lifetime(Some(std::time::Duration::from_secs(1800)))
 }
 
 /// Connect to PostgreSQL with a bounded pool.

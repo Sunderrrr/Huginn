@@ -7,6 +7,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The stack could stay up but serve nothing.** A stop request to the host
+  (SIGTERM) asks PostgreSQL for a *smart* shutdown, which waits for every open
+  client session: the hub's pool kept its sessions forever, so the database
+  stayed in "shutting down" — the container was running, the hub could not
+  reach it, and the whole stack (API, MCP, dashboard) answered errors. Two
+  fixes: the hub's pool closes idle sessions (`idle_timeout`) and recycles
+  its connections, and the watchdog now recycles a container that is running
+  but *unhealthy* — it only used to restart the ones that were stopped.
+
+### Fixed
 - **The Windows worker could not be installed or updated.** The manifest
   published at `/dist/checksums.txt` listed only the Linux assets, so the
   Windows installer downloaded the binary correctly and then failed with "no
