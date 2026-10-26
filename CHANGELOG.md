@@ -7,10 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
-- **The browser card offered to install a browser engine on a Windows
-  node.** The Obscura engine is Linux-only, so the card now says the feature
-  is not available there (the hub exposes the OS the worker reported at
-  enrollment) instead of showing an install button that could never work.
+- **The browser automation section appeared on Windows nodes.** The Obscura
+  engine is Linux-only, so the whole section (the engine state, the install
+  button and the step runner) is now hidden on a node that cannot run it — the
+  hub exposes the OS the worker reported at enrollment.
 - **A revoked node could not be deleted from the dashboard.** The API has
   always accepted `DELETE /api/vms/{id}` for a revoked node; the page had
   the confirmation modal but no button to open it. The fleet page now offers
