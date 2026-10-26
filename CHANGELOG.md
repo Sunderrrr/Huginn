@@ -7,6 +7,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **A Windows worker could keep running with a stale identity.** After a
+  re-enrollment, the running service still held the previous (revoked)
+  credentials in memory: the hub refused every heartbeat and poll, so the
+  queued tasks stayed **pending forever** with no visible cause (the
+  worker's log is lost when it runs as a service). The installer now
+  restarts the service when it was already running, so it picks up the
+  current identity.
 - **The browser automation section appeared on Windows nodes.** The Obscura
   engine is Linux-only, so the whole section (the engine state, the install
   button and the step runner) is now hidden on a node that cannot run it — the
