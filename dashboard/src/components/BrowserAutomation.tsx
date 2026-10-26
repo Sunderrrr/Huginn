@@ -124,6 +124,10 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
   const isOperator = user?.role === "operator";
   const isActive = vm.state === "active" || vm.state === "offline";
   const canRun = (isAdmin || isOperator) && isActive;
+  // The Obscura engine is a Linux-only feature: a Windows node has no system
+  // to install it on, and offering the button would be a dead end.
+  const isLinux = !vm.os || vm.os.toLowerCase() === "linux";
+  const unsupported = !isLinux;
   // The engine state the worker reported (its own filesystem) — the operator
   // must see whether "Run" can work before clicking it.
   const engine = engineState(vm);
@@ -274,6 +278,7 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
             <span
               title={isActive ? undefined : "node must be active to queue the install"}
               style={{ display: "inline-block" }}
+              hidden={unsupported}
             >
               <button
                 className={`btn btn--sm ${engine === "missing" ? "btn--primary" : ""}`}
@@ -295,6 +300,13 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
                 : "pinned engine · ~70 MB download · 1–2 min"}
             </span>
           </div>
+          {unsupported && (
+            <div className="muted tiny" style={{ marginTop: 8 }}>
+              Browser automation is not available on this node: the Obscura
+              engine is Linux-only, and a {vm.os ? vm.os : "non-Linux"} node has
+              no system to install it on.
+            </div>
+          )}
           {currentInstall && <TaskResultView task={currentInstall} />}
         </div>
       )}
@@ -309,12 +321,18 @@ export function BrowserAutomation({ vm }: { vm: VM }) {
           </div>
         ) : (
           <>
-            {!isAdmin && (
+            {unsupported ? (
               <div className="muted tiny" style={{ marginBottom: 12 }}>
-                {vm.browser_enabled
-                  ? "enabled on this node"
-                  : "disabled on this node — an admin must enable it first"}
+                browser automation is not available on this node (Linux only)
               </div>
+            ) : (
+              !isAdmin && (
+                <div className="muted tiny" style={{ marginBottom: 12 }}>
+                  {vm.browser_enabled
+                    ? "enabled on this node"
+                    : "disabled on this node — an admin must enable it first"}
+                </div>
+              )
             )}
             {engine === "missing" && (
               <div className="tiny" style={{ color: "var(--blood)", marginBottom: 12 }}>

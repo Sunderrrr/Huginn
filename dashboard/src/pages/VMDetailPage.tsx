@@ -181,6 +181,13 @@ export function VMDetailPage() {
             Revoke node
           </button>
         )}
+        {isAdmin && vm.state === "revoked" && (
+          // A revoked node stays in the fleet as a record; deleting it removes
+          // it for good (the API only accepts a revoked VM).
+          <button className="btn btn--danger btn--sm" onClick={() => setConfirmDelete(true)}>
+            Delete permanently
+          </button>
+        )}
         {isAdmin && (
           <details style={{ marginTop: 8 }}>
             <summary className="muted tiny" style={{ cursor: "pointer" }}>
