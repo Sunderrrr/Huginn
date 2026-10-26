@@ -4,6 +4,7 @@ import type { EnrollmentTokenCreated } from "../api/types";
 import { Modal } from "./Dialog";
 import { useToast } from "./Toast";
 import { fmtTime } from "../lib/format";
+import { installCommand, type InstallOS } from "../lib/commands";
 
 const TTL_OPTIONS = [
   { label: "1 hour", value: 3600 },
@@ -15,23 +16,7 @@ const TTL_OPTIONS = [
 
 const mask = (t: string) => (t.length > 8 ? `****${t.slice(-8)}` : "****");
 
-type OS = "linux" | "windows";
-
-/** Per-OS install command, shown after a token is generated. */
-function installCommand(os: OS, base: string, token: string): string {
-  if (os === "windows") {
-    // Run the installer AS A FILE: `irm | iex` cannot bind HUB_URL and Token
-    // to the script's param() block, and a failure in a piped script closes
-    // the session. The commands are separated by semicolons so the whole
-    // line stays copy-pasteable in PowerShell 7.
-    return (
-      `$installer = "$env:TEMP\\huginn-install.ps1"; ` +
-      `Invoke-WebRequest -Uri "${base}/install.ps1" -OutFile $installer; ` +
-      `pwsh -NoProfile -ExecutionPolicy Bypass -File $installer -HUB_URL "${base}" -Token "${token}"`
-    );
-  }
-  return `curl -fsSLk ${base}/install.sh | HUB_URL=${base} TOKEN=${token} bash`;
-}
+type OS = InstallOS;
 
 /** Enroll a new VM: generate a single-use token and show the install one-liner. */
 export function AddVmModal({ open, onClose }: { open: boolean; onClose: () => void }) {

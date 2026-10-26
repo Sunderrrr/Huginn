@@ -1,0 +1,94 @@
+name: ci-scripts
+
+# The installer and uninstaller scripts are what an operator runs on their own
+# machine: a mistake in one of them surfaces there, and nowhere else. This
+# workflow lints the shell scripts, parses the PowerShell ones, and runs the
+# Windows uninstaller for real — so a regression lands in the pull request
+# instead of on someone's desktop.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-scripts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts:
+    name: installer scripts (syntax + lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # No token left in .git/config — a build script must not be able to
+          # exfiltrate the job's GITHUB_TOKEN.
+          persist-credentials: false
+      - name: Lint the shell scripts (shellcheck)
+        run: |
+          # shellcheck ships with the runner image, but a missing one must
+          # fail the job rather than skip the lint silently.
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends shellcheck
+          fi
+          status=0
+          for file in scripts/*.sh; do
+            printf '%-28s ' "$file"
+            if shellcheck -S warning "$file"; then
+              echo "ok"
+            else
+              status=1
+            fi
+          done
+          exit $status
+      - name: Parse the PowerShell scripts
+        # The Windows scripts are parsed with the real PowerShell parser
+        # (pwsh is preinstalled on the runner): a syntax error is caught here
+        # instead of on the operator's machine. PSScriptAnalyzer is not
+        # available offline, so the parser is the gate.
+        shell: pwsh
+        run: |
+          $status = 0
+          # Recursive: the test scripts live in scripts/tests/.
+          foreach ($file in Get-ChildItem scripts -Filter *.ps1 -Recurse) {
+            $errors = $null
+            $tokens = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors -and $errors.Count -gt 0) {
+              Write-Host "FAIL $($file.Name): $($errors.Count) syntax error(s)"
+              foreach ($e in $errors) {
+                Write-Host ("  line {0}: {1}" -f $e.Extent.StartLineNumber, $e.Message)
+              }
+              $status = 1
+            } else {
+              Write-Host "ok   $($file.Name)"
+            }
+          }
+          exit $status
+
+  # The uninstaller removes a Windows service, a directory and a certificate
+  # from the trust store: only a Windows machine can run it, so only a
+  # Windows runner can prove it works. The test builds a throwaway
+  # installation (a service, a binary, a state directory, a self-signed CA)
+  # and checks that the script leaves nothing behind.
+  scripts-windows:
+    name: installer scripts (windows functional test)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # No token left in .git/config — a build script must not be able to
+          # exfiltrate the job's GITHUB_TOKEN.
+          persist-credentials: false
+      - name: Run the uninstaller test
+        shell: pwsh
+        run: |
+          ./scripts/tests/uninstall.test.ps1

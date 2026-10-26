@@ -89,6 +89,10 @@
 		root * /srv/scripts
 		file_server
 	}
+	handle /uninstall.ps1 {
+		root * /srv/scripts
+		file_server
+	}
 	handle /dist/* {
 		root * /srv
 		file_server

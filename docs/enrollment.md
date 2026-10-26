@@ -113,6 +113,27 @@ fetch runs with the TLS validation **disabled**, so it is not proof of the
 hub's identity on its own: pass `-CaSha256 <fingerprint>` (obtained over a
 trusted channel) to pin the real root.
 
+### Uninstalling
+
+Linux:
+
+```bash
+curl -fsSL https://<hub>/uninstall.sh | bash
+```
+
+Windows (PowerShell 7, as Administrator):
+
+```powershell
+$uninstaller = "$env:TEMP\huginn-uninstall.ps1"
+Invoke-WebRequest -Uri "https://<hub>/uninstall.ps1" -OutFile $uninstaller
+pwsh -NoProfile -ExecutionPolicy Bypass -File $uninstaller
+```
+
+Both remove what the installer added: the service, the worker binary, the
+worker state (identity and secret) and the hub CA root from the trust store.
+They are safe to re-run — a missing piece is skipped, not an error. The node
+stays in the fleet until you revoke it in the dashboard.
+
 ### What enrollment does
 - The worker calls `POST /api/worker/enroll` with the token and host metadata.
 - The hub validates the token (timing-safe), consumes one use, creates the VM in
