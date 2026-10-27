@@ -13,7 +13,7 @@ function Get-InstallerFunction([string]$Name) {
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $Name
     }, $true)
     if (-not $functionAst) { throw "Could not find installer function $Name" }
-    $functionScript = [scriptblock]::Create($functionAst.Extent.Text)
+    $functionScript = $functionAst.Body.GetScriptBlock()
     Set-Item -Path "Function:script:$Name" -Value $functionScript
 }
 
