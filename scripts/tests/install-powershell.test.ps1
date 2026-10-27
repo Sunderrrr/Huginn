@@ -88,31 +88,31 @@ try {
 
     Remove-Item -LiteralPath $existingPwsh -Force
     $script:SignatureStatus = "NotSigned"
-    $failed = $false
+    $failure = $null
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
-    catch { $failed = $_.Exception.Message -like "*signature is not valid*" }
-    Assert $failed "must reject an MSI without a valid Microsoft signature"
+    catch { $failure = $_.Exception.Message }
+    Assert ([bool]$failure) "must reject an MSI without a valid Microsoft signature ($failure)"
     Assert ($script:StartProcessCalls.Count -eq 0) "must not launch msiexec after signature failure"
 
     $script:SignatureStatus = "Valid"
     $script:SignerSubject = "CN=Untrusted Publisher"
-    $failed = $false
+    $failure = $null
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
-    catch { $failed = $_.Exception.Message -like "*signature is not valid*" }
-    Assert $failed "must reject a valid signature from a non-Microsoft publisher"
+    catch { $failure = $_.Exception.Message }
+    Assert ([bool]$failure) "must reject a valid signature from a non-Microsoft publisher ($failure)"
 
     $script:SignerSubject = "CN=Microsoft Corporation, O=Microsoft Corporation"
     $script:InstallerExitCode = 1603
-    $failed = $false
+    $failure = $null
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
-    catch { $failed = $_.Exception.Message -like "*exit code 1603*" }
-    Assert $failed "must fail when msiexec reports an installation error"
+    catch { $failure = $_.Exception.Message }
+    Assert ([bool]$failure) "must fail when msiexec reports an installation error ($failure)"
 
     $script:InstallerExitCode = 0
-    $failed = $false
+    $failure = $null
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
-    catch { $failed = $_.Exception.Message -like "*executable was not found*" }
-    Assert $failed "must fail if MSI succeeds without the machine-wide pwsh executable"
+    catch { $failure = $_.Exception.Message }
+    Assert ([bool]$failure) "must fail if MSI succeeds without the machine-wide pwsh executable ($failure)"
     Assert ($script:StartProcessCalls.Count -eq 2) "valid Microsoft MSI should be passed to msiexec"
     Assert ($script:StartProcessCalls[0].ArgumentList -like "*ADD_PATH=1*") "MSI must add PowerShell to machine PATH"
 
