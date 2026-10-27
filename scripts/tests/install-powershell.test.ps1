@@ -31,12 +31,12 @@ Get-InstallerFunction "Fail"
 Get-InstallerFunction "Save-Download"
 Get-InstallerFunction "Ensure-PowerShell7"
 
-$script:PowerShellReleaseApi = "https://api.github.com/repos/PowerShell/PowerShell/releases/latest"
-$script:DownloadTimeoutSec = 120
-$script:StartProcessCalls = [System.Collections.Generic.List[object]]::new()
-$script:SignatureStatus = "Valid"
-$script:SignerSubject = "CN=Microsoft Corporation, O=Microsoft Corporation"
-$script:InstallerExitCode = 0
+$global:PowerShellReleaseApi = "https://api.github.com/repos/PowerShell/PowerShell/releases/latest"
+$global:DownloadTimeoutSec = 120
+$global:StartProcessCalls = [System.Collections.Generic.List[object]]::new()
+$global:SignatureStatus = "Valid"
+$global:SignerSubject = "CN=Microsoft Corporation, O=Microsoft Corporation"
+$global:InstallerExitCode = 0
 
 function Invoke-RestMethod {
     param($Uri, $Headers, $TimeoutSec)
@@ -57,15 +57,15 @@ function Invoke-WebRequest {
 function Get-AuthenticodeSignature {
     param($FilePath)
     [pscustomobject]@{
-        Status = $script:SignatureStatus
-        SignerCertificate = [pscustomobject]@{ Subject = $script:SignerSubject }
+        Status = $global:SignatureStatus
+        SignerCertificate = [pscustomobject]@{ Subject = $global:SignerSubject }
     }
 }
 
 function Start-Process {
     param($FilePath, $ArgumentList, $Wait, $PassThru)
-    $script:StartProcessCalls.Add([pscustomobject]@{ FilePath = $FilePath; ArgumentList = $ArgumentList })
-    [pscustomobject]@{ ExitCode = $script:InstallerExitCode }
+    $global:StartProcessCalls.Add([pscustomobject]@{ FilePath = $FilePath; ArgumentList = $ArgumentList })
+    [pscustomobject]@{ ExitCode = $global:InstallerExitCode }
 }
 
 function Assert($Condition, [string]$Message) {
@@ -84,37 +84,37 @@ try {
     Set-Content -LiteralPath $existingPwsh -Value "present"
     $result = Ensure-PowerShell7 -InstallRoot $installRoot
     Assert ($result -eq $existingPwsh) "should return the existing standard machine install"
-    Assert ($script:StartProcessCalls.Count -eq 0) "should not rerun MSI when PowerShell 7 exists"
+    Assert ($global:StartProcessCalls.Count -eq 0) "should not rerun MSI when PowerShell 7 exists"
 
     Remove-Item -LiteralPath $existingPwsh -Force
-    $script:SignatureStatus = "NotSigned"
+    $global:SignatureStatus = "NotSigned"
     $failure = $null
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must reject an MSI without a valid Microsoft signature ($failure)"
-    Assert ($script:StartProcessCalls.Count -eq 0) "must not launch msiexec after signature failure"
+    Assert ($global:StartProcessCalls.Count -eq 0) "must not launch msiexec after signature failure"
 
-    $script:SignatureStatus = "Valid"
-    $script:SignerSubject = "CN=Untrusted Publisher"
+    $global:SignatureStatus = "Valid"
+    $global:SignerSubject = "CN=Untrusted Publisher"
     $failure = $null
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must reject a valid signature from a non-Microsoft publisher ($failure)"
 
-    $script:SignerSubject = "CN=Microsoft Corporation, O=Microsoft Corporation"
-    $script:InstallerExitCode = 1603
+    $global:SignerSubject = "CN=Microsoft Corporation, O=Microsoft Corporation"
+    $global:InstallerExitCode = 1603
     $failure = $null
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must fail when msiexec reports an installation error ($failure)"
 
-    $script:InstallerExitCode = 0
+    $global:InstallerExitCode = 0
     $failure = $null
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must fail if MSI succeeds without the machine-wide pwsh executable ($failure)"
-    Assert ($script:StartProcessCalls.Count -eq 2) "valid Microsoft MSI should be passed to msiexec (calls: $($script:StartProcessCalls.Count))"
-    Assert ($script:StartProcessCalls[0].ArgumentList -like "*ADD_PATH=1*") "MSI must add PowerShell to machine PATH"
+    Assert ($global:StartProcessCalls.Count -eq 2) "valid Microsoft MSI should be passed to msiexec (calls: $($global:StartProcessCalls.Count))"
+    Assert ($global:StartProcessCalls[0].ArgumentList -like "*ADD_PATH=1*") "MSI must add PowerShell to machine PATH"
 
     Write-Host "PASS: PowerShell 7 machine-wide bootstrap tests"
 }
