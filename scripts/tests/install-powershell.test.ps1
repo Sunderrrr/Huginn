@@ -113,7 +113,7 @@ try {
     try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must fail if MSI succeeds without the machine-wide pwsh executable ($failure)"
-    Assert ($script:StartProcessCalls.Count -eq 2) "valid Microsoft MSI should be passed to msiexec"
+    Assert ($script:StartProcessCalls.Count -eq 2) "valid Microsoft MSI should be passed to msiexec (calls: $($script:StartProcessCalls.Count))"
     Assert ($script:StartProcessCalls[0].ArgumentList -like "*ADD_PATH=1*") "MSI must add PowerShell to machine PATH"
 
     Write-Host "PASS: PowerShell 7 machine-wide bootstrap tests"
