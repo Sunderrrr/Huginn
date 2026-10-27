@@ -38,7 +38,7 @@ $global:SignatureStatus = "Valid"
 $global:SignerSubject = "CN=Microsoft Corporation, O=Microsoft Corporation"
 $global:InstallerExitCode = 0
 
-function Invoke-RestMethod {
+function global:Invoke-RestMethod {
     param($Uri, $Headers, $TimeoutSec)
     [pscustomobject]@{
         tag_name = "v7.6.9"
@@ -49,12 +49,12 @@ function Invoke-RestMethod {
     }
 }
 
-function Invoke-WebRequest {
+function global:Invoke-WebRequest {
     param($Uri, $OutFile, $UseBasicParsing, $TimeoutSec)
     [System.IO.File]::WriteAllText($OutFile, "test MSI")
 }
 
-function Get-AuthenticodeSignature {
+function global:Get-AuthenticodeSignature {
     param($FilePath)
     [pscustomobject]@{
         Status = $global:SignatureStatus
@@ -62,7 +62,7 @@ function Get-AuthenticodeSignature {
     }
 }
 
-function Start-Process {
+function global:Start-Process {
     param($FilePath, $ArgumentList, $Wait, $PassThru)
     $global:StartProcessCalls.Add([pscustomobject]@{ FilePath = $FilePath; ArgumentList = $ArgumentList })
     [pscustomobject]@{ ExitCode = $global:InstallerExitCode }
