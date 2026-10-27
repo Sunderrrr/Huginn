@@ -131,7 +131,13 @@ function Save-Download([string]$Uri, [string]$OutFile, [int]$TimeoutSec = 120) {
 # is obtained from the official PowerShell release and must have a valid
 # Microsoft Authenticode signature before msiexec is allowed to run it.
 function Ensure-PowerShell7 {
-    param([string]$InstallRoot = $env:ProgramFiles)
+    param(
+        [string]$InstallRoot = $env:ProgramFiles,
+        [scriptblock]$ReleaseLookup,
+        [scriptblock]$DownloadFile,
+        [scriptblock]$SignatureReader,
+        [scriptblock]$MsiInstaller
+    )
 
     $pwsh = Join-Path $InstallRoot "PowerShell\7\pwsh.exe"
     if (Test-Path -LiteralPath $pwsh -PathType Leaf) {
@@ -141,7 +147,12 @@ function Ensure-PowerShell7 {
 
     Log "PowerShell 7 is missing; downloading the official machine-wide MSI"
     try {
-        $release = Invoke-RestMethod -Uri $PowerShellReleaseApi -Headers @{ "User-Agent" = "Huginn-Worker-Installer" } -TimeoutSec 30
+        if ($ReleaseLookup) {
+            $release = & $ReleaseLookup $PowerShellReleaseApi
+        }
+        else {
+            $release = Invoke-RestMethod -Uri $PowerShellReleaseApi -Headers @{ "User-Agent" = "Huginn-Worker-Installer" } -TimeoutSec 30
+        }
     }
     catch {
         Fail "could not query the official PowerShell release: $($_.Exception.Message)"
@@ -158,9 +169,19 @@ function Ensure-PowerShell7 {
     }
 
     $msi = Join-Path $env:TEMP $assetName
-    $download = Save-Download -Uri $asset.browser_download_url -OutFile $msi -TimeoutSec $DownloadTimeoutSec
+    if ($DownloadFile) {
+        $download = & $DownloadFile $asset.browser_download_url $msi $DownloadTimeoutSec
+    }
+    else {
+        $download = Save-Download -Uri $asset.browser_download_url -OutFile $msi -TimeoutSec $DownloadTimeoutSec
+    }
     try {
-        $signature = Get-AuthenticodeSignature -FilePath $download
+        if ($SignatureReader) {
+            $signature = & $SignatureReader $download
+        }
+        else {
+            $signature = Get-AuthenticodeSignature -FilePath $download
+        }
         if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
             Fail "PowerShell MSI signature is not valid and signed by Microsoft (status: $($signature.Status); signer: $($signature.SignerCertificate.Subject))"
         }
@@ -168,7 +189,12 @@ function Ensure-PowerShell7 {
 
         $msiexec = Join-Path $env:SystemRoot "System32\msiexec.exe"
         $arguments = "/i `"$download`" /qn /norestart ADD_PATH=1"
-        $process = Start-Process -FilePath $msiexec -ArgumentList $arguments -Wait -PassThru
+        if ($MsiInstaller) {
+            $process = & $MsiInstaller $msiexec $arguments
+        }
+        else {
+            $process = Start-Process -FilePath $msiexec -ArgumentList $arguments -Wait -PassThru
+        }
         if ($process.ExitCode -notin @(0, 3010)) {
             Fail "PowerShell MSI installation failed (msiexec exit code $($process.ExitCode))"
         }

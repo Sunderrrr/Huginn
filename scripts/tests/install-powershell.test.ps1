@@ -38,9 +38,9 @@ $global:SignatureStatus = "Valid"
 $global:SignerSubject = "CN=Microsoft Corporation, O=Microsoft Corporation"
 $global:InstallerExitCode = 0
 
-function global:Invoke-RestMethod {
-    param($Uri, $Headers, $TimeoutSec)
-    [pscustomobject]@{
+ $global:ReleaseLookup = {
+    param($Uri)
+    return [pscustomobject]@{
         tag_name = "v7.6.9"
         assets = @([pscustomobject]@{
             name = "PowerShell-7.6.9-win-x64.msi"
@@ -49,23 +49,25 @@ function global:Invoke-RestMethod {
     }
 }
 
-function global:Invoke-WebRequest {
-    param($Uri, $OutFile, $UseBasicParsing, $TimeoutSec)
-    [System.IO.File]::WriteAllText($OutFile, "test MSI")
+ $global:DownloadFile = {
+    param($Uri, $OutFile, $TimeoutSec)
+    $download = "$OutFile.part"
+    [System.IO.File]::WriteAllText($download, "test MSI")
+    return $download
 }
 
-function global:Get-AuthenticodeSignature {
+ $global:SignatureReader = {
     param($FilePath)
-    [pscustomobject]@{
+    return [pscustomobject]@{
         Status = $global:SignatureStatus
         SignerCertificate = [pscustomobject]@{ Subject = $global:SignerSubject }
     }
 }
 
-function global:Start-Process {
-    param($FilePath, $ArgumentList, $Wait, $PassThru)
+ $global:MsiInstaller = {
+    param($FilePath, $ArgumentList)
     $global:StartProcessCalls.Add([pscustomobject]@{ FilePath = $FilePath; ArgumentList = $ArgumentList })
-    [pscustomobject]@{ ExitCode = $global:InstallerExitCode }
+    return [pscustomobject]@{ ExitCode = $global:InstallerExitCode }
 }
 
 function Assert($Condition, [string]$Message) {
@@ -89,7 +91,7 @@ try {
     Remove-Item -LiteralPath $existingPwsh -Force
     $global:SignatureStatus = "NotSigned"
     $failure = $null
-    try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
+    try { Ensure-PowerShell7 -InstallRoot $installRoot -ReleaseLookup $global:ReleaseLookup -DownloadFile $global:DownloadFile -SignatureReader $global:SignatureReader -MsiInstaller $global:MsiInstaller | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must reject an MSI without a valid Microsoft signature ($failure)"
     Assert ($global:StartProcessCalls.Count -eq 0) "must not launch msiexec after signature failure"
@@ -97,20 +99,20 @@ try {
     $global:SignatureStatus = "Valid"
     $global:SignerSubject = "CN=Untrusted Publisher"
     $failure = $null
-    try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
+    try { Ensure-PowerShell7 -InstallRoot $installRoot -ReleaseLookup $global:ReleaseLookup -DownloadFile $global:DownloadFile -SignatureReader $global:SignatureReader -MsiInstaller $global:MsiInstaller | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must reject a valid signature from a non-Microsoft publisher ($failure)"
 
     $global:SignerSubject = "CN=Microsoft Corporation, O=Microsoft Corporation"
     $global:InstallerExitCode = 1603
     $failure = $null
-    try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
+    try { Ensure-PowerShell7 -InstallRoot $installRoot -ReleaseLookup $global:ReleaseLookup -DownloadFile $global:DownloadFile -SignatureReader $global:SignatureReader -MsiInstaller $global:MsiInstaller | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must fail when msiexec reports an installation error ($failure)"
 
     $global:InstallerExitCode = 0
     $failure = $null
-    try { Ensure-PowerShell7 -InstallRoot $installRoot | Out-Null }
+    try { Ensure-PowerShell7 -InstallRoot $installRoot -ReleaseLookup $global:ReleaseLookup -DownloadFile $global:DownloadFile -SignatureReader $global:SignatureReader -MsiInstaller $global:MsiInstaller | Out-Null }
     catch { $failure = $_.Exception.Message }
     Assert ([bool]$failure) "must fail if MSI succeeds without the machine-wide pwsh executable ($failure)"
     Assert ($global:StartProcessCalls.Count -eq 2) "valid Microsoft MSI should be passed to msiexec (calls: $($global:StartProcessCalls.Count))"
