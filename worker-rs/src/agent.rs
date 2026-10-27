@@ -165,6 +165,7 @@ impl Agent {
             .heartbeat(HeartbeatRequest {
                 worker_version: config::VERSION.into(),
                 browser_engine_version: installed_engine_version(&self.state_dir),
+                os_info: Some(crate::system_info::collect()),
                 // The node's own address on the network the hub is reached
                 // from — the hub would otherwise keep the NAT/bridge address
                 // it saw at enrollment, which is ambiguous (podman allocates
@@ -331,7 +332,7 @@ impl Agent {
         // whitelist path never does this. The interpreter is OS-dependent
         // (sh on Linux, PowerShell on Windows) and the command always rides
         // in a single argv element.
-        let argv = crate::exec::shell_argv(crate::exec::unrestricted_shell(), &command);
+        let argv = crate::exec::shell_argv(&crate::exec::unrestricted_shell(), &command);
         match self.runner.run(argv, task_timeout(&task.payload), 0).await {
             Ok(res) => from_exec_result(res),
             Err(e) => failure(&e.to_string()),
@@ -456,7 +457,8 @@ impl Agent {
         let _ = std::fs::remove_file(&binary_path);
         let _ = std::fs::remove_dir_all(config::DEFAULT_STATE_DIR);
         #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-        let mut notes = vec!["worker service removed, binary and state cleaned up".to_owned()];
+        let mut notes =
+            Vec::from(["worker service removed, binary and state cleaned up".to_owned()]);
         // The browser engine (Obscura) lives under its own managed roots;
         // uninstall it with the rest (Linux only — the feature answers
         // "not supported" everywhere else, leaving nothing to clean).
@@ -964,7 +966,7 @@ mod tests {
         let argv = runner.argv().expect("runner invoked");
         assert_eq!(
             argv,
-            crate::exec::shell_argv(crate::exec::unrestricted_shell(), "echo hi")
+            crate::exec::shell_argv(&crate::exec::unrestricted_shell(), "echo hi")
         );
         assert_eq!(argv.last().unwrap(), "echo hi");
     }

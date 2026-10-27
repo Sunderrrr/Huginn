@@ -18,6 +18,7 @@ mod config;
 mod exec;
 mod hubclient;
 mod service;
+mod system_info;
 mod update;
 mod whitelist;
 
@@ -162,7 +163,7 @@ async fn cmd_enroll(state_dir: &str) -> i32 {
             hostname: hostname.clone(),
             ip_address: crate::hubclient::outbound_ip(&hub_url).unwrap_or_default(),
             arch: goarch().into(),
-            os_info: Some(serde_json::json!({"os": os_name(), "arch": goarch()})),
+            os_info: Some(system_info::collect()),
             worker_version: config::VERSION.into(),
             install_browser: Some(install_browser),
         })

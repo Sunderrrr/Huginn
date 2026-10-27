@@ -18,7 +18,9 @@ use tokio::process::Command;
 /// DefaultMaxOutputBytes caps captured stdout/stderr to bound memory use.
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 1 << 20; // 1 MiB
 
-/// The PATH every child process runs with.
+/// The PATH every child process runs with. The Windows value is deliberately
+/// limited to protected system directories plus the standard PowerShell 7
+/// machine-install directory.
 ///
 /// The worker runs as root, so the lookup of `argv[0]` ("uname", "apt-get",
 /// "systemctl", "sh"…) must never depend on an inherited PATH: a
@@ -30,9 +32,33 @@ pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 1 << 20; // 1 MiB
 /// pinning it here pins the lookup too (verified: with `env("PATH", …)` the
 /// parent PATH is no longer consulted).
 ///
-/// This is systemd's own default service PATH, so nothing that used to work
-/// stops working.
+/// On Unix this is systemd's default service PATH. On Windows the list is
+/// restricted to protected operating-system and machine-install directories.
+#[cfg(unix)]
 pub const SAFE_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+#[cfg(windows)]
+pub const SAFE_PATH: &str = r"C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Program Files\PowerShell\7";
+
+/// Locate a PowerShell 7 executable in trusted standard install roots first,
+/// then in the worker process PATH. The explicit path works even when the
+/// Windows service account has a different PATH from the interactive user.
+#[cfg(any(windows, test))]
+fn resolve_powershell7(
+    program_files_roots: &[std::path::PathBuf],
+    path_dirs: &[std::path::PathBuf],
+) -> Option<std::path::PathBuf> {
+    program_files_roots
+        .iter()
+        .map(|root| root.join("PowerShell").join("7").join("pwsh.exe"))
+        .chain(path_dirs.iter().map(|dir| dir.join("pwsh.exe")))
+        .find(|candidate| candidate.is_file())
+}
+
+#[cfg(any(windows, test))]
+fn select_powershell(pwsh: Option<std::path::PathBuf>) -> String {
+    pwsh.map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "powershell.exe".to_string())
+}
 
 /// Result is the outcome of running a command.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -69,13 +95,13 @@ impl Runner for CommandRunner {
     }
 }
 
-/// The interpreter used ONLY for hub-gated unrestricted free commands: `sh`
-/// on Linux; on Windows, PowerShell 7 (`pwsh`) when installed, else the
-/// built-in Windows PowerShell 5.1 (`powershell`). Resolved once per process.
-pub fn unrestricted_shell() -> &'static str {
+/// The interpreter used for hub-gated free commands and Windows built-in
+/// actions: `sh` on Linux; on Windows, PowerShell 7 when installed, else the
+/// built-in Windows PowerShell 5.1. Resolved once per process.
+pub fn unrestricted_shell() -> String {
     #[cfg(unix)]
     {
-        "sh"
+        "sh".to_string()
     }
     #[cfg(windows)]
     {
@@ -106,26 +132,25 @@ pub fn shell_argv(shell: &str, command: &str) -> Vec<String> {
     }
 }
 
-/// Prefers `pwsh` (PowerShell 7+) when it is on PATH, else falls back to
-/// `powershell` (Windows PowerShell 5.1, ships with every supported Windows).
+/// Prefers PowerShell 7 at its machine install location or on PATH, else uses
+/// Windows PowerShell 5.1 (which ships with every supported Windows).
 #[cfg(windows)]
-fn detect_powershell() -> &'static str {
+fn detect_powershell() -> String {
     use std::sync::OnceLock;
-    static SHELL: OnceLock<&'static str> = OnceLock::new();
-    SHELL.get_or_init(|| {
-        if on_path("pwsh.exe") {
-            "pwsh"
-        } else {
-            "powershell"
-        }
-    })
-}
-
-#[cfg(windows)]
-fn on_path(exe: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file()))
-        .unwrap_or(false)
+    static SHELL: OnceLock<String> = OnceLock::new();
+    SHELL
+        .get_or_init(|| {
+            let roots: Vec<_> = ["ProgramFiles", "ProgramFiles(x86)"]
+                .into_iter()
+                .filter_map(std::env::var_os)
+                .map(std::path::PathBuf::from)
+                .collect();
+            let path_dirs: Vec<_> = std::env::var_os("PATH")
+                .map(|path| std::env::split_paths(&path).collect())
+                .unwrap_or_default();
+            select_powershell(resolve_powershell7(&roots, &path_dirs))
+        })
+        .clone()
 }
 
 // --- Windows: Job Objects --------------------------------------------------
@@ -387,6 +412,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn powershell_resolution_prefers_the_standard_machine_install() {
+        let root = tempfile::tempdir().unwrap();
+        let standard = root.path().join("Program Files");
+        let from_path = root.path().join("custom-bin");
+        std::fs::create_dir_all(standard.join("PowerShell/7")).unwrap();
+        std::fs::create_dir_all(&from_path).unwrap();
+        std::fs::write(standard.join("PowerShell/7/pwsh.exe"), b"test").unwrap();
+        std::fs::write(from_path.join("pwsh.exe"), b"test").unwrap();
+
+        assert_eq!(
+            resolve_powershell7(std::slice::from_ref(&standard), &[from_path]),
+            Some(standard.join("PowerShell/7/pwsh.exe"))
+        );
+    }
+
+    #[test]
+    fn powershell_resolution_finds_pwsh_on_path_when_not_in_standard_location() {
+        let root = tempfile::tempdir().unwrap();
+        let from_path = root.path().join("custom-bin");
+        std::fs::create_dir_all(&from_path).unwrap();
+        let executable = from_path.join("pwsh.exe");
+        std::fs::write(&executable, b"test").unwrap();
+
+        assert_eq!(resolve_powershell7(&[], &[from_path]), Some(executable));
+    }
+
+    #[test]
+    fn powershell_resolution_falls_back_when_pwsh_is_absent() {
+        assert_eq!(select_powershell(None), "powershell.exe");
+        assert_eq!(
+            select_powershell(Some(PathBuf::from("C:/pwsh.exe"))),
+            "C:/pwsh.exe"
+        );
+    }
 
     fn runner() -> CommandRunner {
         CommandRunner
@@ -430,7 +492,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn test_run_timeout() {
-        let argv = shell_argv(unrestricted_shell(), "Start-Sleep -Seconds 5");
+        let argv = shell_argv(&unrestricted_shell(), "Start-Sleep -Seconds 5");
         let res = runner()
             .run(argv, Duration::from_millis(300), 0)
             .await
@@ -505,6 +567,22 @@ mod tests {
     }
 
     #[cfg(windows)]
+    #[tokio::test]
+    async fn test_child_path_is_pinned_to_safe_windows_directories() {
+        let res = run(
+            &[&unrestricted_shell(), "-NoProfile", "-Command", "$env:PATH"],
+            Duration::from_secs(5),
+            0,
+        )
+        .await
+        .expect("PowerShell should run");
+        assert_eq!(res.exit_code, 0, "stderr: {}", res.stderr);
+        assert_eq!(res.stdout.trim(), SAFE_PATH);
+        assert!(SAFE_PATH.contains("C:\\Windows\\System32"));
+        assert!(SAFE_PATH.contains("C:\\Program Files\\PowerShell\\7"));
+    }
+
+    #[cfg(windows)]
     #[test]
     fn test_shell_argv_windows_invokes_powershell_flags() {
         assert_eq!(
@@ -520,7 +598,7 @@ mod tests {
             ]
         );
         // The command is always a single argv slot, never split or quoted.
-        let argv = shell_argv("powershell", "a; b | c");
+        let argv = shell_argv("powershell.exe", "a; b | c");
         assert_eq!(argv.last().unwrap(), "a; b | c");
         assert_eq!(argv.len(), 7);
     }
@@ -528,7 +606,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn test_unrestricted_shell_is_a_known_powershell() {
-        assert!(matches!(unrestricted_shell(), "pwsh" | "powershell"));
+        assert!(
+            unrestricted_shell().ends_with("pwsh.exe") || unrestricted_shell() == "powershell.exe"
+        );
     }
 
     #[cfg(unix)]

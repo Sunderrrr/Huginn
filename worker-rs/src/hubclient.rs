@@ -366,6 +366,10 @@ pub struct HeartbeatRequest {
     /// state of a node instead of leaving the operator to guess.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser_engine_version: Option<String>,
+    /// OS family and display designation; omitted by workers predating this
+    /// field so the hub preserves the last known value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_info: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -12,9 +12,17 @@ pub fn build_release_urls(
     repo: &str,
     version: &str,
     arch: crate::models::enums::WorkerArch,
+    os: crate::services::versioning::WorkerOs,
     allowed_domains: &[String],
 ) -> Result<serde_json::Value, String> {
-    let asset = format!("huginn-worker-linux-{}", arch.as_str());
+    let asset = match os {
+        crate::services::versioning::WorkerOs::Linux => {
+            format!("huginn-worker-linux-{}", arch.as_str())
+        }
+        crate::services::versioning::WorkerOs::Windows => {
+            format!("huginn-worker-windows-{}.exe", arch.as_str())
+        }
+    };
     if !valid_version(version) {
         return Err(format!("invalid version: {}", py_repr(version)));
     }
@@ -154,8 +162,14 @@ mod tests {
             "github.com".to_string(),
             "objects.githubusercontent.com".to_string(),
         ];
-        let urls =
-            build_release_urls("example/huginn", "v1.2.3", WorkerArch::Amd64, &domains).unwrap();
+        let urls = build_release_urls(
+            "example/huginn",
+            "v1.2.3",
+            WorkerArch::Amd64,
+            crate::services::versioning::WorkerOs::Linux,
+            &domains,
+        )
+        .unwrap();
         assert_eq!(
             urls,
             json!({
@@ -170,6 +184,7 @@ mod tests {
             "https://hub.example.com/dist",
             "v1.2.3",
             WorkerArch::Arm64,
+            crate::services::versioning::WorkerOs::Linux,
             &["hub.example.com".into()],
         )
         .unwrap();
@@ -178,18 +193,41 @@ mod tests {
             "https://hub.example.com/dist/huginn-worker-linux-arm64"
         );
         assert_eq!(self_hosted["version"], "v1.2.3");
+
+        let windows = build_release_urls(
+            "example/huginn",
+            "v1.2.3",
+            WorkerArch::Amd64,
+            crate::services::versioning::WorkerOs::Windows,
+            &domains,
+        )
+        .unwrap();
+        assert_eq!(windows["asset_name"], "huginn-worker-windows-amd64.exe");
     }
 
     #[test]
     fn release_urls_are_ssrf_gated() {
         let domains = vec!["github.com".to_string()];
         assert_eq!(
-            build_release_urls("example/huginn", "v1;rm -rf", WorkerArch::Amd64, &domains)
-                .unwrap_err(),
+            build_release_urls(
+                "example/huginn",
+                "v1;rm -rf",
+                WorkerArch::Amd64,
+                crate::services::versioning::WorkerOs::Linux,
+                &domains
+            )
+            .unwrap_err(),
             "invalid version: 'v1;rm -rf'"
         );
         assert_eq!(
-            build_release_urls("../etc/passwd", "v1", WorkerArch::Amd64, &domains).unwrap_err(),
+            build_release_urls(
+                "../etc/passwd",
+                "v1",
+                WorkerArch::Amd64,
+                crate::services::versioning::WorkerOs::Linux,
+                &domains
+            )
+            .unwrap_err(),
             "invalid repo: '../etc/passwd'"
         );
         assert_eq!(
@@ -197,13 +235,21 @@ mod tests {
                 "https://evil.example.com/dist",
                 "v1",
                 WorkerArch::Amd64,
+                crate::services::versioning::WorkerOs::Linux,
                 &domains
             )
             .unwrap_err(),
             "release host 'evil.example.com' not in allowlist"
         );
         assert!(
-            build_release_urls("example/huginn", "v1", WorkerArch::Amd64, &[]).is_err(),
+            build_release_urls(
+                "example/huginn",
+                "v1",
+                WorkerArch::Amd64,
+                crate::services::versioning::WorkerOs::Linux,
+                &[]
+            )
+            .is_err(),
             "an empty allowlist rejects everything"
         );
     }
