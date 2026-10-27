@@ -92,3 +92,7 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/tests/uninstall.test.ps1
+      - name: Run PowerShell 7 installer tests
+        shell: pwsh
+        run: |
+          ./scripts/tests/install-powershell.test.ps1

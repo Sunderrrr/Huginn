@@ -127,10 +127,8 @@ fn restart_service_argv(service: &str) -> Vec<String> {
 
 #[cfg(windows)]
 fn powershell_argv(command: &str) -> Vec<String> {
-    // Windows PowerShell 5.1 ships with every supported Windows release, so
-    // the whitelist does not depend on pwsh being installed.
     vec![
-        "powershell".into(),
+        crate::exec::unrestricted_shell(),
         "-NoProfile".into(),
         "-Command".into(),
         command.into(),
@@ -303,44 +301,37 @@ mod windows_tests {
         HashMap::new()
     }
 
+    fn expected_powershell_argv(command: &str) -> Vec<String> {
+        vec![
+            crate::exec::unrestricted_shell(),
+            "-NoProfile".into(),
+            "-Command".into(),
+            command.into(),
+        ]
+    }
+
     #[test]
     fn status_is_powershell_computer_info() {
-        assert_eq!(
-            build_argv_checked("status", &none()).unwrap(),
-            vec![
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "Get-ComputerInfo | Select-Object WindowsVersion, OsArchitecture | Format-List"
-            ]
+        let expected = expected_powershell_argv(
+            "Get-ComputerInfo | Select-Object WindowsVersion, OsArchitecture | Format-List",
         );
+        assert_eq!(build_argv_checked("status", &none()).unwrap(), expected);
     }
 
     #[test]
     fn metrics_is_powershell_cpu_load() {
-        assert_eq!(
-            build_argv_checked("metrics", &none()).unwrap(),
-            vec![
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "(Get-CimInstance Win32_Processor).LoadPercentage"
-            ]
-        );
+        let expected = expected_powershell_argv("(Get-CimInstance Win32_Processor).LoadPercentage");
+        assert_eq!(build_argv_checked("metrics", &none()).unwrap(), expected);
     }
 
     #[test]
     fn restart_service_is_powershell_restart_service() {
         let mut params = HashMap::new();
         params.insert("service".to_string(), "Spooler".to_string());
+        let expected = expected_powershell_argv("Restart-Service -Name Spooler");
         assert_eq!(
             build_argv_checked("restart_service", &params).unwrap(),
-            vec![
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "Restart-Service -Name Spooler"
-            ]
+            expected
         );
     }
 

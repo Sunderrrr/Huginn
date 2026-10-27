@@ -3,6 +3,30 @@
 
 use crate::models::enums::WorkerArch;
 
+/// Operating systems supported by the published worker artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerOs {
+    Linux,
+    Windows,
+}
+
+impl WorkerOs {
+    /// Read the reported OS, treating older enrollments without OS metadata as Linux.
+    pub fn from_vm(vm: &crate::models::vm::VM) -> Self {
+        match vm.os_info.get("os").and_then(serde_json::Value::as_str) {
+            Some("windows") => Self::Windows,
+            _ => Self::Linux,
+        }
+    }
+
+    fn asset_name(self, arch: WorkerArch) -> String {
+        match self {
+            Self::Linux => format!("huginn-worker-linux-{}", arch.as_str()),
+            Self::Windows => format!("huginn-worker-windows-{}.exe", arch.as_str()),
+        }
+    }
+}
+
 /// SSRF-validated release URL object for update tasks — port of
 /// `versioning.build_release_urls` (GitHub `owner/repo` mode or self-hosted
 /// base-URL mode). This is the `urls` value `models::task::UpdateTaskNew`
@@ -12,11 +36,10 @@ pub fn build_release_urls(
     repo: &str,
     version: &str,
     arch: WorkerArch,
+    os: WorkerOs,
     allowed_domains: &[String],
 ) -> Result<serde_json::Value, String> {
-    fn asset_name(arch: WorkerArch) -> String {
-        format!("huginn-worker-linux-{}", arch.as_str())
-    }
+    let asset = os.asset_name(arch);
     if !valid_version(version) {
         return Err(format!("invalid version: {version:?}"));
     }
@@ -33,9 +56,9 @@ pub fn build_release_urls(
         let base = format!("{scheme}://{base}");
         let base = base.trim_end_matches('/');
         serde_json::json!({
-            "binary_url": format!("{base}/{}", asset_name(arch)),
+            "binary_url": format!("{base}/{asset}"),
             "checksums_url": format!("{base}/checksums.txt"),
-            "asset_name": asset_name(arch),
+            "asset_name": asset,
             "version": version,
         })
     } else {
@@ -45,9 +68,9 @@ pub fn build_release_urls(
         }
         let base = format!("https://github.com/{repo}/releases/download/{version}");
         serde_json::json!({
-            "binary_url": format!("{base}/{}", asset_name(arch)),
+            "binary_url": format!("{base}/{asset}"),
             "checksums_url": format!("{base}/checksums.txt"),
-            "asset_name": asset_name(arch),
+            "asset_name": asset,
             "version": version,
         })
     };

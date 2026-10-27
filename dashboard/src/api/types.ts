@@ -111,6 +111,8 @@ export interface VM {
   // The operating system the worker reported at enrollment ("linux",
   // "windows"). The Obscura engine is Linux-only.
   os: string | null;
+  // Human-readable distribution / Windows edition and version reported by the worker.
+  system?: string | null;
   state: VMState;
   exec_mode: ExecMode;
   worker_version: string | null;

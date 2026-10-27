@@ -7,6 +7,7 @@ import { AddVmModal } from "../components/AddVmModal";
 import { ModeBadge, StateBadge, TagBadge } from "../components/badges";
 import { useToast } from "../components/Toast";
 import { timeAgo, shortId } from "../lib/format";
+import { formatSystemLabel } from "../lib/system";
 import { ACTION_CATALOG, type VM } from "../api/types";
 
 function VersionCell({ vm, target }: { vm: VM; target?: string }) {
@@ -187,6 +188,7 @@ export function FleetPage() {
         transition={{ duration: 0.4 }}
         style={{ overflow: "hidden" }}
       >
+        <div style={{ overflowX: "auto" }}>
         <table className="tbl">
           <thead>
             <tr>
@@ -201,6 +203,7 @@ export function FleetPage() {
                 </th>
               )}
               <th>Node</th>
+              <th>System</th>
               <th>State</th>
               <th>Mode</th>
               <th>Tags</th>
@@ -239,6 +242,9 @@ export function FleetPage() {
                       {vm.ip_address ?? "no ip"} · {vm.arch} · {shortId(vm.id)}
                     </div>
                   </td>
+                  <td className="muted" title={vm.system ?? undefined} style={{ whiteSpace: "nowrap" }}>
+                    {formatSystemLabel(vm.os, vm.system)}
+                  </td>
                   <td>
                     <StateBadge state={vm.state} />
                   </td>
@@ -272,6 +278,7 @@ export function FleetPage() {
             })}
           </tbody>
         </table>
+        </div>
 
         {isLoading && (
           <div style={{ padding: 40, textAlign: "center" }}>

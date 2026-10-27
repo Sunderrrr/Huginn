@@ -78,6 +78,9 @@ pub struct VMOut {
     /// "windows"). The browser engine is Linux-only, so the dashboard uses
     /// it to tell the operator that automation is not available here.
     pub os: Option<String>,
+    /// Worker-reported distribution or Windows product/version designation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
     pub state: VMState,
     pub exec_mode: ExecMode,
     pub worker_version: Option<String>,
@@ -130,6 +133,11 @@ impl VMOut {
             os: vm
                 .os_info
                 .get("os")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            system: vm
+                .os_info
+                .get("system")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             browser_engine_version: vm.browser_engine_version.clone(),
@@ -601,6 +609,23 @@ mod tests {
         // Python (`VMOut.model_validate(vm)`), which never joins tags.
         let out = serde_json::to_value(VMOut::from_row(&sample_vm())).unwrap();
         assert_eq!(out["tags"], json!([]));
+    }
+
+    #[test]
+    fn vm_out_includes_system_only_when_the_worker_reported_it() {
+        let mut vm = sample_vm();
+        vm.os_info = json!({
+            "os": "windows",
+            "arch": "amd64",
+            "system": "Windows 11 Pro · 24H2 (build 26100)"
+        });
+        let out = serde_json::to_value(VMOut::from_row(&vm)).unwrap();
+        assert_eq!(out["os"], "windows");
+        assert_eq!(out["system"], "Windows 11 Pro · 24H2 (build 26100)");
+
+        vm.os_info = json!({"os": "linux"});
+        let old_worker = serde_json::to_value(VMOut::from_row(&vm)).unwrap();
+        assert!(old_worker.get("system").is_none());
     }
 
     #[test]

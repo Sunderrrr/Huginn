@@ -311,8 +311,14 @@ pub async fn create_update_task(
     created_by: &str,
 ) -> Result<Task, ExecError> {
     require_active(vm)?;
-    let urls = build_release_urls(repo, target_version, vm.arch, allowed_domains)
-        .map_err(ExecError::Ssrf)?;
+    let urls = build_release_urls(
+        repo,
+        target_version,
+        vm.arch,
+        crate::services::versioning::WorkerOs::from_vm(vm),
+        allowed_domains,
+    )
+    .map_err(ExecError::Ssrf)?;
     let task = task::create_update_task(
         &state.pool,
         UpdateTaskNew {

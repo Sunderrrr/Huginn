@@ -34,6 +34,10 @@ pub struct HeartbeatRequest {
     /// browser steps.
     #[serde(default, deserialize_with = "deserialize_some")]
     pub browser_engine_version: Option<Option<String>>,
+    /// Detailed OS identity. Missing means an older worker and preserves the
+    /// existing value; the value is validated using enrollment's constraints.
+    #[serde(default)]
+    pub os_info: Option<serde_json::Value>,
 }
 
 /// Distinguish an absent field (`None`) from an explicit `null`
@@ -76,6 +80,9 @@ impl HeartbeatRequest {
                     "browser_engine_version must be printable ASCII without spaces",
                 ));
             }
+        }
+        if let Some(os_info) = &self.os_info {
+            super::validate_os_info(os_info)?;
         }
         Ok(())
     }
@@ -129,13 +136,14 @@ pub(super) async fn heartbeat(
         .await
         .map_err(db_err)?;
     }
-    if body.worker_version.is_some() || body.ip_address.is_some() {
+    if body.worker_version.is_some() || body.ip_address.is_some() || body.os_info.is_some() {
         crate::models::vm::update(
             &state.pool,
             vm.id,
             VmPatch {
                 worker_version: body.worker_version.clone(),
                 ip_address: body.ip_address.clone(),
+                os_info: body.os_info.clone(),
                 ..Default::default()
             },
         )
@@ -201,6 +209,7 @@ async fn auto_queue_update(
             &row.target_release_repo,
             target,
             vm.arch,
+            crate::services::versioning::WorkerOs::from_vm(vm),
             allowed_domains,
         )?;
         let new = UpdateTaskNew {
@@ -233,12 +242,14 @@ mod tests {
             worker_version: Some("v1.2.3".into()),
             ip_address: Some("192.168.1.9".into()),
             browser_engine_version: None,
+            os_info: None,
         };
         assert!(ok.validate().is_ok());
         let bad = HeartbeatRequest {
             worker_version: None,
             ip_address: Some("<script>".into()),
             browser_engine_version: None,
+            os_info: None,
         };
         assert!(bad.validate().is_err());
     }
@@ -251,6 +262,7 @@ mod tests {
             worker_version: None,
             ip_address: None,
             browser_engine_version: Some(Some("v0.2.5".into())),
+            os_info: None,
         };
         assert!(ok.validate().is_ok());
         // Explicitly "no engine" is valid.
@@ -258,6 +270,7 @@ mod tests {
             worker_version: None,
             ip_address: None,
             browser_engine_version: Some(None),
+            os_info: None,
         };
         assert!(none.validate().is_ok());
         // A version with a space or a control character is refused.
@@ -265,14 +278,41 @@ mod tests {
             worker_version: None,
             ip_address: None,
             browser_engine_version: Some(Some("v0.2.5\nrm -rf /".into())),
+            os_info: None,
         };
         assert!(bad.validate().is_err());
         let empty = HeartbeatRequest {
             worker_version: None,
             ip_address: None,
             browser_engine_version: Some(Some(String::new())),
+            os_info: None,
         };
         assert!(empty.validate().is_err());
+    }
+
+    #[test]
+    fn heartbeat_accepts_bounded_os_details_and_rejects_invalid_shapes() {
+        let valid = HeartbeatRequest {
+            os_info: Some(serde_json::json!({
+                "os": "windows",
+                "arch": "amd64",
+                "system": "Windows 11 Pro · 24H2 (build 26100)"
+            })),
+            ..Default::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        let invalid = HeartbeatRequest {
+            os_info: Some(serde_json::json!([])),
+            ..Default::default()
+        };
+        assert!(invalid.validate().is_err());
+
+        let too_long = HeartbeatRequest {
+            os_info: Some(serde_json::json!({"system": "x".repeat(257)})),
+            ..Default::default()
+        };
+        assert!(too_long.validate().is_err());
     }
 
     // ---- release URLs ------------------------------------------------------
@@ -284,6 +324,7 @@ mod tests {
             "example/huginn",
             "v1.2.3",
             WorkerArch::Amd64,
+            crate::services::versioning::WorkerOs::Linux,
             &domains,
         )
         .unwrap();
@@ -298,16 +339,44 @@ mod tests {
         assert_eq!(urls["asset_name"], "huginn-worker-linux-amd64");
         assert_eq!(urls["version"], "v1.2.3");
 
+        let windows = crate::services::versioning::build_release_urls(
+            "example/huginn",
+            "v1.2.3",
+            WorkerArch::Amd64,
+            crate::services::versioning::WorkerOs::Windows,
+            &domains,
+        )
+        .unwrap();
+        assert_eq!(
+            windows["binary_url"],
+            "https://github.com/example/huginn/releases/download/v1.2.3/huginn-worker-windows-amd64.exe"
+        );
+        assert_eq!(windows["asset_name"], "huginn-worker-windows-amd64.exe");
+
         let self_hosted = crate::services::versioning::build_release_urls(
             "https://hub.example.com/dist/",
             "v2.0.0",
             WorkerArch::Arm64,
+            crate::services::versioning::WorkerOs::Linux,
             &["hub.example.com".into()],
         )
         .unwrap();
         assert_eq!(
             self_hosted["binary_url"],
             "https://hub.example.com/dist/huginn-worker-linux-arm64"
+        );
+
+        let windows_self_hosted = crate::services::versioning::build_release_urls(
+            "https://hub.example.com/dist/",
+            "v2.0.0",
+            WorkerArch::Amd64,
+            crate::services::versioning::WorkerOs::Windows,
+            &["hub.example.com".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            windows_self_hosted["binary_url"],
+            "https://hub.example.com/dist/huginn-worker-windows-amd64.exe"
         );
         assert_eq!(
             self_hosted["checksums_url"],
@@ -322,6 +391,7 @@ mod tests {
             "example/huginn",
             "v1.2.3",
             WorkerArch::Amd64,
+            crate::services::versioning::WorkerOs::Linux,
             &domains
         )
         .is_ok());
@@ -330,6 +400,7 @@ mod tests {
                 "example/huginn",
                 "v1.2.3;rm -rf",
                 WorkerArch::Amd64,
+                crate::services::versioning::WorkerOs::Linux,
                 &domains
             )
             .is_err(),
@@ -340,6 +411,7 @@ mod tests {
                 "../etc/passwd",
                 "v1",
                 WorkerArch::Amd64,
+                crate::services::versioning::WorkerOs::Linux,
                 &domains
             )
             .is_err(),
@@ -350,6 +422,7 @@ mod tests {
                 "https://evil.example.com/dist",
                 "v1",
                 WorkerArch::Amd64,
+                crate::services::versioning::WorkerOs::Linux,
                 &domains
             )
             .is_err(),
@@ -360,6 +433,7 @@ mod tests {
                 "example/huginn",
                 "v1",
                 WorkerArch::Amd64,
+                crate::services::versioning::WorkerOs::Linux,
                 &[]
             )
             .is_err(),

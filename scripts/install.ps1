@@ -57,6 +57,7 @@ $StateDir = "C:\ProgramData\Huginn"
 $HubCaFile = Join-Path $StateDir "hub-ca.crt"
 $StateFile = Join-Path $StateDir "worker.json"
 $DownloadTimeoutSec = 120
+$PowerShellReleaseApi = "https://api.github.com/repos/PowerShell/PowerShell/releases/latest"
 
 # The state directory holds the worker secret: only SYSTEM and the
 # Administrators group may read it. The group is granted by SID, never by its
@@ -123,6 +124,94 @@ function Save-Download([string]$Uri, [string]$OutFile, [int]$TimeoutSec = 120) {
         if (Test-Path $part) { Remove-Item $part -Force -ErrorAction SilentlyContinue }
         throw
     }
+}
+
+# Install PowerShell 7 for the whole machine. The service runs as LocalSystem,
+# so a per-user winget/App Execution Alias install is not sufficient. The MSI
+# is obtained from the official PowerShell release and must have a valid
+# Microsoft Authenticode signature before msiexec is allowed to run it.
+function Ensure-PowerShell7 {
+    param(
+        [string]$InstallRoot = $env:ProgramFiles,
+        [scriptblock]$ReleaseLookup,
+        [scriptblock]$DownloadFile,
+        [scriptblock]$SignatureReader,
+        [scriptblock]$MsiInstaller
+    )
+
+    $pwsh = Join-Path $InstallRoot "PowerShell\7\pwsh.exe"
+    if (Test-Path -LiteralPath $pwsh -PathType Leaf) {
+        Log "PowerShell 7 is already installed machine-wide at $pwsh"
+        return $pwsh
+    }
+
+    Log "PowerShell 7 is missing; downloading the official machine-wide MSI"
+    try {
+        if ($ReleaseLookup) {
+            $release = & $ReleaseLookup $PowerShellReleaseApi
+        }
+        else {
+            $release = Invoke-RestMethod -Uri $PowerShellReleaseApi -Headers @{ "User-Agent" = "Huginn-Worker-Installer" } -TimeoutSec 30
+        }
+    }
+    catch {
+        Fail "could not query the official PowerShell release: $($_.Exception.Message)"
+    }
+
+    $version = [string]$release.tag_name
+    if ($version -notmatch '^v\d+\.\d+\.\d+$') {
+        Fail "the official PowerShell release returned an invalid version tag: '$version'"
+    }
+    $assetName = "PowerShell-$($version.TrimStart('v'))-win-x64.msi"
+    $asset = @($release.assets | Where-Object { $_.name -ceq $assetName } | Select-Object -First 1)
+    if (-not $asset -or $asset.browser_download_url -notmatch '^https://github\.com/PowerShell/PowerShell/releases/download/') {
+        Fail "the official PowerShell release does not contain the expected MSI asset '$assetName'"
+    }
+
+    $msi = Join-Path $env:TEMP $assetName
+    if ($DownloadFile) {
+        $download = & $DownloadFile $asset.browser_download_url $msi $DownloadTimeoutSec
+    }
+    else {
+        $download = Save-Download -Uri $asset.browser_download_url -OutFile $msi -TimeoutSec $DownloadTimeoutSec
+    }
+    try {
+        if ($SignatureReader) {
+            $signature = & $SignatureReader $download
+        }
+        else {
+            $signature = Get-AuthenticodeSignature -FilePath $download
+        }
+        if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
+            Fail "PowerShell MSI signature is not valid and signed by Microsoft (status: $($signature.Status); signer: $($signature.SignerCertificate.Subject))"
+        }
+        Log "verified Microsoft signature for $assetName"
+
+        $msiexec = Join-Path $env:SystemRoot "System32\msiexec.exe"
+        $arguments = "/i `"$download`" /qn /norestart ADD_PATH=1"
+        if ($MsiInstaller) {
+            $process = & $MsiInstaller $msiexec $arguments
+        }
+        else {
+            $process = Start-Process -FilePath $msiexec -ArgumentList $arguments -Wait -PassThru
+        }
+        if ($process.ExitCode -notin @(0, 3010)) {
+            Fail "PowerShell MSI installation failed (msiexec exit code $($process.ExitCode))"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $download -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) {
+        Fail "PowerShell 7 MSI completed but the machine-wide executable was not found at $pwsh"
+    }
+    $versionOutput = & $pwsh -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
+    if ($LASTEXITCODE -ne 0 -or [string]$versionOutput -notmatch '^7\.') {
+        Fail "PowerShell executable validation failed at $pwsh (reported version: '$versionOutput')"
+    }
+    Log "PowerShell $versionOutput is installed machine-wide"
+    return $pwsh
 }
 
 # Parses a `sha256sum`-style manifest. The line endings may be CRLF or LF,
@@ -201,6 +290,11 @@ Log "OS architecture: $osArch ($arch)"
 if ($arch -ne "amd64") {
     Fail "no windows/$arch worker is published: the release builds windows/amd64 only (x86_64-pc-windows-gnu). Use an amd64 node, or publish a windows/$arch build first."
 }
+
+# Do this before enrolling or installing the worker service. The official MSI
+# installs under Program Files and adds PowerShell 7 to the machine PATH, making
+# it available to LocalSystem and every user account.
+$null = Ensure-PowerShell7
 
 # --- Validate the parameters ---
 if (-not $HUB_URL) { Fail "HUB_URL is required" }
