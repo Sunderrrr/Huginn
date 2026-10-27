@@ -13,11 +13,16 @@ function Get-InstallerFunction([string]$Name) {
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $Name
     }, $true)
     if (-not $functionAst) { throw "Could not find installer function $Name" }
-    $parameters = @($functionAst.Parameters | ForEach-Object { $_.Extent.Text })
-    $parameterBlock = if ($parameters.Count -gt 0) { "param($($parameters -join ', '))" }
-    $body = $functionAst.Body.Extent.Text
-    $bodyContent = $body.Substring(1, $body.Length - 2)
-    $functionScript = [scriptblock]::Create("$parameterBlock`n$bodyContent")
+    if ($functionAst.Body.ParamBlock) {
+        $functionScript = $functionAst.Body.GetScriptBlock()
+    }
+    else {
+        $parameters = @($functionAst.Parameters | ForEach-Object { $_.Extent.Text })
+        $parameterBlock = "param($($parameters -join ', '))"
+        $body = $functionAst.Body.Extent.Text
+        $bodyContent = $body.Substring(1, $body.Length - 2)
+        $functionScript = [scriptblock]::Create("$parameterBlock`n$bodyContent")
+    }
     Set-Item -Path "Function:script:$Name" -Value $functionScript
 }
 
