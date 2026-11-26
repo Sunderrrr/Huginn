@@ -158,6 +158,6 @@ deletions are refused. See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Links
 
 - [Deployment guide](docs/deployment.md) · [Architecture](docs/architecture.md) · [Enrollment](docs/enrollment.md)
-- [Browser automation](docs/browser.md) · [Security notes](docs/security.md) · [MCP integration](docs/mcp.md) · [Contributing](CONTRIBUTING.md)
+- [Browser automation](docs/browser.md) · [Security notes](docs/security.md) · [MCP integration](docs/mcp.md) · [MCP agents](docs/mcp-agents.md) · [Contributing](CONTRIBUTING.md)
 
 [Apache-2.0 license](LICENSE).
