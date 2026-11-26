@@ -141,7 +141,7 @@ audit chains stay byte-compatible across the rewrite.
 status checks (a merge is blocked while one is red), force-pushes and branch
 deletions are refused. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Limits
+## Limitss
 
 - The event bus is in-process: one hub instance wakes its own long-polls. If you
   run several hub replicas, task pickup still works but a queued task may wait
